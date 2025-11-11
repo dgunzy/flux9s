@@ -1,0 +1,55 @@
+[package]
+name = "flux9s"
+version = "0.1.0"
+edition = "2021"
+authors = ["Dan Guns <danbguns@gmail.com>"]
+description = "A K9s-inspired terminal UI for monitoring Flux GitOps resources"
+license = "Apache-2.0"
+repository = "https://github.com/dgunzy/flux9s"
+homepage = "https://github.com/dgunzy/flux9s"
+documentation = "https://docs.rs/flux9s"
+keywords = ["kubernetes", "flux", "gitops", "tui", "k9s"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# Kubernetes client
+kube = { version = "2.0.1", features = ["runtime", "derive"] }
+# k8s-openapi version feature - must match kube-rs version
+k8s-openapi = { version = "0.26.0", default-features = false, features = ["v1_31"] }
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+futures = "0.3"
+
+# TUI framework
+ratatui = "0.26"
+crossterm = "0.28"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+async-trait = "0.1"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+# Testing
+mockall = "0.12"
+
+[[test]]
+name = "crd_compatibility"
+path = "tests/crd_compatibility.rs"
+
+[[test]]
+name = "resource_registry"
+path = "tests/resource_registry.rs"
+
+[[test]]
+name = "field_extraction"
+path = "tests/field_extraction.rs"

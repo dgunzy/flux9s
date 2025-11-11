@@ -1,0 +1,68 @@
+name: Bump Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New version (e.g., 0.1.1)'
+        required: true
+        type: string
+
+jobs:
+  bump-version:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Update version in Cargo.toml
+        run: |
+          VERSION="${{ inputs.version }}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          echo "Updated version to $VERSION"
+      
+      - name: Update CHANGELOG.md
+        run: |
+          VERSION="${{ inputs.version }}"
+          DATE=$(date +%Y-%m-%d)
+          # Create a temporary file with the new changelog entry
+          cat > /tmp/changelog_entry.txt << EOF
+          
+          ## [$VERSION] - $DATE
+          
+          ### Added
+          - TBD
+          
+          ### Changed
+          - TBD
+          
+          ### Fixed
+          - TBD
+          EOF
+          # Insert after the [Unreleased] line
+          sed -i "/^## \[Unreleased\]/r /tmp/changelog_entry.txt" CHANGELOG.md
+          echo "Updated CHANGELOG.md"
+      
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: bump version to ${{ inputs.version }}"
+          title: "chore: Bump version to ${{ inputs.version }}"
+          body: |
+            This PR bumps the version to ${{ inputs.version }}.
+            
+            **Changes:**
+            - Updated version in Cargo.toml
+            - Updated CHANGELOG.md
+            
+            **Next steps:**
+            1. Review and merge this PR
+            2. Create tag: `git tag v${{ inputs.version }}`
+            3. Push tag: `git push origin main --tags`
+            4. Release workflow will automatically publish to crates.io
+          branch: bump-version-${{ inputs.version }}
+          delete-branch: true
+

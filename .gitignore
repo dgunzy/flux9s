@@ -1,0 +1,16 @@
+/target
+
+# Note: Generated models and CRDs are now version controlled
+# to simplify releases and enable reproducible builds.
+# They can be regenerated with: make update-flux
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

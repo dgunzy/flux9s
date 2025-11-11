@@ -1,0 +1,12 @@
+{
+  "generated_at": "2025-11-10T23:09:33Z",
+  "flux_versions": {
+    "source-controller": "v1.7.3",
+    "kustomize-controller": "v1.7.2",
+    "helm-controller": "v1.4.3",
+    "notification-controller": "v1.7.4",
+    "image-reflector-controller": "v1.0.3",
+    "image-automation-controller": "v1.0.3",
+    "source-watcher": "v2.0.2"
+  }
+}
