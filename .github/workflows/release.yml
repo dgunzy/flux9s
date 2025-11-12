@@ -69,10 +69,10 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: flux9s
             asset_name: flux9s-macos-aarch64.tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: flux9s.exe
-            asset_name: flux9s-windows-x86_64.zip
+          # - os: windows-latest
+          #   target: x86_64-pc-windows-msvc
+          #   artifact_name: flux9s.exe
+          #   asset_name: flux9s-windows-x86_64.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -103,10 +103,10 @@ jobs:
         run: |
           tar -czf ${{ matrix.asset_name }} -C target/${{ matrix.target }}/release ${{ matrix.artifact_name }}
 
-      - name: Create archive (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.artifact_name }} -DestinationPath ${{ matrix.asset_name }}
+      # - name: Create archive (Windows)
+      #   if: matrix.os == 'windows-latest'
+      #   run: |
+      #     Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.artifact_name }} -DestinationPath ${{ matrix.asset_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
@@ -12,12 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -30,16 +30,16 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-      
+
       - name: Check formatting
         run: cargo fmt -- --check
-      
+
       - name: Run clippy
         run: cargo clippy --lib --tests -- -D warnings -A clippy::too_many_arguments -A clippy::items-after-test-module -A clippy::type-complexity -A clippy::should-implement-trait -A renamed_and_removed_lints -A clippy::collapsible-if -A clippy::len-zero -A clippy::assertions-on-constants -A dead-code
-      
+
       - name: Run tests
         run: cargo test --lib --tests
-      
+
       - name: Run integration tests
         run: cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction
 
@@ -48,13 +48,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -67,13 +67,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-      
+
       - name: Build
         run: cargo build --release
-      
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: flux9s-${{ matrix.os }}
           path: target/release/flux9s*
-
