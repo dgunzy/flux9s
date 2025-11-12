@@ -22,7 +22,22 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 
 ## Installation
 
-### Pre-built Binaries (Recommended)
+### Homebrew (macOS and Linux)
+
+The easiest way to install on macOS and Linux:
+
+```bash
+brew install dgunzy/tap/flux9s
+```
+
+Or tap the repository first:
+
+```bash
+brew tap dgunzy/tap
+brew install flux9s
+```
+
+### Pre-built Binaries
 
 #### cargo-binstall
 
@@ -38,9 +53,10 @@ This downloads and installs pre-built binaries without compiling from source.
 
 Download pre-built binaries from the [Releases](https://github.com/dgunzy/flux9s/releases) page:
 
-- **Linux**: `flux9s-linux-x86_64.tar.gz`
-- **macOS**: `flux9s-macos-x86_64.tar.gz`
-- **Windows**: `flux9s-windows-x86_64.zip`
+- **Linux (x86_64)**: `flux9s-linux-x86_64.tar.gz`
+- **macOS (Intel)**: `flux9s-macos-x86_64.tar.gz`
+- **macOS (Apple Silicon)**: `flux9s-macos-aarch64.tar.gz`
+- **Windows (x86_64)**: `flux9s-windows-x86_64.zip`
 
 Extract and move the binary to a directory in your `PATH`.
 
@@ -61,10 +77,6 @@ cargo build --release
 ```
 
 The binary will be available at `target/release/flux9s`.
-
-### Pre-built Binaries
-
-Pre-built binaries for Linux, macOS, and Windows are available on the [Releases](https://github.com/dgunzy/flux9s/releases) page.
 
 ## Quick Start
 
