@@ -91,6 +91,12 @@ impl ResourceWatcher {
             return Ok(()); // No change needed
         }
 
+        tracing::debug!(
+            "Changing namespace filter: {:?} -> {:?}",
+            self.current_namespace,
+            namespace
+        );
+
         // Stop existing watchers
         self.stop();
 
@@ -123,8 +129,14 @@ impl ResourceWatcher {
             // Otherwise use Api::all for watching all namespaces
             // All Flux resources are namespaced, so both work
             let api: Api<R> = match namespace {
-                Some(ns) => Api::namespaced(client.clone(), &ns),
-                None => Api::all(client.clone()),
+                Some(ref ns) => {
+                    tracing::debug!("Starting {} watcher for namespace: {}", display_name, ns);
+                    Api::namespaced(client.clone(), ns)
+                }
+                None => {
+                    tracing::debug!("Starting {} watcher for all namespaces", display_name);
+                    Api::all(client.clone())
+                }
             };
 
             // In kube 2.0, watcher handles initial resource loading via InitApply events
@@ -172,20 +184,63 @@ impl ResourceWatcher {
                         let _ = event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
                     }
                     // Init and InitDone events - watcher lifecycle events, no action needed
-                    Ok(watcher::Event::Init) | Ok(watcher::Event::InitDone) => {
+                    Ok(watcher::Event::Init) => {
                         error_count = 0; // Reset error count on successful initialization
+                        tracing::debug!("{} watcher initialized", display_name);
+                    }
+                    Ok(watcher::Event::InitDone) => {
+                        error_count = 0; // Reset error count on successful initialization
+                        tracing::debug!("{} watcher initialization complete", display_name);
                     }
                     Err(e) => {
+                        // Check if this is a 404 error (CRD doesn't exist)
+                        // watcher::Error can be converted to kube::Error to check the underlying error
+                        let error_string = format!("{}", e);
+                        let is_404 = error_string.contains("404")
+                            || error_string.contains("Not Found")
+                            || error_string.contains("page not found");
+
+                        if is_404 {
+                            // 404 means the CRD doesn't exist - stop immediately, don't retry
+                            tracing::info!(
+                                "{} CRD not found (404), stopping watcher",
+                                display_name
+                            );
+                            let _ = event_tx.send(WatchEvent::Error(format!(
+                                "{} CRD not available in cluster",
+                                display_name
+                            )));
+                            break;
+                        }
+
                         error_count += 1;
                         // Only log errors occasionally to avoid spam
                         if error_count == 1 || error_count.is_multiple_of(10) {
+                            tracing::warn!(
+                                "{} watcher error ({}): {}",
+                                display_name,
+                                error_count,
+                                e
+                            );
                             let _ = event_tx.send(WatchEvent::Error(format!(
                                 "{} watcher error ({}): {}",
                                 display_name, error_count, e
                             )));
+                        } else {
+                            tracing::debug!(
+                                "{} watcher error ({}): {}",
+                                display_name,
+                                error_count,
+                                e
+                            );
                         }
                         // Stop watcher if too many consecutive errors (likely CRD removed)
                         if error_count >= MAX_CONSECUTIVE_ERRORS {
+                            tracing::error!(
+                                "{} watcher stopped after {} consecutive errors",
+                                display_name,
+                                error_count
+                            );
                             let _ = event_tx.send(WatchEvent::Error(format!(
                                 "{} watcher stopped after {} consecutive errors",
                                 display_name, error_count
@@ -210,6 +265,8 @@ impl ResourceWatcher {
     /// 2. Add the watch call here
     /// 3. Add command mapping in src/tui/app.rs execute_command()
     pub fn watch_all(&mut self) -> Result<()> {
+        tracing::debug!("Starting watchers for all Flux resources");
+
         // Source Controller resources
         self.watch::<resource::GitRepository>()?;
         self.watch::<resource::OCIRepository>()?;
@@ -236,11 +293,13 @@ impl ResourceWatcher {
         self.watch::<resource::Provider>()?;
         self.watch::<resource::Receiver>()?;
 
+        tracing::debug!("All watchers started ({} total)", self.handles.len());
         Ok(())
     }
 
     /// Abort all watcher tasks
     pub fn stop(&mut self) {
+        tracing::debug!("Stopping {} watchers", self.handles.len());
         for handle in &self.handles {
             handle.abort();
         }
