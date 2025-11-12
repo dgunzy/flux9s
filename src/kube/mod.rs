@@ -32,14 +32,20 @@ pub async fn create_client() -> Result<Client> {
     // Extract cluster host for NO_PROXY auto-detection
     // Convert Uri to string and parse to extract hostname
     let cluster_url_str = config.cluster_url.to_string();
+    tracing::debug!("Cluster URL: {}", cluster_url_str);
+
     if let Ok(url) = Url::parse(&cluster_url_str) {
         if let Some(host) = url.host_str() {
+            tracing::debug!("Detected cluster host: {}", host);
             // Automatically add internal cluster hosts to NO_PROXY
             ensure_no_proxy_bypass(host);
         }
+    } else {
+        tracing::warn!("Failed to parse cluster URL: {}", cluster_url_str);
     }
 
     let client = Client::try_from(config)?;
+    tracing::debug!("Kubernetes client created successfully");
     Ok(client)
 }
 
@@ -52,8 +58,14 @@ pub async fn create_client() -> Result<Client> {
 fn ensure_no_proxy_bypass(host: &str) {
     // Only process if this looks like an internal host
     if !is_internal_host(host) {
+        tracing::debug!(
+            "Host {} is not detected as internal, skipping NO_PROXY update",
+            host
+        );
         return;
     }
+
+    tracing::debug!("Host {} detected as internal, checking NO_PROXY", host);
 
     // Check if host is already covered by NO_PROXY
     let no_proxy = std::env::var("NO_PROXY").unwrap_or_default();
@@ -68,6 +80,7 @@ fn ensure_no_proxy_bypass(host: &str) {
 
     // Check if host is already covered
     if no_proxy_contains(&current_no_proxy, host) {
+        tracing::debug!("Host {} is already in NO_PROXY: {}", host, current_no_proxy);
         return;
     }
 
@@ -81,6 +94,7 @@ fn ensure_no_proxy_bypass(host: &str) {
     // Set both uppercase and lowercase variants for compatibility
     std::env::set_var("NO_PROXY", &updated_no_proxy);
     std::env::set_var("no_proxy", &updated_no_proxy);
+    tracing::info!("Added {} to NO_PROXY: {}", host, updated_no_proxy);
 }
 
 /// Check if a host looks like an internal/private domain

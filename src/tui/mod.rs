@@ -78,6 +78,8 @@ pub async fn run_tui(
     watcher: crate::watcher::ResourceWatcher,
     client: kube::Client,
 ) -> Result<()> {
+    tracing::debug!("Initializing TUI");
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -89,6 +91,8 @@ pub async fn run_tui(
     let mut app = App::new(state, context, namespace.clone());
     app.set_watcher(watcher);
     app.set_kube_client(client);
+
+    tracing::debug!("TUI initialized, entering main loop");
 
     // Main event loop
     loop {
@@ -103,11 +107,28 @@ pub async fn run_tui(
                 let namespace = parts[1].to_string();
                 let name = parts[2].to_string();
 
+                tracing::debug!(
+                    "Fetching YAML for {}/{} in namespace {}",
+                    resource_type,
+                    name,
+                    namespace
+                );
+
                 // Spawn async task to fetch resource
                 let client_clone = client.clone();
                 tokio::spawn(async move {
                     let result =
                         fetch_resource_yaml(&client_clone, &resource_type, &namespace, &name).await;
+                    if let Err(ref e) = result {
+                        tracing::warn!(
+                            "Failed to fetch YAML for {}/{}: {}",
+                            resource_type,
+                            name,
+                            e
+                        );
+                    } else {
+                        tracing::debug!("Successfully fetched YAML for {}/{}", resource_type, name);
+                    }
                     let _ = tx.send(result);
                 });
             }
@@ -133,6 +154,14 @@ pub async fn run_tui(
             let ns_clone = namespace.clone();
             let n_clone = name.clone();
 
+            tracing::debug!(
+                "Executing operation '{}' on {}/{} in namespace {}",
+                op_key_clone,
+                rt_clone,
+                n_clone,
+                ns_clone
+            );
+
             tokio::spawn(async move {
                 // Create a new registry instance in the spawned task
                 // This is safe because operations are stateless
@@ -141,8 +170,24 @@ pub async fn run_tui(
                     let result = operation
                         .execute(&client_clone, &rt_clone, &ns_clone, &n_clone)
                         .await;
+                    match &result {
+                        Ok(_) => tracing::info!(
+                            "Operation '{}' succeeded on {}/{}",
+                            op_key_clone,
+                            rt_clone,
+                            n_clone
+                        ),
+                        Err(e) => tracing::warn!(
+                            "Operation '{}' failed on {}/{}: {}",
+                            op_key_clone,
+                            rt_clone,
+                            n_clone,
+                            e
+                        ),
+                    }
                     let _ = tx.send(result);
                 } else {
+                    tracing::warn!("Unknown operation keybinding: {}", op_key_clone);
                     let _ = tx.send(Err(anyhow::anyhow!("Unknown operation")));
                 }
             });
@@ -199,9 +244,10 @@ pub async fn run_tui(
                     let key = crate::watcher::resource_key(&ns, &name, &resource_type);
                     app.state().remove(&key);
                 }
-                crate::watcher::WatchEvent::Error(_msg) => {
+                crate::watcher::WatchEvent::Error(msg) => {
                     // Log errors but don't spam - only show first few
                     // Errors are also shown in the TUI if needed
+                    tracing::warn!("Watch event error: {}", msg);
                 }
             }
         }
@@ -211,6 +257,8 @@ pub async fn run_tui(
             terminal.draw(|f| app.render(f))?;
         }
     }
+
+    tracing::debug!("TUI shutting down");
 
     // Restore terminal
     disable_raw_mode()?;

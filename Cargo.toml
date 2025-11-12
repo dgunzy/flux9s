@@ -41,6 +41,14 @@ async-trait = "0.1"
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 url = "2.5"
+tempfile = "3.10"
+
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# Logging (tracing is already a transitive dependency via kube-rs, but we need it explicitly for macros)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
 
 [dev-dependencies]
 # Testing
