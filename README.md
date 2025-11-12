@@ -22,13 +22,37 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 
 ## Installation
 
-### From Crates.io (Recommended)
+### Pre-built Binaries (Recommended)
+
+#### cargo-binstall
+
+If you have [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed:
+
+```bash
+cargo binstall flux9s
+```
+
+This downloads and installs pre-built binaries without compiling from source.
+
+#### Manual Download
+
+Download pre-built binaries from the [Releases](https://github.com/dgunzy/flux9s/releases) page:
+
+- **Linux**: `flux9s-linux-x86_64.tar.gz`
+- **macOS**: `flux9s-macos-x86_64.tar.gz`
+- **Windows**: `flux9s-windows-x86_64.zip`
+
+Extract and move the binary to a directory in your `PATH`.
+
+### Compile from Source
+
+#### From Crates.io
 
 ```bash
 cargo install flux9s
 ```
 
-### From Source
+#### From Source Repository
 
 ```bash
 git clone https://github.com/dgunzy/flux9s.git

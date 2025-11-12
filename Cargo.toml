@@ -1,6 +1,6 @@
 [package]
 name = "flux9s"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Dan Guns <danbguns@gmail.com>"]
 description = "A K9s-inspired terminal UI for monitoring Flux GitOps resources"
@@ -15,7 +15,9 @@ categories = ["command-line-utilities", "development-tools"]
 # Kubernetes client
 kube = { version = "2.0.1", features = ["runtime", "derive"] }
 # k8s-openapi version feature - must match kube-rs version
-k8s-openapi = { version = "0.26.0", default-features = false, features = ["v1_31"] }
+k8s-openapi = { version = "0.26.0", default-features = false, features = [
+    "v1_31",
+] }
 
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
@@ -41,6 +43,22 @@ chrono = { version = "0.4", features = ["serde"] }
 [dev-dependencies]
 # Testing
 mockall = "0.12"
+
+[package.metadata.binstall]
+# cargo-binstall configuration for pre-built binary installation
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-linux-x86_64.{ archive-format }"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-macos-x86_64.{ archive-format }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-windows-x86_64.{ archive-format }"
+pkg-fmt = "zip"
 
 [[test]]
 name = "crd_compatibility"
