@@ -61,18 +61,19 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: flux9s
             asset_name: flux9s-linux-x86_64.tar.gz
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: flux9s
-            asset_name: flux9s-macos-x86_64.tar.gz
+
+          # macOS ARM (M1/M2/M3) - build on native runner
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: flux9s
             asset_name: flux9s-macos-aarch64.tar.gz
-          # - os: windows-latest
-          #   target: x86_64-pc-windows-msvc
-          #   artifact_name: flux9s.exe
-          #   asset_name: flux9s-windows-x86_64.zip
+
+          # macOS Intel - build on native runner
+          # Note: GitHub Actions macos-latest is now ARM, so we use macos-13 for Intel
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: flux9s
+            asset_name: flux9s-macos-x86_64.tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -98,15 +99,9 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Create archive (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Create archive
         run: |
           tar -czf ${{ matrix.asset_name }} -C target/${{ matrix.target }}/release ${{ matrix.artifact_name }}
-
-      # - name: Create archive (Windows)
-      #   if: matrix.os == 'windows-latest'
-      #   run: |
-      #     Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.artifact_name }} -DestinationPath ${{ matrix.asset_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
