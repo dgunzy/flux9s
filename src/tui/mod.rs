@@ -4,6 +4,7 @@
 //! Built with ratatui for a K9s-inspired experience.
 
 mod app;
+mod commands;
 mod operations;
 mod theme;
 pub mod views;
@@ -77,6 +78,8 @@ pub async fn run_tui(
     namespace: Option<String>,
     watcher: crate::watcher::ResourceWatcher,
     client: kube::Client,
+    read_only: bool,
+    theme: crate::tui::Theme,
 ) -> Result<()> {
     tracing::debug!("Initializing TUI");
 
@@ -87,8 +90,8 @@ pub async fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app state
-    let mut app = App::new(state, context, namespace.clone());
+    // Create app state with readonly mode and theme
+    let mut app = App::new(state, context, namespace.clone(), read_only, theme);
     app.set_watcher(watcher);
     app.set_kube_client(client);
 

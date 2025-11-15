@@ -1,0 +1,48 @@
+# Dracula theme for flux9s
+# Based on the Dracula color scheme
+# Place this file in ~/.config/flux9s/skins/dracula.yaml or ~/.local/share/flux9s/skins/dracula.yaml
+
+k9s:
+  body:
+    fg: "#f8f8f2"      # Dracula foreground
+    bg: "#282a36"      # Dracula background
+    logo: "#bd93f9"    # Dracula purple
+  
+  frame:
+    border:
+      fg: "#6272a4"    # Dracula comment (softer)
+    menu:
+      fg: "#f8f8f2"
+      bg: "#282a36"
+      key: "#50fa7b"   # Dracula green
+    crumbs:
+      fg: "#6272a4"
+      active: "#ff79c6" # Dracula pink
+    status:
+      new: "#50fa7b"   # Dracula green
+      modify: "#ffb86c" # Dracula orange
+      add: "#8be9fd"   # Dracula cyan
+      error: "#ff5555" # Dracula red
+      highlightcolor: "#bd93f9" # Dracula purple
+    title:
+      fg: "#f8f8f2"
+      bg: "#282a36"
+  
+  views:
+    table:
+      fg: "#f8f8f2"
+      bg: "#282a36"
+      cursor:
+        fg: "#282a36"
+        bg: "#bd93f9"  # Dracula purple for selection
+      header:
+        fg: "#8be9fd"  # Dracula cyan
+        bg: "#282a36"
+    yaml:
+      key: "#8be9fd"   # Dracula cyan
+      colon: "#f8f8f2"
+      value: "#f8f8f2"
+    logs:
+      fg: "#f8f8f2"
+      bg: "#282a36"
+

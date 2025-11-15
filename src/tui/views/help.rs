@@ -23,8 +23,13 @@ pub fn render_help(f: &mut Frame, area: Rect, _theme: &Theme) {
         Line::from("  Tab      - Autocomplete command"),
         Line::from(""),
         Line::from("Commands:"),
+        Line::from("  :help / :h / :?              - Show/hide this help"),
+        Line::from("  :readonly                    - Toggle readonly mode"),
+        Line::from("  :skin <name>                  - Change theme/skin"),
         Line::from("  :ns <name> / :namespace <name> - Switch namespace"),
         Line::from("  :ns all / :ns -A              - Show all namespaces"),
+        Line::from("  :all / :clear                 - Show all resources"),
+        Line::from("  :q / :quit / :exit            - Quit application"),
         Line::from(""),
     ];
 

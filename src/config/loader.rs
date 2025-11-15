@@ -1,0 +1,189 @@
+//! Configuration loading and merging logic
+//!
+//! Handles loading configuration from multiple sources and merging them
+//! according to precedence rules.
+
+use super::{defaults, paths, schema::Config};
+use anyhow::{Context, Result};
+use std::path::PathBuf;
+
+/// Configuration loader
+pub struct ConfigLoader;
+
+impl ConfigLoader {
+    /// Load configuration with all layers merged
+    ///
+    /// Precedence order (highest to lowest):
+    /// 1. Environment variable overrides
+    /// 2. Context-specific config
+    /// 3. Cluster-specific config
+    /// 4. Root config
+    /// 5. Built-in defaults
+    pub fn load(cluster: Option<&str>, context: Option<&str>) -> Result<Config> {
+        let mut config = Self::load_defaults();
+
+        // Load root config
+        if let Ok(root_config) = Self::load_file(&paths::root_config_path()) {
+            config = Self::merge_config(config, root_config);
+        }
+
+        // Load cluster-specific config if cluster is provided
+        if let Some(cluster_name) = cluster {
+            if let Ok(cluster_config) =
+                Self::load_file(&paths::cluster_config_path(cluster_name, None))
+            {
+                config = Self::merge_config(config, cluster_config);
+            }
+
+            // Load context-specific config if context is provided
+            if let Some(context_name) = context {
+                if let Ok(context_config) = Self::load_file(&paths::cluster_config_path(
+                    cluster_name,
+                    Some(context_name),
+                )) {
+                    config = Self::merge_config(config, context_config);
+                }
+            }
+        }
+
+        // Apply environment variable overrides
+        config = Self::apply_env_overrides(config);
+
+        Ok(config)
+    }
+
+    /// Load configuration from a file
+    pub fn load_file(path: &PathBuf) -> Result<Config> {
+        if !path.exists() {
+            return Err(anyhow::anyhow!("Config file not found: {}", path.display()));
+        }
+
+        let contents = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+
+        let config: Config = serde_yaml::from_str(&contents)
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+
+        Ok(config)
+    }
+
+    /// Load default configuration
+    pub fn load_defaults() -> Config {
+        defaults::default_config()
+    }
+
+    /// Merge two configurations, with `other` taking precedence
+    fn merge_config(_base: Config, other: Config) -> Config {
+        Config {
+            read_only: other.read_only,
+            default_namespace: other.default_namespace.clone(),
+            ui: UiConfig {
+                enable_mouse: other.ui.enable_mouse,
+                headless: other.ui.headless,
+                no_icons: other.ui.no_icons,
+                skin: other.ui.skin.clone(),
+                splashless: other.ui.splashless,
+            },
+            logger: LoggerConfig {
+                tail: other.logger.tail,
+                buffer: other.logger.buffer,
+                since_seconds: other.logger.since_seconds,
+                text_wrap: other.logger.text_wrap,
+            },
+            cluster: other.cluster,
+        }
+    }
+
+    /// Apply environment variable overrides
+    fn apply_env_overrides(mut config: Config) -> Config {
+        // FLUX9S_SKIN override
+        if let Ok(skin) = std::env::var("FLUX9S_SKIN") {
+            config.ui.skin = skin;
+        }
+
+        // FLUX9S_READ_ONLY override
+        if let Ok(read_only) = std::env::var("FLUX9S_READ_ONLY") {
+            if let Ok(val) = read_only.parse::<bool>() {
+                config.read_only = val;
+            }
+        }
+
+        // FLUX9S_DEFAULT_NAMESPACE override
+        if let Ok(namespace) = std::env::var("FLUX9S_DEFAULT_NAMESPACE") {
+            config.default_namespace = namespace;
+        }
+
+        config
+    }
+
+    /// Save configuration to a file
+    pub fn save(config: &Config, path: &PathBuf) -> Result<()> {
+        // Ensure directory exists
+        if let Some(parent) = path.parent() {
+            paths::ensure_dir(parent)?;
+        }
+
+        let yaml =
+            serde_yaml::to_string(config).context("Failed to serialize configuration to YAML")?;
+
+        std::fs::write(path, yaml)
+            .with_context(|| format!("Failed to write config file: {}", path.display()))?;
+
+        Ok(())
+    }
+
+    /// Save root configuration
+    pub fn save_root(config: &Config) -> Result<()> {
+        Self::save(config, &paths::root_config_path())
+    }
+
+    /// Save cluster-specific configuration
+    pub fn save_cluster(config: &Config, cluster: &str, context: Option<&str>) -> Result<()> {
+        Self::save(config, &paths::cluster_config_path(cluster, context))
+    }
+}
+
+// Re-export types for convenience
+use super::schema::{LoggerConfig, UiConfig};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_defaults() {
+        let config = ConfigLoader::load_defaults();
+        assert!(!config.read_only);
+        assert_eq!(config.default_namespace, "flux-system");
+    }
+
+    #[test]
+    fn test_merge_config() {
+        let base = Config::default();
+        let other = Config {
+            read_only: true,
+            default_namespace: "test-ns".to_string(),
+            ..Default::default()
+        };
+
+        let merged = ConfigLoader::merge_config(base, other);
+        assert!(merged.read_only);
+        assert_eq!(merged.default_namespace, "test-ns");
+    }
+
+    #[test]
+    fn test_env_overrides() {
+        std::env::set_var("FLUX9S_SKIN", "test-skin");
+        std::env::set_var("FLUX9S_READ_ONLY", "true");
+
+        let config = Config::default();
+        let config = ConfigLoader::apply_env_overrides(config);
+
+        assert_eq!(config.ui.skin, "test-skin");
+        assert!(config.read_only);
+
+        // Cleanup
+        std::env::remove_var("FLUX9S_SKIN");
+        std::env::remove_var("FLUX9S_READ_ONLY");
+    }
+}
