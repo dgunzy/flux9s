@@ -1,8 +1,9 @@
 //! Application state and main TUI logic
 
 use crate::tui::views::*;
-use crate::tui::{default_theme, OperationRegistry, Theme};
+use crate::tui::{OperationRegistry, Theme};
 use crate::watcher::{ResourceState, WatchEvent};
+use anyhow::Result;
 use crossterm::event::KeyEvent;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -44,6 +45,7 @@ pub struct App {
     confirmation_pending: Option<(String, String, String, char)>, // (resource_type, namespace, name, operation_key)
     status_message: Option<(String, bool)>,                       // (message, is_error)
     theme: Theme,
+    read_only: bool, // Readonly mode - prevents modification operations
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -55,7 +57,13 @@ pub enum View {
 }
 
 impl App {
-    pub fn new(state: ResourceState, context: String, namespace: Option<String>) -> Self {
+    pub fn new(
+        state: ResourceState,
+        context: String,
+        namespace: Option<String>,
+        read_only: bool,
+        theme: Theme,
+    ) -> Self {
         Self {
             state,
             current_view: View::ResourceList,
@@ -85,8 +93,16 @@ impl App {
             last_operation_key: None,
             confirmation_pending: None,
             status_message: None,
-            theme: default_theme(),
+            theme,
+            read_only,
         }
+    }
+
+    /// Change theme by name
+    pub fn set_theme(&mut self, theme_name: &str) -> Result<()> {
+        let theme = crate::config::ThemeLoader::load_theme(theme_name)?;
+        self.theme = theme;
+        Ok(())
     }
 
     pub fn set_kube_client(&mut self, client: kube::Client) {
@@ -258,7 +274,14 @@ impl App {
 
                         if let Some(operation) = self.operation_registry.get_by_keybinding(op_key) {
                             if operation.is_valid_for(&resource.resource_type) {
-                                if operation.requires_confirmation() {
+                                // Check readonly mode first
+                                if self.read_only {
+                                    self.status_message = Some((
+                                        "Readonly mode is enabled. Operations are disabled."
+                                            .to_string(),
+                                        true,
+                                    ));
+                                } else if operation.requires_confirmation() {
                                     // Show confirmation dialog
                                     self.confirmation_pending = Some((
                                         resource.resource_type.clone(),
@@ -405,6 +428,15 @@ impl App {
         if let Some((resource_type, namespace, name, op_key)) = &self.confirmation_pending {
             match key.code {
                 crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => {
+                    // Check readonly mode before confirming
+                    if self.read_only {
+                        self.confirmation_pending = None;
+                        self.status_message = Some((
+                            "Readonly mode is enabled. Operations are disabled.".to_string(),
+                            true,
+                        ));
+                        return None;
+                    }
                     // Confirm operation
                     let rt = resource_type.clone();
                     let ns = namespace.clone();
@@ -432,6 +464,18 @@ impl App {
         name: &str,
         op_key: char,
     ) {
+        // Check readonly mode - prevent modification operations
+        if self.read_only {
+            if self.operation_registry.get_by_keybinding(op_key).is_some() {
+                // All operations are modifications, so block them all in readonly mode
+                self.status_message = Some((
+                    "Readonly mode is enabled. Operations are disabled.".to_string(),
+                    true,
+                ));
+                return;
+            }
+        }
+
         if self.operation_registry.get_by_keybinding(op_key).is_some() {
             if self.kube_client.is_some() {
                 let rt = resource_type.to_string();
@@ -601,9 +645,47 @@ impl App {
         let cmd = self.command_buffer.trim();
         let cmd_lower = cmd.to_lowercase();
 
+        // Handle help command
+        if cmd_lower == "help" || cmd_lower == "h" || cmd_lower == "?" {
+            self.show_help = !self.show_help;
+            return None;
+        }
+
         // Handle quit commands
-        if cmd_lower == "q" || cmd_lower == "q!" {
+        if cmd_lower == "q" || cmd_lower == "q!" || cmd_lower == "quit" || cmd_lower == "exit" {
             return Some(true); // Quit
+        }
+
+        // Handle readonly toggle command
+        if cmd_lower == "readonly" || cmd_lower == "read-only" {
+            self.read_only = !self.read_only;
+            let status = if self.read_only {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            self.status_message = Some((format!("Readonly mode {}", status), false));
+            return None;
+        }
+
+        // Handle skin/theme change command
+        if cmd_lower.starts_with("skin ") {
+            let theme_name = cmd.split_whitespace().nth(1).map(|s| s.to_string());
+            if let Some(name) = theme_name {
+                match self.set_theme(&name) {
+                    Ok(_) => {
+                        let msg = format!("Theme changed to: {}", name);
+                        self.status_message = Some((msg, false));
+                    }
+                    Err(e) => {
+                        let msg = format!("Failed to load theme '{}': {}", name, e);
+                        self.status_message = Some((msg, true));
+                    }
+                }
+            } else {
+                self.status_message = Some(("Usage: :skin <theme-name>".to_string(), true));
+            }
+            return None;
         }
 
         // Handle namespace switching - restart watchers with new namespace
@@ -805,6 +887,7 @@ impl App {
             &self.filter,
             &self.selected_resource_type,
             resources.len(),
+            self.read_only,
             &self.theme,
         );
         self.render_main(f, chunks[1]);

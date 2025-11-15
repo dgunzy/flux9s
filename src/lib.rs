@@ -3,6 +3,7 @@
 //! This library provides the core functionality for the flux9s TUI application.
 //! It can be used both as a binary and as a library for testing.
 
+pub mod config;
 pub mod kube;
 pub mod models;
 pub mod tui;

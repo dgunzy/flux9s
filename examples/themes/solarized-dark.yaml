@@ -1,0 +1,48 @@
+# Solarized Dark theme for flux9s
+# Based on the Solarized color scheme
+# Place this file in ~/.config/flux9s/skins/solarized-dark.yaml or ~/.local/share/flux9s/skins/solarized-dark.yaml
+
+k9s:
+  body:
+    fg: "#839496"      # Solarized base0 (foreground)
+    bg: "#002b36"      # Solarized base03 (background)
+    logo: "#268bd2"    # Solarized blue
+  
+  frame:
+    border:
+      fg: "#586e75"    # Solarized base01
+    menu:
+      fg: "#839496"
+      bg: "#002b36"
+      key: "#859900"   # Solarized green
+    crumbs:
+      fg: "#586e75"
+      active: "#268bd2" # Solarized blue
+    status:
+      new: "#859900"   # Solarized green
+      modify: "#b58900" # Solarized yellow
+      add: "#2aa198"   # Solarized cyan
+      error: "#dc322f" # Solarized red
+      highlightcolor: "#d33682" # Solarized magenta
+    title:
+      fg: "#839496"
+      bg: "#002b36"
+  
+  views:
+    table:
+      fg: "#839496"
+      bg: "#002b36"
+      cursor:
+        fg: "#002b36"
+        bg: "#268bd2"  # Solarized blue for selection
+      header:
+        fg: "#2aa198"  # Solarized cyan
+        bg: "#002b36"
+    yaml:
+      key: "#2aa198"   # Solarized cyan
+      colon: "#839496"
+      value: "#839496"
+    logs:
+      fg: "#839496"
+      bg: "#002b36"
+

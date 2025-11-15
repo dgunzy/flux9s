@@ -20,6 +20,7 @@ pub fn render_header(
     filter: &str,
     selected_resource_type: &Option<String>,
     filtered_count: usize, // Count of resources after filtering
+    read_only: bool,       // Readonly mode status
     theme: &Theme,
 ) {
     // Split header into left (info) and right (ASCII art)
@@ -96,7 +97,7 @@ pub fn render_header(
     }
 
     // Build header lines with clean structure
-    let context_line_spans = vec![
+    let mut context_line_spans = vec![
         Span::styled(" Context: ", Style::default().fg(theme.header_resources)),
         Span::styled(context, theme.header_context_style()),
         Span::raw("  "),
@@ -105,10 +106,25 @@ pub fn render_header(
             namespace_display,
             theme.header_namespace_style(namespace_display == "all"),
         ),
-        Span::raw(" ("),
-        Span::styled(":ns <name>", Style::default().fg(theme.text_secondary)),
-        Span::raw(" to switch)"),
     ];
+
+    // Add readonly indicator if enabled
+    if read_only {
+        context_line_spans.push(Span::raw("  "));
+        context_line_spans.push(Span::styled(
+            "🔒 READONLY",
+            Style::default()
+                .fg(theme.status_error)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    context_line_spans.push(Span::raw(" ("));
+    context_line_spans.push(Span::styled(
+        ":ns <name>",
+        Style::default().fg(theme.text_secondary),
+    ));
+    context_line_spans.push(Span::raw(" to switch)"));
 
     let mut header_lines = vec![Line::from(context_line_spans)];
 
