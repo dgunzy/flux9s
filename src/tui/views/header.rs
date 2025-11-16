@@ -22,6 +22,7 @@ pub fn render_header(
     filtered_count: usize, // Count of resources after filtering
     read_only: bool,       // Readonly mode status
     theme: &Theme,
+    no_icons: bool,
 ) {
     // Split header into left (info) and right (ASCII art)
     let header_chunks = Layout::default()
@@ -111,8 +112,13 @@ pub fn render_header(
     // Add readonly indicator if enabled
     if read_only {
         context_line_spans.push(Span::raw("  "));
+        let readonly_text = if no_icons {
+            "[READONLY]"
+        } else {
+            "🔒 READONLY"
+        };
         context_line_spans.push(Span::styled(
-            "🔒 READONLY",
+            readonly_text,
             Style::default()
                 .fg(theme.status_error)
                 .add_modifier(Modifier::BOLD),
@@ -139,9 +145,10 @@ pub fn render_header(
             ""
         };
 
+        let filter_icon = if no_icons { "[FILTER]" } else { "⚠ Filter: " };
         header_lines.push(Line::from(vec![
             Span::styled(
-                "⚠ Filter: ",
+                filter_icon,
                 Style::default()
                     .fg(theme.header_filter)
                     .add_modifier(Modifier::BOLD),

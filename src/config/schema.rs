@@ -124,7 +124,7 @@ impl Default for Config {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
-            enable_mouse: default_true(),
+            enable_mouse: default_false(),
             headless: default_false(),
             no_icons: default_false(),
             skin: default_skin(),

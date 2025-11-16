@@ -78,7 +78,7 @@ pub async fn run_tui(
     namespace: Option<String>,
     watcher: crate::watcher::ResourceWatcher,
     client: kube::Client,
-    read_only: bool,
+    config: crate::config::Config,
     theme: crate::tui::Theme,
 ) -> Result<()> {
     tracing::debug!("Initializing TUI");
@@ -86,12 +86,16 @@ pub async fn run_tui(
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
+    // Conditionally enable mouse capture based on config
+    if config.ui.enable_mouse {
+        execute!(stdout, EnableMouseCapture)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app state with readonly mode and theme
-    let mut app = App::new(state, context, namespace.clone(), read_only, theme);
+    // Create app state with config and theme
+    let mut app = App::new(state, context, namespace.clone(), config.clone(), theme);
     app.set_watcher(watcher);
     app.set_kube_client(client);
 
@@ -265,11 +269,11 @@ pub async fn run_tui(
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    // Only disable mouse if it was enabled
+    if config.ui.enable_mouse {
+        execute!(terminal.backend_mut(), DisableMouseCapture)?;
+    }
     terminal.show_cursor()?;
 
     Ok(())

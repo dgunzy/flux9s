@@ -45,7 +45,7 @@ pub struct App {
     confirmation_pending: Option<(String, String, String, char)>, // (resource_type, namespace, name, operation_key)
     status_message: Option<(String, bool)>,                       // (message, is_error)
     theme: Theme,
-    read_only: bool, // Readonly mode - prevents modification operations
+    config: crate::config::Config, // Application configuration
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -61,7 +61,7 @@ impl App {
         state: ResourceState,
         context: String,
         namespace: Option<String>,
-        read_only: bool,
+        config: crate::config::Config,
         theme: Theme,
     ) -> Self {
         Self {
@@ -85,8 +85,12 @@ impl App {
             yaml_fetch_pending: None,
             yaml_fetched: None,
             yaml_fetch_rx: None,
-            show_splash: true,
-            splash_start_time: Some(std::time::Instant::now()),
+            show_splash: !config.ui.splashless, // Skip splash if splashless is true
+            splash_start_time: if config.ui.splashless {
+                None
+            } else {
+                Some(std::time::Instant::now())
+            },
             operation_registry: OperationRegistry::new(),
             pending_operation: None,
             operation_result_rx: None,
@@ -94,7 +98,7 @@ impl App {
             confirmation_pending: None,
             status_message: None,
             theme,
-            read_only,
+            config,
         }
     }
 
@@ -275,7 +279,7 @@ impl App {
                         if let Some(operation) = self.operation_registry.get_by_keybinding(op_key) {
                             if operation.is_valid_for(&resource.resource_type) {
                                 // Check readonly mode first
-                                if self.read_only {
+                                if self.config.read_only {
                                     self.status_message = Some((
                                         "Readonly mode is enabled. Operations are disabled."
                                             .to_string(),
@@ -429,7 +433,7 @@ impl App {
             match key.code {
                 crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => {
                     // Check readonly mode before confirming
-                    if self.read_only {
+                    if self.config.read_only {
                         self.confirmation_pending = None;
                         self.status_message = Some((
                             "Readonly mode is enabled. Operations are disabled.".to_string(),
@@ -465,7 +469,7 @@ impl App {
         op_key: char,
     ) {
         // Check readonly mode - prevent modification operations
-        if self.read_only {
+        if self.config.read_only {
             if self.operation_registry.get_by_keybinding(op_key).is_some() {
                 // All operations are modifications, so block them all in readonly mode
                 self.status_message = Some((
@@ -658,8 +662,8 @@ impl App {
 
         // Handle readonly toggle command
         if cmd_lower == "readonly" || cmd_lower == "read-only" {
-            self.read_only = !self.read_only;
-            let status = if self.read_only {
+            self.config.read_only = !self.config.read_only;
+            let status = if self.config.read_only {
                 "enabled"
             } else {
                 "disabled"
@@ -871,25 +875,33 @@ impl App {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(header_height as u16), // Dynamic header height
-                Constraint::Min(0),                       // Main content (flexible)
+                if self.config.ui.headless {
+                    Constraint::Length(0) // No header in headless mode
+                } else {
+                    Constraint::Length(header_height as u16) // Dynamic header height
+                },
+                Constraint::Min(0), // Main content (flexible)
                 Constraint::Length(footer_constraint as u16), // Footer (content + borders)
             ])
             .split(f.size());
 
         let resources = self.get_filtered_resources();
-        render_header(
-            f,
-            chunks[0],
-            &self.state,
-            &self.context,
-            &self.namespace,
-            &self.filter,
-            &self.selected_resource_type,
-            resources.len(),
-            self.read_only,
-            &self.theme,
-        );
+        // Only render header if not in headless mode
+        if !self.config.ui.headless {
+            render_header(
+                f,
+                chunks[0],
+                &self.state,
+                &self.context,
+                &self.namespace,
+                &self.filter,
+                &self.selected_resource_type,
+                resources.len(),
+                self.config.read_only,
+                &self.theme,
+                self.config.ui.no_icons,
+            );
+        }
         self.render_main(f, chunks[1]);
         render_footer(
             f,
@@ -937,6 +949,7 @@ impl App {
                         &self.selected_resource_type,
                         &self.resource_objects,
                         &self.theme,
+                        self.config.ui.no_icons,
                     );
                 }
                 View::ResourceDetail => {

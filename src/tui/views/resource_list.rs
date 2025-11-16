@@ -24,6 +24,7 @@ pub fn render_resource_list(
     selected_resource_type: &Option<String>,
     resource_objects: &Arc<RwLock<HashMap<String, serde_json::Value>>>,
     theme: &Theme,
+    no_icons: bool,
 ) {
     let visible_height = (area.height as usize).saturating_sub(2);
 
@@ -109,7 +110,7 @@ pub fn render_resource_list(
 
                 // Status indicator
                 let (status_indicator, status_color) =
-                    get_status_indicator(r.ready, r.suspended, theme);
+                    get_status_indicator(r.ready, r.suspended, theme, no_icons);
 
                 let message = r.message.as_deref().unwrap_or("-");
                 let message_display = if message.len() > 40 {
@@ -131,14 +132,15 @@ pub fn render_resource_list(
             })
             .collect();
 
+        let status_width = if no_icons { 6 } else { 3 }; // "PAUSED" vs "●"
         let constraints: Vec<Constraint> = vec![
-            Constraint::Length(3),      // STATUS
-            Constraint::Min(15),        // NAMESPACE
-            Constraint::Min(30),        // NAME
-            Constraint::Min(20),        // TYPE
-            Constraint::Length(10),     // SUSPENDED
-            Constraint::Length(6),      // READY
-            Constraint::Percentage(40), // MESSAGE
+            Constraint::Length(status_width), // STATUS
+            Constraint::Min(15),              // NAMESPACE
+            Constraint::Min(30),              // NAME
+            Constraint::Min(20),              // TYPE
+            Constraint::Length(10),           // SUSPENDED
+            Constraint::Length(6),            // READY
+            Constraint::Percentage(40),       // MESSAGE
         ];
 
         (rows, header, constraints)
@@ -168,7 +170,7 @@ pub fn render_resource_list(
                 };
 
                 let (status_indicator, status_color) =
-                    get_status_indicator(r.ready, r.suspended, theme);
+                    get_status_indicator(r.ready, r.suspended, theme, no_icons);
 
                 // Get resource-specific fields from stored object
                 let key = crate::watcher::resource_key(&r.namespace, &r.name, &r.resource_type);
@@ -233,7 +235,7 @@ pub fn render_resource_list(
         let constraints: Vec<Constraint> = column_names
             .iter()
             .map(|col| match *col {
-                "STATUS" => Constraint::Length(3),
+                "STATUS" => Constraint::Length(if no_icons { 6 } else { 3 }),
                 "NAMESPACE" => Constraint::Min(15),
                 "NAME" => Constraint::Min(30),
                 "TYPE" => Constraint::Min(20),
@@ -268,12 +270,25 @@ fn get_status_indicator(
     ready: Option<bool>,
     suspended: Option<bool>,
     theme: &Theme,
+    no_icons: bool,
 ) -> (&'static str, Color) {
-    match (ready, suspended) {
-        (Some(true), Some(false)) => ("●", theme.status_ready),
-        (Some(true), Some(true)) => ("⏸", theme.status_suspended),
-        (Some(false), _) => ("✗", theme.status_error),
-        (None, Some(true)) => ("⏸", theme.status_suspended),
-        _ => ("○", theme.status_unknown),
+    if no_icons {
+        // Use text alternatives when icons are disabled
+        match (ready, suspended) {
+            (Some(true), Some(false)) => ("OK", theme.status_ready),
+            (Some(true), Some(true)) => ("PAUSED", theme.status_suspended),
+            (Some(false), _) => ("ERR", theme.status_error),
+            (None, Some(true)) => ("PAUSED", theme.status_suspended),
+            _ => ("?", theme.status_unknown),
+        }
+    } else {
+        // Use Unicode icons when enabled
+        match (ready, suspended) {
+            (Some(true), Some(false)) => ("●", theme.status_ready),
+            (Some(true), Some(true)) => ("⏸", theme.status_suspended),
+            (Some(false), _) => ("✗", theme.status_error),
+            (None, Some(true)) => ("⏸", theme.status_suspended),
+            _ => ("○", theme.status_unknown),
+        }
     }
 }
