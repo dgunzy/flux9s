@@ -105,6 +105,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 
 - `:ns <namespace>` - Switch namespace
 - `:ns all` - View all namespaces
+- `:skin {skin-name}` - set skin (Must be in your systems flux9s/skins dir)
 - `:q` or `:q!` - Quit
 - `:help` - Show help
 
@@ -114,6 +115,14 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `r` - Resume resource
 - `R` - Reconcile resource
 - `d` - Delete resource (with confirmation)
+
+### Terminal Commands
+
+- `flux9s config --help` - Show the config options
+- `flux9s config set {KEY} {VALUE}` - set a yaml option with the cli.
+- `flux9s config set ui.skin {skinname}` - set a skin that is in your systems flux9s/skins.
+
+> **Note:** Not all K9s skins are compatible with flux9s. flux9s skins follow a similar format but may require adjustments to work properly.
 
 ## Acknowledgments
 

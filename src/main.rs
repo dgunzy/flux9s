@@ -183,7 +183,15 @@ async fn main() -> Result<()> {
     tracing::debug!("Initializing Kubernetes client");
     let client = kube::create_client().await?;
     let context = kube::get_context().await?;
-    let default_namespace = kube::get_default_namespace().await;
+    // Use config.default_namespace if set, otherwise fall back to environment/default
+    let default_namespace = if config.default_namespace.is_empty()
+        || config.default_namespace == "all"
+        || config.default_namespace == "-A"
+    {
+        kube::get_default_namespace().await
+    } else {
+        Some(config.default_namespace.clone())
+    };
 
     if args.debug {
         tracing::info!("Connected to Kubernetes cluster: {}", context);
@@ -218,7 +226,7 @@ async fn main() -> Result<()> {
         default_namespace,
         watcher,
         client,
-        read_only,
+        config,
         theme,
     )
     .await?;
