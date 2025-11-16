@@ -2,6 +2,22 @@
 //!
 //! Wraps generated CRD types with WatchableResource trait implementations.
 //!
+//! ## Version Compatibility
+//!
+//! **Important**: The API versions specified in `impl_watchable!` macros should match
+//! the versions in the generated models (`src/models/_generated/`). These versions
+//! are used for display/logging purposes only.
+//!
+//! The actual watching is version-agnostic - kube-rs automatically uses the correct
+//! API version from the type's metadata. Status extraction uses JSON path queries
+//! (`status.suspended`, `status.conditions`, etc.) which work across Flux versions
+//! as long as field names remain consistent.
+//!
+//! When updating CRDs:
+//! 1. Regenerate models with the new CRD versions
+//! 2. Update the version strings in `impl_watchable!` macros to match
+//! 3. Verify status field extraction still works (field names rarely change)
+//!
 //! ## Adding a New Resource Type
 //!
 //! To add a new Flux CRD resource type:
@@ -15,9 +31,9 @@
 //!    ```text
 //!    impl_watchable!(
 //!        YourNewResource,
-//!        "source.toolkit.fluxcd.io",  // API group
-//!        "v1",                        // API version
-//!        "yournewresources",          // Plural name
+//!        "source.toolkit.fluxcd.io",  // API group (check generated model)
+//!        "v1",                        // API version (must match generated model)
+//!        "yournewresources",          // Plural name (check CRD spec.names.plural)
 //!        "YourNewResource"            // Display name
 //!    );
 //!    ```
@@ -36,7 +52,7 @@
 //!    ```
 //!
 //! That's it! The resource will automatically:
-//! - Be watched for changes
+//! - Be watched for changes (using correct API version from type)
 //! - Appear in the unified view
 //! - Support command mode (`:yournewresource`)
 //! - Show up in help text

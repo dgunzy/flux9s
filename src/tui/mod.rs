@@ -4,7 +4,6 @@
 //! Built with ratatui for a K9s-inspired experience.
 
 mod app;
-mod commands;
 mod operations;
 mod theme;
 pub mod views;

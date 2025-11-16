@@ -1,0 +1,116 @@
+# .github/workflows/prepare-release.yml
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Calculate new version
+        id: version
+        run: |
+          # Get current version from Cargo.toml
+          CURRENT=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+
+          # Calculate new version based on bump type
+          IFS='.' read -r major minor patch <<< "$CURRENT"
+
+          case "${{ inputs.bump }}" in
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+          esac
+
+          NEW_VERSION="$major.$minor.$patch"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "current_version=$CURRENT" >> $GITHUB_OUTPUT
+          echo "Bumping from $CURRENT to $NEW_VERSION"
+
+      - name: Update Cargo.toml
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ steps.version.outputs.new_version }}"/' Cargo.toml
+
+      - name: Update Cargo.lock
+        run: |
+          cargo update -p flux9s --precise ${{ steps.version.outputs.new_version }}
+
+      - name: Update CHANGELOG.md
+        run: |
+          VERSION="${{ steps.version.outputs.new_version }}"
+          DATE=$(date +%Y-%m-%d)
+
+          # Create the new changelog entry
+          cat > /tmp/changelog_entry.txt << EOF
+
+          ## [$VERSION] - $DATE
+
+          ### Added
+          - 
+
+          ### Changed
+          - 
+
+          ### Fixed
+          - 
+          EOF
+
+          # Insert after the [Unreleased] line
+          sed -i "/^## \[Unreleased\]/r /tmp/changelog_entry.txt" CHANGELOG.md
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: bump version to ${{ steps.version.outputs.new_version }}"
+          title: "Release v${{ steps.version.outputs.new_version }}"
+          body: |
+            ## Release v${{ steps.version.outputs.new_version }}
+
+            This PR prepares the release for v${{ steps.version.outputs.new_version }}.
+
+            **Version bump:** ${{ steps.version.outputs.current_version }} → ${{ steps.version.outputs.new_version }} (${{ inputs.bump }})
+
+            **Changes in this PR:**
+            - ✅ Updated version in Cargo.toml
+            - ✅ Updated Cargo.lock
+            - ✅ Updated CHANGELOG.md with new version entry
+
+            **What happens after merge:**
+            1. ✅ PR gets merged to main
+            2. ✅ Tag `v${{ steps.version.outputs.new_version }}` is automatically created
+            3. ✅ Release workflow builds binaries for all platforms
+            4. ✅ Publishes to crates.io
+            5. ✅ Creates GitHub release with artifacts
+            6. ✅ Updates Homebrew formula
+
+            **Please update the CHANGELOG.md** with actual changes before merging!
+          branch: release-v${{ steps.version.outputs.new_version }}
+          delete-branch: true
+          labels: release

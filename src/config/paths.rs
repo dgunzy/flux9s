@@ -43,26 +43,6 @@ pub fn data_dir() -> PathBuf {
         })
 }
 
-/// Get the state directory path
-///
-/// Checks FLUX9S_STATE_DIR environment variable first, then falls back to
-/// XDG_STATE_HOME/flux9s
-pub fn state_dir() -> PathBuf {
-    std::env::var("FLUX9S_STATE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            BaseDirectories::with_prefix("flux9s")
-                .map(|xdg| xdg.get_state_home())
-                .unwrap_or_else(|_| {
-                    // Fallback to current directory if XDG fails
-                    PathBuf::from(".")
-                        .join(".local")
-                        .join("state")
-                        .join("flux9s")
-                })
-        })
-}
-
 /// Get the root configuration file path
 pub fn root_config_path() -> PathBuf {
     config_dir().join("config.yaml")
@@ -114,6 +94,5 @@ mod tests {
     fn test_paths_are_absolute() {
         assert!(config_dir().is_absolute() || config_dir().to_string_lossy().starts_with("."));
         assert!(data_dir().is_absolute() || data_dir().to_string_lossy().starts_with("."));
-        assert!(state_dir().is_absolute() || state_dir().to_string_lossy().starts_with("."));
     }
 }

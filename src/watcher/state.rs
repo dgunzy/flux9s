@@ -11,6 +11,7 @@ pub struct ResourceInfo {
     pub name: String,
     pub namespace: String,
     pub resource_type: String,
+    #[allow(dead_code)] // Set but not yet displayed - reserved for future age display feature
     pub age: Option<chrono::DateTime<chrono::Utc>>,
     // Common status fields across Flux CRDs
     pub suspended: Option<bool>,
@@ -92,32 +93,6 @@ impl Default for ResourceState {
 /// Generate a unique key for a resource
 pub fn resource_key(namespace: &str, name: &str, resource_type: &str) -> String {
     format!("{}:{}:{}", resource_type, namespace, name)
-}
-
-/// Store full object JSON for detail view
-#[derive(Clone)]
-pub struct ResourceStateWithData {
-    pub state: ResourceState,
-    pub objects: Arc<RwLock<HashMap<String, serde_json::Value>>>,
-}
-
-impl ResourceStateWithData {
-    pub fn new(state: ResourceState) -> Self {
-        Self {
-            state,
-            objects: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    pub fn store_object(&self, key: &str, obj: serde_json::Value) {
-        let mut objects = self.objects.write().unwrap();
-        objects.insert(key.to_string(), obj);
-    }
-
-    pub fn get_object(&self, key: &str) -> Option<serde_json::Value> {
-        let objects = self.objects.read().unwrap();
-        objects.get(key).cloned()
-    }
 }
 
 #[cfg(test)]
@@ -318,30 +293,5 @@ mod tests {
         assert_eq!(state.all().len(), 1);
         state.clear();
         assert_eq!(state.all().len(), 0);
-    }
-
-    #[test]
-    fn test_resource_state_with_data() {
-        let state = ResourceState::new();
-        let state_with_data = ResourceStateWithData::new(state);
-
-        let obj = serde_json::json!({
-            "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
-            "kind": "Kustomization",
-            "metadata": {
-                "name": "test",
-                "namespace": "default"
-            }
-        });
-
-        let key = "test-key";
-        state_with_data.store_object(key, obj.clone());
-
-        let retrieved = state_with_data.get_object(key);
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap(), obj);
-
-        let nonexistent = state_with_data.get_object("nonexistent");
-        assert!(nonexistent.is_none());
     }
 }

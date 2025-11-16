@@ -2,7 +2,7 @@
 
 use crate::tui::views::*;
 use crate::tui::{OperationRegistry, Theme};
-use crate::watcher::{ResourceState, WatchEvent};
+use crate::watcher::ResourceState;
 use anyhow::Result;
 use crossterm::event::KeyEvent;
 use ratatui::{
@@ -53,6 +53,7 @@ pub enum View {
     ResourceList,
     ResourceDetail,
     ResourceYAML,
+    #[allow(dead_code)] // Reserved for future alternative help view implementation
     Help,
 }
 
@@ -175,19 +176,6 @@ impl App {
             }
         }
         None
-    }
-
-    pub fn handle_watch_event(&mut self, event: WatchEvent) {
-        // Watch events update the state directly through the watcher
-        // This method is here for future use if we need to handle events in the TUI
-        match event {
-            WatchEvent::Applied(_, _, _, _) | WatchEvent::Deleted(_, _, _) => {
-                // State is updated by the watcher, we just need to refresh
-            }
-            WatchEvent::Error(_) => {
-                // Errors are handled elsewhere
-            }
-        }
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<bool> {
@@ -565,10 +553,6 @@ impl App {
                 self.status_message = Some((format!("Operation failed: {}", e), true));
             }
         }
-    }
-
-    pub fn operation_registry(&self) -> &OperationRegistry {
-        &self.operation_registry
     }
 
     fn handle_command_key(&mut self, key: KeyEvent) -> Option<bool> {
