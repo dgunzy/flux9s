@@ -17,14 +17,15 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      
+          token: ${{ secrets.PAT_TOKEN }}
+
       - name: Get version from Cargo.toml
         id: version
         run: |
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Found version: $VERSION"
-      
+
       - name: Check if tag already exists
         id: check_tag
         run: |
@@ -35,7 +36,7 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "Tag v${{ steps.version.outputs.version }} does not exist"
           fi
-      
+
       - name: Create and push tag
         if: steps.check_tag.outputs.exists == 'false'
         run: |
@@ -44,7 +45,7 @@ jobs:
           git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
           git push origin "v${{ steps.version.outputs.version }}"
           echo "✅ Created and pushed tag v${{ steps.version.outputs.version }}"
-      
+
       - name: Tag already exists
         if: steps.check_tag.outputs.exists == 'true'
         run: |
