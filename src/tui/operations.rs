@@ -451,6 +451,9 @@ impl OperationRegistry {
             .map(|op| op.as_ref())
     }
 
+    /// Get all registered operations
+    /// Currently only used in tests
+    #[allow(dead_code)] // Used in tests
     pub fn get_all(&self) -> &[Box<dyn FluxOperation>] {
         &self.operations
     }

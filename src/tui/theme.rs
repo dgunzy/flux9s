@@ -52,6 +52,7 @@ pub struct Theme {
 
     // Footer colors
     pub footer_key: Color,
+    #[allow(dead_code)] // Reserved for visual flux trace feature
     pub footer_text: Color,
 }
 
@@ -159,11 +160,4 @@ impl Theme {
             .fg(self.operation_warning)
             .add_modifier(Modifier::BOLD)
     }
-}
-
-/// Global theme instance
-///
-/// In the future, this can be made configurable or loaded from a plugin file
-pub fn default_theme() -> Theme {
-    Theme::default()
 }

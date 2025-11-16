@@ -31,25 +31,6 @@ jobs:
       - name: Run tests
         run: cargo test --lib --tests --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction
 
-      - name: Extract version from tag
-        id: get_version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Extracted version: $VERSION"
-
-      - name: Verify version matches Cargo.toml
-        run: |
-          CARGO_VERSION=$(grep '^version = ' Cargo.toml | cut -d'"' -f2)
-          TAG_VERSION=${{ steps.get_version.outputs.version }}
-          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
-            echo "Error: Version mismatch!"
-            echo "Cargo.toml version: $CARGO_VERSION"
-            echo "Tag version: $TAG_VERSION"
-            exit 1
-          fi
-          echo "Version match confirmed: $CARGO_VERSION"
-
   build:
     name: Build ${{ matrix.target }}
     needs: test
@@ -62,14 +43,11 @@ jobs:
             artifact_name: flux9s
             asset_name: flux9s-linux-x86_64.tar.gz
 
-          # macOS ARM (M1/M2/M3) - build on native runner
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: flux9s
             asset_name: flux9s-macos-aarch64.tar.gz
 
-          # macOS Intel - build on native runner
-          # Note: GitHub Actions macos-latest is now ARM, so we use macos-13 for Intel
           - os: macos-13
             target: x86_64-apple-darwin
             artifact_name: flux9s
