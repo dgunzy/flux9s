@@ -1,6 +1,6 @@
 //! Application state and main TUI logic
 
-use crate::tui::views::*;
+use crate::tui::views::{self, *};
 use crate::tui::{OperationRegistry, Theme};
 use crate::watcher::ResourceState;
 use anyhow::Result;
@@ -36,6 +36,11 @@ pub struct App {
     yaml_fetch_pending: Option<String>, // Key of resource being fetched
     yaml_fetched: Option<serde_json::Value>, // Fetched YAML data
     yaml_fetch_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<serde_json::Value>>>, // Channel to receive fetch result
+    trace_pending: Option<(String, String, String)>, // (resource_type, namespace, name) for trace
+    trace_result: Option<crate::tui::trace::TraceResult>, // Trace result data
+    trace_result_rx:
+        Option<tokio::sync::oneshot::Receiver<anyhow::Result<crate::tui::trace::TraceResult>>>, // Channel to receive trace result
+    trace_scroll_offset: usize, // Scroll offset for trace view
     show_splash: bool,
     splash_start_time: Option<std::time::Instant>,
     operation_registry: OperationRegistry,
@@ -53,6 +58,7 @@ pub enum View {
     ResourceList,
     ResourceDetail,
     ResourceYAML,
+    ResourceTrace,
     #[allow(dead_code)] // Reserved for future alternative help view implementation
     Help,
 }
@@ -86,6 +92,10 @@ impl App {
             yaml_fetch_pending: None,
             yaml_fetched: None,
             yaml_fetch_rx: None,
+            trace_pending: None,
+            trace_result: None,
+            trace_result_rx: None,
+            trace_scroll_offset: 0,
             show_splash: !config.ui.splashless, // Skip splash if splashless is true
             splash_start_time: if config.ui.splashless {
                 None
@@ -156,6 +166,60 @@ impl App {
         self.yaml_fetch_pending = None;
     }
 
+    pub fn trigger_trace(
+        &mut self,
+    ) -> Option<(
+        String,
+        String,
+        String,
+        kube::Client,
+        tokio::sync::oneshot::Sender<anyhow::Result<crate::tui::trace::TraceResult>>,
+    )> {
+        if let Some((ref resource_type, ref namespace, ref name)) = self.trace_pending {
+            if let Some(ref client) = self.kube_client {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let rt = resource_type.clone();
+                let ns = namespace.clone();
+                let n = name.clone();
+                let client_clone = client.clone();
+                self.trace_pending = None;
+                self.trace_result_rx = Some(rx);
+                return Some((rt, ns, n, client_clone, tx));
+            }
+        }
+        None
+    }
+
+    pub fn set_trace_result(&mut self, result: crate::tui::trace::TraceResult) {
+        self.trace_result = Some(result);
+    }
+
+    pub fn set_trace_error(&mut self) {
+        self.trace_result = None;
+        self.trace_pending = None;
+    }
+
+    pub fn try_get_trace_result(
+        &mut self,
+    ) -> Option<anyhow::Result<crate::tui::trace::TraceResult>> {
+        if let Some(ref mut rx) = self.trace_result_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.trace_result_rx = None;
+                    return Some(result);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    return None;
+                }
+                Err(_) => {
+                    self.trace_result_rx = None;
+                    return Some(Err(anyhow::anyhow!("Trace failed")));
+                }
+            }
+        }
+        None
+    }
+
     pub fn try_get_yaml_result(&mut self) -> Option<anyhow::Result<serde_json::Value>> {
         // Check for async YAML fetch result
         if let Some(ref mut rx) = self.yaml_fetch_rx {
@@ -194,8 +258,22 @@ impl App {
             return self.handle_confirmation_key(key);
         }
 
-        // Clear status messages on any key press (except in special modes)
-        if self.status_message.is_some() && !self.command_mode && !self.filter_mode {
+        // Clear status messages on any key press (except in special modes and operation keys)
+        // Don't clear if this is an operation key - we'll set a new message
+        let is_operation_key = matches!(
+            key.code,
+            crossterm::event::KeyCode::Char('s')
+                | crossterm::event::KeyCode::Char('r')
+                | crossterm::event::KeyCode::Char('d')
+                | crossterm::event::KeyCode::Char('R')
+                | crossterm::event::KeyCode::Char('W')
+        );
+
+        if self.status_message.is_some()
+            && !self.command_mode
+            && !self.filter_mode
+            && !is_operation_key
+        {
             // Don't clear on Esc (might be used for navigation)
             if key.code != crossterm::event::KeyCode::Esc {
                 self.status_message = None;
@@ -233,7 +311,7 @@ impl App {
                         // At main menu - exit program
                         return Some(true);
                     }
-                    View::ResourceDetail | View::ResourceYAML => {
+                    View::ResourceDetail | View::ResourceYAML | View::ResourceTrace => {
                         // Go back to resource list
                         self.current_view = View::ResourceList;
                         self.selected_resource_key = None;
@@ -251,48 +329,117 @@ impl App {
             crossterm::event::KeyCode::Char('s')
             | crossterm::event::KeyCode::Char('r')
             | crossterm::event::KeyCode::Char('d')
-            | crossterm::event::KeyCode::Char('R') => {
-                // Handle Flux operations
-                if self.current_view == View::ResourceList {
+            | crossterm::event::KeyCode::Char('R')
+            | crossterm::event::KeyCode::Char('W') => {
+                // Handle Flux operations - works from both list and detail view
+                let resource_info = if self.current_view == View::ResourceList {
                     let resources = self.get_filtered_resources();
-                    if let Some(resource) = resources.get(self.selected_index) {
-                        let op_key = match key.code {
-                            crossterm::event::KeyCode::Char('s') => 's',
-                            crossterm::event::KeyCode::Char('r') => 'r',
-                            crossterm::event::KeyCode::Char('d') => 'd',
-                            crossterm::event::KeyCode::Char('R') => 'R',
-                            _ => return None,
-                        };
+                    resources.get(self.selected_index).cloned()
+                } else if self.current_view == View::ResourceDetail {
+                    // Get resource from selected_resource_key
+                    if let Some(ref key) = self.selected_resource_key {
+                        self.state.get(key)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
-                        if let Some(operation) = self.operation_registry.get_by_keybinding(op_key) {
-                            if operation.is_valid_for(&resource.resource_type) {
-                                // Check readonly mode first
-                                if self.config.read_only {
-                                    self.status_message = Some((
-                                        "Readonly mode is enabled. Operations are disabled."
-                                            .to_string(),
-                                        true,
-                                    ));
-                                } else if operation.requires_confirmation() {
-                                    // Show confirmation dialog
-                                    self.confirmation_pending = Some((
-                                        resource.resource_type.clone(),
-                                        resource.namespace.clone(),
-                                        resource.name.clone(),
-                                        op_key,
-                                    ));
-                                } else {
-                                    // Execute immediately
-                                    self.execute_operation(
-                                        &resource.resource_type,
-                                        &resource.namespace,
-                                        &resource.name,
-                                        op_key,
-                                    );
+                if let Some(resource) = resource_info {
+                    let op_key = match key.code {
+                        crossterm::event::KeyCode::Char('s') => 's',
+                        crossterm::event::KeyCode::Char('r') => 'r',
+                        crossterm::event::KeyCode::Char('d') => 'd',
+                        crossterm::event::KeyCode::Char('R') => 'R',
+                        crossterm::event::KeyCode::Char('W') => 'W',
+                        _ => return None,
+                    };
+
+                    if let Some(operation) = self.operation_registry.get_by_keybinding(op_key) {
+                        if operation.is_valid_for(&resource.resource_type) {
+                            // Check readonly mode first
+                            if self.config.read_only {
+                                self.status_message = Some((
+                                    "Readonly mode is enabled. Use :readonly to toggle write actions."
+                                        .to_string(),
+                                    true,
+                                ));
+                            } else if operation.requires_confirmation() {
+                                // Show confirmation dialog
+                                self.confirmation_pending = Some((
+                                    resource.resource_type.clone(),
+                                    resource.namespace.clone(),
+                                    resource.name.clone(),
+                                    op_key,
+                                ));
+                            } else {
+                                // Show immediate feedback
+                                if let Some(operation) =
+                                    self.operation_registry.get_by_keybinding(op_key)
+                                {
+                                    let feedback_msg = if op_key == 'W' {
+                                        // Special message for reconcile with source
+                                        format!(
+                                            "Reconciling {}/{} with source...",
+                                            resource.resource_type, resource.name
+                                        )
+                                    } else {
+                                        format!(
+                                            "{} {}/{}...",
+                                            operation.name(),
+                                            resource.resource_type,
+                                            resource.name
+                                        )
+                                    };
+                                    self.status_message = Some((feedback_msg, false));
                                 }
+                                // Execute immediately
+                                self.execute_operation(
+                                    &resource.resource_type,
+                                    &resource.namespace,
+                                    &resource.name,
+                                    op_key,
+                                );
                             }
+                        } else {
+                            // Operation not valid for this resource type
+                            self.status_message = Some((
+                                format!(
+                                    "Operation '{}' is not valid for {}",
+                                    operation.name(),
+                                    resource.resource_type
+                                ),
+                                true,
+                            ));
                         }
                     }
+                }
+            }
+            crossterm::event::KeyCode::Char('t') => {
+                // Trace command - works from both list and detail view
+                let resource_info = if self.current_view == View::ResourceList {
+                    let resources = self.get_filtered_resources();
+                    resources.get(self.selected_index).cloned()
+                } else if self.current_view == View::ResourceDetail {
+                    // Get resource from selected_resource_key
+                    if let Some(ref key) = self.selected_resource_key {
+                        self.state.get(key)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(resource) = resource_info {
+                    self.trace_pending = Some((
+                        resource.resource_type.clone(),
+                        resource.namespace.clone(),
+                        resource.name.clone(),
+                    ));
+                    self.trace_result = None;
+                    self.trace_scroll_offset = 0;
                 }
             }
             crossterm::event::KeyCode::Char(':') => {
@@ -377,6 +524,7 @@ impl App {
                 // Backspace goes back (same as Escape for detail view)
                 if self.current_view == View::ResourceDetail
                     || self.current_view == View::ResourceYAML
+                    || self.current_view == View::ResourceTrace
                 {
                     self.current_view = View::ResourceList;
                     self.selected_resource_key = None;
@@ -424,7 +572,8 @@ impl App {
                     if self.config.read_only {
                         self.confirmation_pending = None;
                         self.status_message = Some((
-                            "Readonly mode is enabled. Operations are disabled.".to_string(),
+                            "Readonly mode is enabled. Use :readonly to toggle write actions."
+                                .to_string(),
                             true,
                         ));
                         return None;
@@ -461,7 +610,7 @@ impl App {
             if self.operation_registry.get_by_keybinding(op_key).is_some() {
                 // All operations are modifications, so block them all in readonly mode
                 self.status_message = Some((
-                    "Readonly mode is enabled. Operations are disabled.".to_string(),
+                    "Readonly mode is enabled. Use :readonly to toggle write actions.".to_string(),
                     true,
                 ));
                 return;
@@ -528,6 +677,15 @@ impl App {
             }
         }
         None
+    }
+
+    pub fn set_status_message(&mut self, message: (String, bool)) {
+        self.status_message = Some(message);
+    }
+
+    pub fn set_view_trace(&mut self) {
+        self.current_view = View::ResourceTrace;
+        self.trace_scroll_offset = 0;
     }
 
     pub fn set_operation_result(&mut self, result: anyhow::Result<()>) {
@@ -666,12 +824,70 @@ impl App {
                         self.status_message = Some((msg, false));
                     }
                     Err(e) => {
-                        let msg = format!("Failed to load theme '{}': {}", name, e);
+                        let msg = format!("Failed to load theme '{}': {}. Use `default` to return to default theme", name, e);
                         self.status_message = Some((msg, true));
                     }
                 }
             } else {
                 self.status_message = Some(("Usage: :skin <theme-name>".to_string(), true));
+            }
+            return None;
+        }
+
+        // Handle trace command - trace ownership chain
+        if cmd_lower.starts_with("trace ") {
+            let parts: Vec<&str> = cmd.split_whitespace().skip(1).collect();
+            if parts.is_empty() {
+                // If no args, trace currently selected resource
+                if let Some(ref key) = self.selected_resource_key {
+                    let key_parts: Vec<&str> = key.split(':').collect();
+                    if key_parts.len() == 3 {
+                        let resource_type = key_parts[0].to_string();
+                        let namespace = key_parts[1].to_string();
+                        let name = key_parts[2].to_string();
+                        self.trace_pending = Some((resource_type, namespace, name));
+                        self.trace_result = None;
+                    } else {
+                        self.status_message = Some(("No resource selected".to_string(), true));
+                    }
+                } else {
+                    self.status_message = Some(("No resource selected".to_string(), true));
+                }
+            } else {
+                // Parse resource type/name format (e.g., "kustomization/cabot-book" or "Kustomization/cabot-book")
+                let resource_str = parts.join(" ");
+                let resource_parts: Vec<&str> = resource_str.split('/').collect();
+                if resource_parts.len() == 2 {
+                    let resource_type = resource_parts[0];
+                    let name = resource_parts[1];
+                    // Normalize resource type to proper case
+                    let resource_type_normalized = match resource_type.to_lowercase().as_str() {
+                        "kustomization" | "ks" => "Kustomization",
+                        "helmrelease" | "hr" => "HelmRelease",
+                        "gitrepository" | "gitrepo" => "GitRepository",
+                        "ocirepository" | "ocirepo" => "OCIRepository",
+                        "helmrepository" | "helmrepo" => "HelmRepository",
+                        "deployment" | "deploy" => "Deployment",
+                        "service" => "Service",
+                        "pod" => "Pod",
+                        _ => resource_type,
+                    };
+                    let namespace = self
+                        .namespace
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string());
+                    self.trace_pending = Some((
+                        resource_type_normalized.to_string(),
+                        namespace,
+                        name.to_string(),
+                    ));
+                    self.trace_result = None;
+                } else {
+                    self.status_message = Some((
+                        "Usage: :trace <resource-type>/<name> or :trace (for selected)".to_string(),
+                        true,
+                    ));
+                }
             }
             return None;
         }
@@ -956,6 +1172,17 @@ impl App {
                         &self.yaml_fetched,
                         &self.yaml_fetch_pending,
                         &mut self.yaml_scroll_offset,
+                        &self.theme,
+                    );
+                }
+                View::ResourceTrace => {
+                    views::trace::render_resource_trace(
+                        f,
+                        area,
+                        &self.selected_resource_key,
+                        &self.trace_result,
+                        &self.trace_pending,
+                        &mut self.trace_scroll_offset,
                         &self.theme,
                     );
                 }

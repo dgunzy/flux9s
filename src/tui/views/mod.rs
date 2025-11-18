@@ -12,6 +12,7 @@ mod help;
 pub mod resource_fields;
 mod resource_list;
 mod splash;
+pub mod trace;
 mod yaml;
 
 pub use confirmation::*;

@@ -13,6 +13,7 @@ pub use state::*;
 
 use anyhow::Result;
 use futures::StreamExt;
+use kube::core::{ApiResource, DynamicObject};
 use kube::runtime::watcher;
 use kube::{Api, Client, ResourceExt};
 use tokio::sync::mpsc;
@@ -258,6 +259,164 @@ impl ResourceWatcher {
         Ok(())
     }
 
+    /// Watch OCIRepository with version-agnostic support (v1 and v1beta2)
+    ///
+    /// This uses DynamicObject to watch OCIRepository resources regardless of their API version.
+    /// It tries v1beta2 first (older version that user has), then v1 if v1beta2 doesn't exist.
+    fn watch_oci_repository(&mut self) -> Result<()> {
+        let client = self.client.clone();
+        let namespace = self.current_namespace.clone();
+        let event_tx = self.event_tx.clone();
+        let resource_type = "OCIRepository".to_string();
+
+        let handle = tokio::spawn(async move {
+            // Try v1beta2 first (since user has resources in this version), then v1
+            let versions = vec!["v1beta2", "v1"];
+
+            for version in versions {
+                let api_resource = ApiResource {
+                    group: "source.toolkit.fluxcd.io".to_string(),
+                    version: version.to_string(),
+                    api_version: format!("source.toolkit.fluxcd.io/{}", version),
+                    kind: "OCIRepository".to_string(),
+                    plural: "ocirepositories".to_string(),
+                };
+
+                let api: Api<DynamicObject> = match namespace {
+                    Some(ref ns) => {
+                        tracing::debug!(
+                            "Starting OCIRepository watcher (version {}) for namespace: {}",
+                            version,
+                            ns
+                        );
+                        Api::namespaced_with(client.clone(), ns, &api_resource)
+                    }
+                    None => {
+                        tracing::debug!(
+                            "Starting OCIRepository watcher (version {}) for all namespaces",
+                            version
+                        );
+                        Api::all_with(client.clone(), &api_resource)
+                    }
+                };
+
+                let mut w = Box::pin(watcher(api, watcher::Config::default()));
+                let mut error_count = 0u32;
+                const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+                let mut version_working = false;
+
+                // Watch this version
+                loop {
+                    match w.next().await {
+                        Some(Ok(watcher::Event::InitApply(obj))) => {
+                            error_count = 0;
+                            version_working = true;
+                            let name = obj.name_any();
+                            let ns = obj.namespace().unwrap_or_default();
+                            let obj_json = serde_json::to_value(&obj).unwrap_or_default();
+                            let _ = event_tx.send(WatchEvent::Applied(
+                                resource_type.clone(),
+                                ns,
+                                name,
+                                obj_json,
+                            ));
+                        }
+                        Some(Ok(watcher::Event::Apply(obj))) => {
+                            error_count = 0;
+                            version_working = true;
+                            let name = obj.name_any();
+                            let ns = obj.namespace().unwrap_or_default();
+                            let obj_json = serde_json::to_value(&obj).unwrap_or_default();
+                            let _ = event_tx.send(WatchEvent::Applied(
+                                resource_type.clone(),
+                                ns,
+                                name,
+                                obj_json,
+                            ));
+                        }
+                        Some(Ok(watcher::Event::Delete(obj))) => {
+                            error_count = 0;
+                            version_working = true;
+                            let name = obj.name_any();
+                            let ns = obj.namespace().unwrap_or_default();
+                            let _ =
+                                event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
+                        }
+                        Some(Ok(watcher::Event::Init)) => {
+                            error_count = 0;
+                            version_working = true;
+                            tracing::debug!(
+                                "OCIRepository watcher (version {}) initialized",
+                                version
+                            );
+                        }
+                        Some(Ok(watcher::Event::InitDone)) => {
+                            error_count = 0;
+                            version_working = true;
+                            tracing::debug!(
+                                "OCIRepository watcher (version {}) initialization complete",
+                                version
+                            );
+                        }
+                        Some(Err(e)) => {
+                            error_count += 1;
+                            let error_string = format!("{}", e);
+                            let is_404 = error_string.contains("404")
+                                || error_string.contains("Not Found")
+                                || error_string.contains("page not found");
+
+                            if is_404 && !version_working {
+                                // 404 means this version doesn't exist - try next version
+                                tracing::debug!(
+                                    "OCIRepository version {} not found (404), trying next version",
+                                    version
+                                );
+                                break; // Try next version
+                            }
+
+                            if error_count >= MAX_CONSECUTIVE_ERRORS {
+                                tracing::error!(
+                                    "OCIRepository watcher (version {}) stopped after {} consecutive errors",
+                                    version,
+                                    error_count
+                                );
+                                let _ = event_tx.send(WatchEvent::Error(format!(
+                                    "OCIRepository watcher (version {}) stopped after {} consecutive errors",
+                                    version, error_count
+                                )));
+                                return; // Give up
+                            }
+
+                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        }
+                        None => {
+                            // Stream ended
+                            tracing::debug!(
+                                "OCIRepository watcher (version {}) stream ended",
+                                version
+                            );
+                            break;
+                        }
+                    }
+                }
+
+                // If this version worked, use it and stop trying others
+                if version_working {
+                    tracing::info!("OCIRepository watcher using version {}", version);
+                    return;
+                }
+            }
+
+            // If no version worked, report error
+            let _ = event_tx.send(WatchEvent::Error(
+                "OCIRepository watcher failed: no supported version found".to_string(),
+            ));
+        });
+
+        self.handles.push(handle);
+        Ok(())
+    }
+
     /// Start watching all registered Flux resources
     ///
     /// This function watches all Flux CRD types. To add a new resource type:
@@ -269,7 +428,8 @@ impl ResourceWatcher {
 
         // Source Controller resources
         self.watch::<resource::GitRepository>()?;
-        self.watch::<resource::OCIRepository>()?;
+        // OCIRepository uses version-agnostic watch to support both v1 and v1beta2
+        self.watch_oci_repository()?;
         self.watch::<resource::HelmRepository>()?;
         self.watch::<resource::Bucket>()?;
         self.watch::<resource::HelmChart>()?;
