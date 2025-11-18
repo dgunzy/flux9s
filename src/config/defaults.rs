@@ -16,7 +16,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = default_config();
-        assert!(!config.read_only);
+        assert!(config.read_only);
         assert_eq!(config.default_namespace, "flux-system");
     }
 }

@@ -169,10 +169,14 @@ impl ThemeLoader {
             return Ok(Theme::default());
         }
 
-        // If theme not found and not "default", try loading "default" first, then apply overrides
-        // For now, just return default
-        tracing::warn!("Theme '{}' not found, using default theme", name);
-        Ok(Theme::default())
+        Err(anyhow::anyhow!(
+            "Theme '{}' not found in either \n '{}'\n  or '{}'",
+            name,
+            paths::user_skins_dir()
+                .join(format!("{}.yaml", name))
+                .display(),
+            paths::skins_dir().join(format!("{}.yaml", name)).display()
+        ))
     }
 
     /// Load theme from a YAML file

@@ -3,14 +3,17 @@
 //! Provides the terminal user interface for Flux TUI.
 //! Built with ratatui for a K9s-inspired experience.
 
+mod api;
 mod app;
 mod operations;
 mod theme;
+mod trace;
 pub mod views;
 
 pub use app::*;
 pub use operations::*;
 pub use theme::*;
+// trace module functions are used internally, not exported
 
 use anyhow::Result;
 use crossterm::{
@@ -137,6 +140,50 @@ pub async fn run_tui(
                     }
                     let _ = tx.send(result);
                 });
+            }
+        }
+
+        // Check if we need to trace a resource asynchronously
+        if let Some((resource_type, namespace, name, client, tx)) = app.trigger_trace() {
+            tracing::debug!(
+                "Tracing {}/{} in namespace {}",
+                resource_type,
+                name,
+                namespace
+            );
+
+            // Spawn async task to trace resource
+            let client_clone = client.clone();
+            tokio::spawn(async move {
+                use crate::tui::trace;
+                let result =
+                    trace::trace_object(&client_clone, &resource_type, &namespace, &name).await;
+                match result {
+                    Ok(trace_result) => {
+                        tracing::debug!("Successfully traced {}/{}", resource_type, name);
+                        let _ = tx.send(Ok(trace_result));
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to trace {}/{}: {}", resource_type, name, e);
+                        let _ = tx.send(Err(anyhow::anyhow!("Trace failed: {}", e)));
+                    }
+                }
+            });
+        }
+
+        // Check for trace results
+        if let Some(result) = app.try_get_trace_result() {
+            match result {
+                Ok(trace_result) => {
+                    app.set_trace_result(trace_result);
+                    // Switch to trace view - use public method if available
+                    // For now, we'll set it via a method we need to add
+                    app.set_view_trace();
+                }
+                Err(e) => {
+                    app.set_trace_error();
+                    app.set_status_message((format!("Trace failed: {}", e), true));
+                }
             }
         }
 

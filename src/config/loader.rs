@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn test_load_defaults() {
         let config = ConfigLoader::load_defaults();
-        assert!(!config.read_only);
+        assert!(config.read_only);
         assert_eq!(config.default_namespace, "flux-system");
     }
 

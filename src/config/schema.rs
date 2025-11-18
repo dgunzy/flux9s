@@ -78,7 +78,7 @@ pub struct LoggerConfig {
 
 // Default value functions
 fn default_read_only() -> bool {
-    false
+    true
 }
 
 fn default_namespace() -> String {
@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         let config = Config::default();
-        assert!(!config.read_only);
+        assert!(config.read_only);
         assert_eq!(config.default_namespace, "flux-system");
         assert_eq!(config.ui.skin, "default");
     }
