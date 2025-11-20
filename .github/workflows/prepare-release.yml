@@ -61,24 +61,58 @@ jobs:
         run: |
           cargo update -p flux9s --precise ${{ steps.version.outputs.new_version }}
 
+      - name: Generate changelog with Claude API
+        id: changelog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          VERSION="${{ steps.version.outputs.new_version }}"
+          CURRENT_VERSION="${{ steps.version.outputs.current_version }}"
+
+          # Get git diff since last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            DIFF=$(git log $LAST_TAG..HEAD --pretty=format:"%h %s" --no-merges)
+          else
+            DIFF=$(git log --pretty=format:"%h %s" --no-merges --max-count=20)
+          fi
+
+          # Escape diff for JSON
+          DIFF_JSON=$(echo "$DIFF" | jq -Rs .)
+
+          # Generate changelog using Claude API
+          CHANGELOG=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -d "{
+              \"model\": \"claude-3-5-sonnet-20241022\",
+              \"max_tokens\": 1024,
+              \"messages\": [{
+                \"role\": \"user\",
+                \"content\": \"Generate a concise changelog summary for version $VERSION based on these git commits. Format as bullet points under categories: Added, Changed, Fixed. Be specific but brief. Only include categories that have changes.\n\nCommits:\n$DIFF\"
+              }]
+            }" | jq -r '.content[0].text')
+
+          # Save to file for next step
+          echo "$CHANGELOG" > /tmp/ai_changelog.txt
+          echo "Generated changelog:"
+          cat /tmp/ai_changelog.txt
+
       - name: Update CHANGELOG.md
         run: |
           VERSION="${{ steps.version.outputs.new_version }}"
           DATE=$(date +%Y-%m-%d)
+
+          # Read AI-generated changelog
+          AI_CHANGELOG=$(cat /tmp/ai_changelog.txt 2>/dev/null || echo "### Changes\n- Version bump to $VERSION")
 
           # Create the new changelog entry
           cat > /tmp/changelog_entry.txt << EOF
 
           ## [$VERSION] - $DATE
 
-          ### Added
-          - 
-
-          ### Changed
-          - 
-
-          ### Fixed
-          - 
+          $AI_CHANGELOG
           EOF
 
           # Insert after the [Unreleased] line
@@ -100,17 +134,18 @@ jobs:
             **Changes in this PR:**
             - ✅ Updated version in Cargo.toml
             - ✅ Updated Cargo.lock
-            - ✅ Updated CHANGELOG.md with new version entry
+            - ✅ Updated CHANGELOG.md with AI-generated summary
 
             **What happens after merge:**
             1. ✅ PR gets merged to main
-            2. ✅ Tag `v${{ steps.version.outputs.new_version }}` is automatically created
-            3. ✅ Release workflow builds binaries for all platforms
-            4. ✅ Publishes to crates.io
-            5. ✅ Creates GitHub release with artifacts
-            6. ✅ Updates Homebrew formula
+            2. ✅ Tag `v${{ steps.version.outputs.new_version }}` is automatically created by auto-tag workflow
+            3. ✅ Release workflow is automatically triggered via workflow_dispatch
+            4. ✅ Release workflow builds binaries for all platforms
+            5. ✅ Publishes to crates.io
+            6. ✅ Creates GitHub release with artifacts
+            7. ✅ Updates Homebrew formula
 
-            **Please update the CHANGELOG.md** with actual changes before merging!
+            The CHANGELOG.md has been automatically generated using Claude AI. Please review and edit if needed before merging!
           branch: release-v${{ steps.version.outputs.new_version }}
           delete-branch: true
           labels: release
