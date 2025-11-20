@@ -77,22 +77,37 @@ jobs:
             DIFF=$(git log --pretty=format:"%h %s" --no-merges --max-count=20)
           fi
 
-          # Escape diff for JSON
-          DIFF_JSON=$(echo "$DIFF" | jq -Rs .)
+          # Create the prompt
+          PROMPT="Generate a concise changelog summary for version $VERSION based on these git commits. Format as bullet points under categories: Added, Changed, Fixed. Be specific but brief. Only include categories that have changes.
 
-          # Generate changelog using Claude API
-          CHANGELOG=$(curl -s https://api.anthropic.com/v1/messages \
+          Commits:
+          $DIFF"
+
+          # Generate changelog using Claude API with proper JSON escaping
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
-            -d "{
-              \"model\": \"claude-3-5-sonnet-20241022\",
-              \"max_tokens\": 1024,
-              \"messages\": [{
-                \"role\": \"user\",
-                \"content\": \"Generate a concise changelog summary for version $VERSION based on these git commits. Format as bullet points under categories: Added, Changed, Fixed. Be specific but brief. Only include categories that have changes.\n\nCommits:\n$DIFF\"
-              }]
-            }" | jq -r '.content[0].text')
+            -d @- << EOF
+          {
+            "model": "claude-3-haiku-20240307",
+            "max_tokens": 1024,
+            "messages": [{
+              "role": "user",
+              "content": $(echo "$PROMPT" | jq -Rs .)
+            }]
+          }
+          EOF
+          )
+
+          # Extract the changelog text, with error handling
+          CHANGELOG=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+
+          if [ -z "$CHANGELOG" ]; then
+            echo "Warning: Claude API returned empty response"
+            echo "API Response: $RESPONSE"
+            CHANGELOG="### Changes\n- Version bump to $VERSION"
+          fi
 
           # Save to file for next step
           echo "$CHANGELOG" > /tmp/ai_changelog.txt
