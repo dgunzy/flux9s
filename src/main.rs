@@ -7,6 +7,7 @@ mod cli;
 mod config;
 mod kube;
 mod models;
+mod trace;
 mod tui;
 mod watcher;
 
@@ -36,11 +37,19 @@ enum Command {
         #[command(subcommand)]
         subcommand: cli::ConfigSubcommand,
     },
+    /// Display version information
+    Version,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Handle version command
+    if let Some(Command::Version) = args.command {
+        cli::display_version();
+        return Ok(());
+    }
 
     // Handle config subcommand
     if let Some(Command::Config { subcommand }) = args.command {

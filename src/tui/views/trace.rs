@@ -65,14 +65,17 @@ pub fn render_resource_trace(
     // Add the main object
     nodes.push((&trace_result.object, "Object"));
 
-    // Add chain nodes (Kustomization/HelmRelease)
+    // Add chain nodes (Kustomization/HelmRelease/HelmChart)
+    // Skip nodes that match the object being traced (avoid duplicates)
     for node in &trace_result.chain {
         use crate::models::FluxResourceKind;
         if matches!(
             FluxResourceKind::from_str(&node.kind),
-            Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
+            Some(FluxResourceKind::Kustomization)
+                | Some(FluxResourceKind::HelmRelease)
+                | Some(FluxResourceKind::HelmChart)
         ) {
-            // Skip if this is the same as the main object
+            // Skip if this node matches the object being traced (already shown as "Object")
             if node.kind == trace_result.object.kind
                 && node.name == trace_result.object.name
                 && node.namespace == trace_result.object.namespace
@@ -269,7 +272,7 @@ fn render_trace_node(f: &mut Frame, area: Rect, node: &TraceNode, is_primary: bo
         if let Some(ref message) = status.message {
             // Truncate long messages
             let max_len = (area.width.saturating_sub(15)) as usize;
-            let display_message = if message.len() > max_len {
+            let display_message: String = if message.len() > max_len {
                 format!("{}...", &message[..max_len])
             } else {
                 message.clone()

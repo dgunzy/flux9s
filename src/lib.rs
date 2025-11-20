@@ -6,8 +6,12 @@
 pub mod config;
 pub mod kube;
 pub mod models;
+pub mod trace;
 pub mod tui;
 pub mod watcher;
+
+// Re-export trace types for testing
+pub use trace::{trace_object, SourceRef, TraceNode, TraceResult, TraceSpec, TraceStatus};
 
 // Re-export commonly used types for convenience
 pub use watcher::{
