@@ -5,6 +5,15 @@ use clap::Subcommand;
 
 use crate::config::{paths, ConfigLoader, ThemeLoader};
 
+/// Display version information
+pub fn display_version() {
+    println!("flux9s {}", env!("CARGO_PKG_VERSION"));
+    println!("  {}", env!("CARGO_PKG_DESCRIPTION"));
+    println!("  {}", env!("CARGO_PKG_AUTHORS"));
+    println!("  License: {}", env!("CARGO_PKG_LICENSE"));
+    println!("  Repository: {}", env!("CARGO_PKG_REPOSITORY"));
+}
+
 /// Configuration management subcommands
 #[derive(Subcommand, Debug)]
 pub enum ConfigSubcommand {

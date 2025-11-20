@@ -129,7 +129,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 This project is inspired by and built with the following excellent tools:
 
 - **[K9s](https://github.com/derailed/k9s)** - The terminal UI for Kubernetes that inspired this project
-- **[kube-rs](https://github.com/kube-rs/kube)** - The Rust Kubernetes client library powering the Kubernetes API interactions
+- **[Flux](https://github.com/fluxcd/flux2)** - The open and extensible continuous delivery solution for Kubernetes. Powered by GitOps Toolkit. - **[kube-rs](https://github.com/kube-rs/kube)** - The Rust Kubernetes client library powering the Kubernetes API interactions
 - **[kopium](https://github.com/kube-rs/kopium)** - The tool used to generate Rust types from Kubernetes CRDs
 
 ## AI Note

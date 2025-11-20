@@ -41,7 +41,7 @@ jobs:
         run: cargo test --lib --tests
 
       - name: Run integration tests
-        run: cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction
+        run: cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests
 
   build:
     name: Build

@@ -10,6 +10,8 @@ mod theme;
 mod trace;
 pub mod views;
 
+pub use api::get_api_resource_with_fallback;
+
 pub use app::*;
 pub use operations::*;
 pub use theme::*;

@@ -82,3 +82,7 @@ path = "tests/resource_registry.rs"
 [[test]]
 name = "field_extraction"
 path = "tests/field_extraction.rs"
+
+[[test]]
+name = "trace_tests"
+path = "tests/trace_tests.rs"
