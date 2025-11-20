@@ -67,7 +67,11 @@ pub fn render_resource_trace(
 
     // Add chain nodes (Kustomization/HelmRelease)
     for node in &trace_result.chain {
-        if node.kind == "Kustomization" || node.kind == "HelmRelease" {
+        use crate::models::FluxResourceKind;
+        if matches!(
+            FluxResourceKind::from_str(&node.kind),
+            Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
+        ) {
             // Skip if this is the same as the main object
             if node.kind == trace_result.object.kind
                 && node.name == trace_result.object.name

@@ -101,10 +101,19 @@ mod tests {
 
     #[test]
     fn test_resource_key_generation() {
-        let key = resource_key("default", "my-resource", "Kustomization");
+        use crate::models::FluxResourceKind;
+        let key = resource_key(
+            "default",
+            "my-resource",
+            FluxResourceKind::Kustomization.as_str(),
+        );
         assert_eq!(key, "Kustomization:default:my-resource");
 
-        let key2 = resource_key("flux-system", "flux-system", "GitRepository");
+        let key2 = resource_key(
+            "flux-system",
+            "flux-system",
+            FluxResourceKind::GitRepository.as_str(),
+        );
         assert_eq!(key2, "GitRepository:flux-system:flux-system");
     }
 
@@ -120,7 +129,7 @@ mod tests {
         let info = ResourceInfo {
             name: "test-resource".to_string(),
             namespace: "default".to_string(),
-            resource_type: "Kustomization".to_string(),
+            resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
             age: None,
             suspended: Some(false),
             ready: Some(true),
@@ -128,31 +137,43 @@ mod tests {
             revision: None,
         };
 
-        let key = resource_key("default", "test-resource", "Kustomization");
+        use crate::models::FluxResourceKind;
+        let key = resource_key(
+            "default",
+            "test-resource",
+            FluxResourceKind::Kustomization.as_str(),
+        );
         state.upsert(key.clone(), info);
 
         assert_eq!(state.all().len(), 1);
         let retrieved = state.get(&key).unwrap();
         assert_eq!(retrieved.name, "test-resource");
         assert_eq!(retrieved.namespace, "default");
-        assert_eq!(retrieved.resource_type, "Kustomization");
+        assert_eq!(
+            retrieved.resource_type,
+            FluxResourceKind::Kustomization.as_str()
+        );
     }
 
     #[test]
     fn test_resource_state_remove() {
+        use crate::models::FluxResourceKind;
         let state = ResourceState::new();
         let info = ResourceInfo {
             name: "test-resource".to_string(),
             namespace: "default".to_string(),
-            resource_type: "Kustomization".to_string(),
+            resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
             age: None,
             suspended: None,
             ready: None,
             message: None,
             revision: None,
         };
-
-        let key = resource_key("default", "test-resource", "Kustomization");
+        let key = resource_key(
+            "default",
+            "test-resource",
+            FluxResourceKind::Kustomization.as_str(),
+        );
         state.upsert(key.clone(), info);
         assert_eq!(state.all().len(), 1);
 
@@ -163,13 +184,14 @@ mod tests {
 
     #[test]
     fn test_resource_state_by_type() {
+        use crate::models::FluxResourceKind;
         let state = ResourceState::new();
 
         // Add multiple resources of different types
         let kustomization = ResourceInfo {
             name: "ks1".to_string(),
             namespace: "default".to_string(),
-            resource_type: "Kustomization".to_string(),
+            resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
             age: None,
             suspended: None,
             ready: None,
@@ -180,7 +202,7 @@ mod tests {
         let gitrepo = ResourceInfo {
             name: "repo1".to_string(),
             namespace: "default".to_string(),
-            resource_type: "GitRepository".to_string(),
+            resource_type: FluxResourceKind::GitRepository.as_str().to_string(),
             age: None,
             suspended: None,
             ready: None,
@@ -191,7 +213,7 @@ mod tests {
         let kustomization2 = ResourceInfo {
             name: "ks2".to_string(),
             namespace: "default".to_string(),
-            resource_type: "Kustomization".to_string(),
+            resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
             age: None,
             suspended: None,
             ready: None,
@@ -209,13 +231,13 @@ mod tests {
             kustomization2,
         );
 
-        let kustomizations = state.by_type("Kustomization");
+        let kustomizations = state.by_type(FluxResourceKind::Kustomization.as_str());
         assert_eq!(kustomizations.len(), 2);
 
-        let gitrepos = state.by_type("GitRepository");
+        let gitrepos = state.by_type(FluxResourceKind::GitRepository.as_str());
         assert_eq!(gitrepos.len(), 1);
 
-        let nonexistent = state.by_type("HelmRelease");
+        let nonexistent = state.by_type(FluxResourceKind::HelmRelease.as_str());
         assert_eq!(nonexistent.len(), 0);
     }
 
@@ -223,13 +245,14 @@ mod tests {
     fn test_resource_state_count_by_type() {
         let state = ResourceState::new();
 
+        use crate::models::FluxResourceKind;
         // Add resources of different types
         state.upsert(
-            resource_key("default", "ks1", "Kustomization"),
+            resource_key("default", "ks1", FluxResourceKind::Kustomization.as_str()),
             ResourceInfo {
                 name: "ks1".to_string(),
                 namespace: "default".to_string(),
-                resource_type: "Kustomization".to_string(),
+                resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
                 age: None,
                 suspended: None,
                 ready: None,
@@ -239,11 +262,11 @@ mod tests {
         );
 
         state.upsert(
-            resource_key("default", "ks2", "Kustomization"),
+            resource_key("default", "ks2", FluxResourceKind::Kustomization.as_str()),
             ResourceInfo {
                 name: "ks2".to_string(),
                 namespace: "default".to_string(),
-                resource_type: "Kustomization".to_string(),
+                resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
                 age: None,
                 suspended: None,
                 ready: None,
@@ -253,11 +276,11 @@ mod tests {
         );
 
         state.upsert(
-            resource_key("default", "repo1", "GitRepository"),
+            resource_key("default", "repo1", FluxResourceKind::GitRepository.as_str()),
             ResourceInfo {
                 name: "repo1".to_string(),
                 namespace: "default".to_string(),
-                resource_type: "GitRepository".to_string(),
+                resource_type: FluxResourceKind::GitRepository.as_str().to_string(),
                 age: None,
                 suspended: None,
                 ready: None,
@@ -267,21 +290,28 @@ mod tests {
         );
 
         let counts = state.count_by_type();
-        assert_eq!(counts.get("Kustomization"), Some(&2));
-        assert_eq!(counts.get("GitRepository"), Some(&1));
-        assert_eq!(counts.get("HelmRelease"), None);
+        assert_eq!(
+            counts.get(FluxResourceKind::Kustomization.as_str()),
+            Some(&2)
+        );
+        assert_eq!(
+            counts.get(FluxResourceKind::GitRepository.as_str()),
+            Some(&1)
+        );
+        assert_eq!(counts.get(FluxResourceKind::HelmRelease.as_str()), None);
     }
 
     #[test]
     fn test_resource_state_clear() {
         let state = ResourceState::new();
 
+        use crate::models::FluxResourceKind;
         state.upsert(
-            resource_key("default", "test", "Kustomization"),
+            resource_key("default", "test", FluxResourceKind::Kustomization.as_str()),
             ResourceInfo {
                 name: "test".to_string(),
                 namespace: "default".to_string(),
-                resource_type: "Kustomization".to_string(),
+                resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
                 age: None,
                 suspended: None,
                 ready: None,

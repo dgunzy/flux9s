@@ -2,6 +2,7 @@ use anyhow::Result;
 use kube::core::{ApiResource, DynamicObject};
 use kube::Api;
 
+use crate::models::FluxResourceKind;
 use crate::watcher::WatchableResource;
 use crate::watcher::{
     Alert, Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRelease, HelmRepository,
@@ -11,78 +12,86 @@ use crate::watcher::{
 
 /// Get GroupVersionKind for a resource type
 pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String, String)> {
-    let (group, version, plural) = match resource_type {
-        "GitRepository" => (
+    let (group, version, plural) = match FluxResourceKind::from_str(resource_type) {
+        Some(FluxResourceKind::GitRepository) => (
             GitRepository::api_group(),
             GitRepository::api_version(),
             GitRepository::plural(),
         ),
-        "OCIRepository" => (
+        Some(FluxResourceKind::OCIRepository) => (
             OCIRepository::api_group(),
             OCIRepository::api_version(),
             OCIRepository::plural(),
         ),
-        "HelmRepository" => (
+        Some(FluxResourceKind::HelmRepository) => (
             HelmRepository::api_group(),
             HelmRepository::api_version(),
             HelmRepository::plural(),
         ),
-        "Bucket" => (Bucket::api_group(), Bucket::api_version(), Bucket::plural()),
-        "HelmChart" => (
+        Some(FluxResourceKind::Bucket) => {
+            (Bucket::api_group(), Bucket::api_version(), Bucket::plural())
+        }
+        Some(FluxResourceKind::HelmChart) => (
             HelmChart::api_group(),
             HelmChart::api_version(),
             HelmChart::plural(),
         ),
-        "ExternalArtifact" => (
+        Some(FluxResourceKind::ExternalArtifact) => (
             ExternalArtifact::api_group(),
             ExternalArtifact::api_version(),
             ExternalArtifact::plural(),
         ),
-        "Kustomization" => (
+        Some(FluxResourceKind::Kustomization) => (
             Kustomization::api_group(),
             Kustomization::api_version(),
             Kustomization::plural(),
         ),
-        "HelmRelease" => (
+        Some(FluxResourceKind::HelmRelease) => (
             HelmRelease::api_group(),
             HelmRelease::api_version(),
             HelmRelease::plural(),
         ),
-        "ImageRepository" => (
+        Some(FluxResourceKind::ImageRepository) => (
             ImageRepository::api_group(),
             ImageRepository::api_version(),
             ImageRepository::plural(),
         ),
-        "ImagePolicy" => (
+        Some(FluxResourceKind::ImagePolicy) => (
             ImagePolicy::api_group(),
             ImagePolicy::api_version(),
             ImagePolicy::plural(),
         ),
-        "ImageUpdateAutomation" => (
+        Some(FluxResourceKind::ImageUpdateAutomation) => (
             ImageUpdateAutomation::api_group(),
             ImageUpdateAutomation::api_version(),
             ImageUpdateAutomation::plural(),
         ),
-        "Alert" => (Alert::api_group(), Alert::api_version(), Alert::plural()),
-        "Provider" => (
+        Some(FluxResourceKind::Alert) => {
+            (Alert::api_group(), Alert::api_version(), Alert::plural())
+        }
+        Some(FluxResourceKind::Provider) => (
             Provider::api_group(),
             Provider::api_version(),
             Provider::plural(),
         ),
-        "Receiver" => (
+        Some(FluxResourceKind::Receiver) => (
             Receiver::api_group(),
             Receiver::api_version(),
             Receiver::plural(),
         ),
-        // Handle standard Kubernetes resources
-        "Deployment" | "Service" | "ConfigMap" | "Secret" | "Pod" | "Namespace" => {
-            return Ok((
-                "".to_string(),
-                "v1".to_string(),
-                resource_type.to_lowercase() + "s",
-            ));
+        None => {
+            // Handle standard Kubernetes resources
+            match resource_type {
+                "Deployment" | "Service" | "ConfigMap" | "Secret" | "Pod" | "Namespace" => {
+                    return Ok((
+                        "".to_string(),
+                        "v1".to_string(),
+                        resource_type.to_lowercase() + "s",
+                    ));
+                }
+                _ => return Err(anyhow::anyhow!("Unknown resource type: {}", resource_type)),
+            }
         }
-        _ => return Err(anyhow::anyhow!("Unknown resource type: {}", resource_type)),
     };
 
     Ok((group.to_string(), version.to_string(), plural.to_string()))

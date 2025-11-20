@@ -13,5 +13,8 @@ pub mod _generated;
 // Manual extensions
 pub mod extensions;
 
-// Re-export commonly used types when extensions are implemented
-// pub use extensions::*;
+// Flux resource kind definitions
+pub mod flux_resource_kind;
+
+// Re-export commonly used types
+pub use flux_resource_kind::FluxResourceKind;
