@@ -6,6 +6,8 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 ![License](https://img.shields.io/crates/l/flux9s)
 ![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)
 
+![flux9s screenshot](docs/images/screenshot.png)
+
 ## Overview
 
 `flux9s` provides a terminal-based interface for monitoring and managing Flux CD resources, inspired by the excellent [K9s](https://github.com/derailed/k9s) project. It offers real-time monitoring of Flux Custom Resources (CRDs) including Kustomizations, GitRepositories, HelmReleases, and more.
@@ -129,7 +131,8 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 This project is inspired by and built with the following excellent tools:
 
 - **[K9s](https://github.com/derailed/k9s)** - The terminal UI for Kubernetes that inspired this project
-- **[Flux](https://github.com/fluxcd/flux2)** - The open and extensible continuous delivery solution for Kubernetes. Powered by GitOps Toolkit. - **[kube-rs](https://github.com/kube-rs/kube)** - The Rust Kubernetes client library powering the Kubernetes API interactions
+- **[Flux](https://github.com/fluxcd/flux2)** - The open and extensible continuous delivery solution for Kubernetes. Powered by GitOps Toolkit. 
+- **[kube-rs](https://github.com/kube-rs/kube)** - The Rust Kubernetes client library powering the Kubernetes API interactions
 - **[kopium](https://github.com/kube-rs/kopium)** - The tool used to generate Rust types from Kubernetes CRDs
 
 ## AI Note
