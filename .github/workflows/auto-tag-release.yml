@@ -51,19 +51,9 @@ jobs:
         run: |
           echo "⚠️ Tag v${{ steps.version.outputs.version }} already exists, skipping tag creation"
 
-      - name: Trigger release workflow
+      - name: Wait for release workflow to trigger
         if: steps.check_tag.outputs.exists == 'false'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.PAT_TOKEN }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'release.yml',
-              ref: `v${{ steps.version.outputs.version }}`,
-              inputs: {
-                tag: `v${{ steps.version.outputs.version }}`
-              }
-            });
-            console.log('✅ Triggered release workflow for v${{ steps.version.outputs.version }}');
+        run: |
+          echo "✅ Tag v${{ steps.version.outputs.version }} created"
+          echo "The Release workflow will be automatically triggered by the tag push"
+          echo "Using PAT_TOKEN ensures the push event triggers workflows"
