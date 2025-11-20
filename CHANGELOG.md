@@ -18,68 +18,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.0] - 2025-11-20
 
 ### Added
-- 
-
-### Changed
-- 
-
-### Fixed
-- 
+- Support for Flux operator CRDs (#33)
+- Screenshot image to documentation (#31, #32)
 
 ## [0.3.1] - 2025-11-20
 
-### Added
-- 
-
-### Changed
-- 
-
 ### Fixed
-- 
+- Fixed trace functionality (#28)
+- Replaced hardcoded strings with configuration (#27)
 
 ## [0.3.0] - 2025-11-18
 
-### Added
-- 
-
 ### Changed
-- 
-
-### Fixed
-- 
+- Default mode set to readOnly (#23)
 
 ## [0.2.4] - 2025-11-16
 
-### Added
-- 
-
 ### Changed
-- 
-
-### Fixed
-- 
-
-## [0.2.3] - 2025-11-16
-
-### Added
-- 
-
-### Changed
-- 
-
-### Fixed
-- 
+- Workflow tweaks and improvements (#19)
 
 ## [0.2.2] - 2025-11-16
 
-### Added
-- 
+### Changed
+- Code hygiene improvements (#16)
+- Workflow release changes (#16)
+
+## [0.2.1] - 2025-11-16
 
 ### Changed
-- 
+- Version bump to 0.2.1
+
+## [0.2.0] - 2025-11-16
+
+### Added
+- ReadOnly mode support
+- Configuration and config-cli functionality
 
 ### Fixed
-- 
+- OpenSSL build issues (#10, #8)
+- Windows temporary file handling (#9)
+
+## [0.1.5] - 2025-11-16
+
+### Added
+- OpenSSL support
+- Debug logging (#7)
+- Proxy support (#6)
+
+## [0.1.4] - 2025-11-16
+
+### Added
+- Homebrew support (#5)
+
+## [0.1.3] - 2025-11-16
+
+### Added
+- Homebrew macOS architecture support (#4)
+
+## [0.1.2] - 2025-11-16
+
+### Added
+- Homebrew macOS architecture support (#3)
+- macOS M-chip (Apple Silicon) support (#2)
+
+## [0.1.1] - 2025-11-16
+
+### Added
+- Binstall support
 
 ## [0.1.0] - YYYY-MM-DD
 

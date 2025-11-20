@@ -56,9 +56,8 @@ pub struct Theme {
     pub footer_text: Color,
 }
 
-impl Theme {
-    /// Create the default theme
-    pub fn default() -> Self {
+impl Default for Theme {
+    fn default() -> Self {
         Self {
             // Header colors
             header_context: Color::Yellow,
@@ -104,7 +103,9 @@ impl Theme {
             footer_text: Color::White,
         }
     }
+}
 
+impl Theme {
     // Helper methods for common style combinations
 
     pub fn header_context_style(&self) -> Style {

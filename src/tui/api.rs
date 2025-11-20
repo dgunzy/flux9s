@@ -12,7 +12,7 @@ use crate::watcher::{
 
 /// Get GroupVersionKind for a resource type
 pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String, String)> {
-    let (group, version, plural) = match FluxResourceKind::from_str(resource_type) {
+    let (group, version, plural) = match FluxResourceKind::parse_optional(resource_type) {
         Some(FluxResourceKind::GitRepository) => (
             GitRepository::api_group(),
             GitRepository::api_version(),

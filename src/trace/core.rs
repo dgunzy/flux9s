@@ -35,7 +35,7 @@ pub async fn trace_object(
 
     // Check if the initial object itself is a Kustomization or HelmRelease
     use crate::models::FluxResourceKind;
-    let initial_kind = FluxResourceKind::from_str(resource_type);
+    let initial_kind = FluxResourceKind::parse_optional(resource_type);
     if matches!(
         initial_kind,
         Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
@@ -129,7 +129,7 @@ async fn walk_owner_chain(
 
                     // If this is a Kustomization or HelmRelease, resolve its source
                     if matches!(
-                        FluxResourceKind::from_str(&flux_owner.kind),
+                        FluxResourceKind::parse_optional(&flux_owner.kind),
                         Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
                     ) {
                         let source =
@@ -217,7 +217,7 @@ async fn walk_owner_chain(
 
                 // If this is a Kustomization or HelmRelease, resolve its source
                 if matches!(
-                    FluxResourceKind::from_str(owner_kind),
+                    FluxResourceKind::parse_optional(owner_kind),
                     Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
                 ) {
                     let source =
@@ -274,7 +274,7 @@ async fn resolve_source(
 ) -> Result<Option<TraceNode>> {
     use crate::models::FluxResourceKind;
 
-    match FluxResourceKind::from_str(&node.kind) {
+    match FluxResourceKind::parse_optional(&node.kind) {
         Some(FluxResourceKind::Kustomization) => {
             resolve_kustomization_source(client, node, default_ns).await
         }
@@ -527,7 +527,7 @@ fn parse_namespaced_name(ref_str: &str, default_ns: &str) -> (String, String) {
 
 /// Check if a resource kind is a Flux resource
 fn is_flux_resource(kind: &str) -> bool {
-    FluxResourceKind::from_str(kind).is_some()
+    FluxResourceKind::parse_optional(kind).is_some()
 }
 
 /// Find Flux owner from labels

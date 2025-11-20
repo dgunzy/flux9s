@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -152,78 +152,59 @@ fn render_navigation_footer(f: &mut Frame, area: Rect, theme: &Theme) -> usize {
         ("Esc", "Back/Quit", theme.footer_key),
     ];
 
-    // Calculate available width (accounting for borders)
-    let available_width = area.width.saturating_sub(2);
-    let wrap_threshold = available_width as usize;
+    // Build a single line with all segments and separators
+    // Let ratatui's Paragraph widget handle the wrapping
+    let mut spans = Vec::new();
 
-    // Build segments as text first to calculate lengths
-    let mut segment_texts: Vec<String> = Vec::new();
-    for (key, label, _) in &nav_segments {
-        if *key == "j/k " {
-            segment_texts.push(format!("{}{}", key, label));
-        } else {
-            segment_texts.push(format!("{} {}", key, label));
-        }
-    }
-
-    // Build lines - always try to fit on one line first, wrap if needed
-    let mut footer_lines = Vec::new();
-    let mut current_line_spans = Vec::new();
-    let mut current_length = 0;
-
-    for (idx, ((key, label, color), segment_text)) in
-        nav_segments.iter().zip(segment_texts.iter()).enumerate()
-    {
-        let segment_len = segment_text.len();
-        let separator_len = if idx > 0 { 3 } else { 0 }; // " | " separator
-
-        // Check if adding this segment would exceed width (and we haven't wrapped yet)
-        if idx > 0
-            && footer_lines.is_empty()
-            && current_length + segment_len + separator_len > wrap_threshold
-        {
-            // Finish first line - remove trailing separator
-            if !current_line_spans.is_empty() {
-                current_line_spans.pop(); // Remove the last " | " separator
-            }
-            footer_lines.push(Line::from(current_line_spans));
-            current_line_spans = Vec::new();
-            current_length = 0;
-        }
-
+    for (idx, (key, label, color)) in nav_segments.iter().enumerate() {
         // Add separator before segment (except first)
         if idx > 0 {
-            current_line_spans.push(Span::raw(" | "));
-            current_length += separator_len;
+            spans.push(Span::raw(" | "));
         }
 
         // Add segment spans
         if *key == "j/k " {
-            current_line_spans.push(Span::raw(key.to_string()));
-            current_line_spans.push(Span::styled(label.to_string(), Style::default().fg(*color)));
+            spans.push(Span::raw(key.to_string()));
+            spans.push(Span::styled(label.to_string(), Style::default().fg(*color)));
         } else {
-            current_line_spans.push(Span::styled(key.to_string(), Style::default().fg(*color)));
-            current_line_spans.push(Span::raw(format!(" {}", label)));
+            spans.push(Span::styled(key.to_string(), Style::default().fg(*color)));
+            spans.push(Span::raw(format!(" {}", label)));
         }
-        current_length += segment_len;
     }
 
-    // Add the last line
-    if !current_line_spans.is_empty() {
-        footer_lines.push(Line::from(current_line_spans));
-    }
+    let line = Line::from(spans);
 
-    // Ensure we have at least one line
-    if footer_lines.is_empty() {
-        footer_lines.push(Line::from(vec![Span::raw("")]));
-    }
+    // Use ratatui's built-in wrapping with trim to handle line breaks properly
+    let footer = Paragraph::new(line)
+        .block(Block::default().borders(Borders::ALL))
+        .wrap(Wrap { trim: true });
 
-    // Render footer with multiple lines
-    let footer = Paragraph::new(footer_lines.clone()).block(Block::default().borders(Borders::ALL));
     f.render_widget(footer, area);
 
-    // Return number of lines used (for dynamic height calculation)
-    footer_lines.len()
+    // Calculate number of lines that will be used after wrapping
+    // This is an estimate for the dynamic height calculation
+    let available_width = area.width.saturating_sub(2);
+
+    // Calculate total content length
+    let mut total_length = 0;
+    for (idx, (key, label, _)) in nav_segments.iter().enumerate() {
+        let separator_len = if idx > 0 { 3 } else { 0 }; // " | "
+        let segment_len = if *key == "j/k " {
+            key.len() + label.len()
+        } else {
+            key.len() + 1 + label.len() // key + space + label
+        };
+        total_length += separator_len + segment_len;
+    }
+
+    // Estimate number of lines needed
+    let lines_needed = if available_width > 0 {
+        ((total_length as f32) / (available_width as f32)).ceil() as usize
+    } else {
+        1
+    };
+
+    lines_needed.max(1)
 }
 
 fn render_confirmation_footer_text<'a>(
