@@ -64,6 +64,11 @@ fn test_all_resource_types_have_commands() {
         "Receiver",
         "Bucket",
         "ExternalArtifact",
+        // Flux Operator resources
+        "ResourceSet",
+        "ResourceSetInputProvider",
+        "FluxReport",
+        "FluxInstance",
     ];
 
     for resource_type in expected_types {

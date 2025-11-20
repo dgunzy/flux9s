@@ -6,7 +6,12 @@
 #![allow(clippy::all)]
 #![allow(unknown_lints)]
 #![allow(doc_markdown)]
+#![allow(clippy::doc_overindented_list_items)]
 
+pub mod flux_operator_fluxinstances;
+pub mod flux_operator_fluxreports;
+pub mod flux_operator_resourcesetinputproviders;
+pub mod flux_operator_resourcesets;
 pub mod helm_controller;
 pub mod image_automation_controller;
 pub mod image_reflector_controller;

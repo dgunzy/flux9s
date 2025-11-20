@@ -5,9 +5,9 @@ use kube::Api;
 use crate::models::FluxResourceKind;
 use crate::watcher::WatchableResource;
 use crate::watcher::{
-    Alert, Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRelease, HelmRepository,
-    ImagePolicy, ImageRepository, ImageUpdateAutomation, Kustomization, OCIRepository, Provider,
-    Receiver,
+    Alert, Bucket, ExternalArtifact, FluxInstance, FluxReport, GitRepository, HelmChart,
+    HelmRelease, HelmRepository, ImagePolicy, ImageRepository, ImageUpdateAutomation,
+    Kustomization, OCIRepository, Provider, Receiver, ResourceSet, ResourceSetInputProvider,
 };
 
 /// Get GroupVersionKind for a resource type
@@ -78,6 +78,26 @@ pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String,
             Receiver::api_group(),
             Receiver::api_version(),
             Receiver::plural(),
+        ),
+        Some(FluxResourceKind::ResourceSet) => (
+            ResourceSet::api_group(),
+            ResourceSet::api_version(),
+            ResourceSet::plural(),
+        ),
+        Some(FluxResourceKind::ResourceSetInputProvider) => (
+            ResourceSetInputProvider::api_group(),
+            ResourceSetInputProvider::api_version(),
+            ResourceSetInputProvider::plural(),
+        ),
+        Some(FluxResourceKind::FluxReport) => (
+            FluxReport::api_group(),
+            FluxReport::api_version(),
+            FluxReport::plural(),
+        ),
+        Some(FluxResourceKind::FluxInstance) => (
+            FluxInstance::api_group(),
+            FluxInstance::api_version(),
+            FluxInstance::plural(),
         ),
         None => {
             // Handle standard Kubernetes resources

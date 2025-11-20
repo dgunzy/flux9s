@@ -455,6 +455,12 @@ impl ResourceWatcher {
         self.watch::<resource::Provider>()?;
         self.watch::<resource::Receiver>()?;
 
+        // Flux Operator resources
+        self.watch::<resource::ResourceSet>()?;
+        self.watch::<resource::ResourceSetInputProvider>()?;
+        self.watch::<resource::FluxReport>()?;
+        self.watch::<resource::FluxInstance>()?;
+
         tracing::debug!("All watchers started ({} total)", self.handles.len());
         Ok(())
     }
