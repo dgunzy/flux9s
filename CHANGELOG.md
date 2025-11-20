@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2025-11-20
+
+### Version 0.4.2
+
+#### Fixed
+- Resolved an issue with the wrap bug
+
+#### Changed
+- Refined the CI workflow configuration
+
 ## [0.4.1] - 2025-11-20
 
 ### Version 0.4.1
