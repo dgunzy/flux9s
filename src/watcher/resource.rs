@@ -68,6 +68,11 @@ pub use notification_controller::{Alert, Provider, Receiver};
 pub use source_controller::{
     Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRepository, OCIRepository,
 };
+// Flux Operator resources
+pub use flux_operator_fluxinstances::FluxInstance;
+pub use flux_operator_fluxreports::FluxReport;
+pub use flux_operator_resourcesetinputproviders::ResourceSetInputProvider;
+pub use flux_operator_resourcesets::ResourceSet;
 
 // Implement WatchableResource for each Flux resource type
 
@@ -201,4 +206,34 @@ impl_watchable!(
     "v1beta3",
     "receivers",
     "Receiver"
+);
+
+// Flux Operator resources
+impl_watchable!(
+    ResourceSet,
+    "fluxcd.controlplane.io",
+    "v1",
+    "resourcesets",
+    "ResourceSet"
+);
+impl_watchable!(
+    ResourceSetInputProvider,
+    "fluxcd.controlplane.io",
+    "v1",
+    "resourcesetinputproviders",
+    "ResourceSetInputProvider"
+);
+impl_watchable!(
+    FluxReport,
+    "fluxcd.controlplane.io",
+    "v1",
+    "fluxreports",
+    "FluxReport"
+);
+impl_watchable!(
+    FluxInstance,
+    "fluxcd.controlplane.io",
+    "v1",
+    "fluxinstances",
+    "FluxInstance"
 );

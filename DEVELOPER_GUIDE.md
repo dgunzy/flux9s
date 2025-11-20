@@ -7,7 +7,10 @@ This guide provides comprehensive information for developers working on flux9s, 
 - [Project Overview](#project-overview)
 - [Architecture](#architecture)
 - [Project Structure](#project-structure)
+- [Supported Flux Resources](#supported-flux-resources)
+- [CRD Generation Workflow](#crd-generation-workflow)
 - [Development Workflow](#development-workflow)
+- [Adding New Resource Types](#adding-new-resource-types)
 - [Testing](#testing)
 - [Publishing](#publishing)
 - [Design Decisions](#design-decisions)
@@ -20,10 +23,13 @@ flux9s is a K9s-inspired terminal UI for monitoring Flux GitOps resources in rea
 ### Key Features
 
 - **Real-time monitoring** via Kubernetes Watch API
-- **Zero-maintenance model updates** from Flux CRDs
+- **Zero-maintenance model updates** from Flux CRDs using automated scripts
 - **Familiar K9s-style navigation** and keybindings
 - **Extensible architecture** for easy addition of new resource types
 - **Comprehensive test suite** for CRD compatibility
+- **Trace operation** for viewing resource ownership chains
+- **Configuration system** with YAML-based config files
+- **Theme support** with customizable skins
 
 ### Technology Stack
 
@@ -32,6 +38,8 @@ flux9s is a K9s-inspired terminal UI for monitoring Flux GitOps resources in rea
 - **kopium** - CRD to Rust model generator
 - **ratatui** - Terminal UI framework
 - **tokio** - Async runtime
+- **serde** - Serialization framework
+- **anyhow** - Error handling
 
 ## Architecture
 
@@ -53,8 +61,16 @@ flux9s is a K9s-inspired terminal UI for monitoring Flux GitOps resources in rea
 │  │   Views      │    │  Resource    │    │   Models     │  │
 │  │  (header,    │    │   State      │    │  (generated) │  │
 │  │   footer,    │    │  (thread-    │    │              │  │
-│  │   list, etc) │    │   safe)      │    │              │  │
+│  │   list,      │    │   safe)      │    │              │  │
+│  │   detail,    │    │              │    │              │  │
+│  │   trace,     │    │              │    │              │  │
+│  │   yaml)      │    │              │    │              │  │
 │  └──────────────┘    └──────────────┘    └──────────────┘  │
+│                                                              │
+│  ┌──────────────┐    ┌──────────────┐                      │
+│  │   Config     │    │   Trace      │                      │
+│  │   System     │    │   Engine     │                      │
+│  └──────────────┘    └──────────────┘                      │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
                             │
@@ -71,84 +87,347 @@ flux9s is a K9s-inspired terminal UI for monitoring Flux GitOps resources in rea
 
 Responsible for watching Flux resources via Kubernetes Watch API.
 
-- **`mod.rs`** - Main watcher orchestration, watch event handling
+- **`mod.rs`** - Main watcher orchestration, watch event handling, namespace management
 - **`resource.rs`** - Resource type definitions and `WatchableResource` trait implementations
-- **`state.rs`** - Thread-safe resource state management
-- **`registry.rs`** - Resource registry for command mapping
+- **`state.rs`** - Thread-safe resource state management with concurrent access
+- **`registry.rs`** - Resource registry for command mapping and aliases
 
 **Key Design Decisions:**
+
 - Uses `Api::namespaced` for efficiency when namespace is specified
 - Falls back to `Api::all` for cluster-wide watching
-- Handles CRD absence gracefully (404 errors)
+- Handles CRD absence gracefully (404 errors stop watcher for that resource type)
 - Implements error throttling to prevent API spam
+- Supports version-agnostic watching for resources with multiple API versions (e.g., OCIRepository)
 
 #### 2. TUI Module (`src/tui/`)
 
 Terminal user interface built with ratatui.
 
 - **`app.rs`** - Main application state and event loop
-- **`operations.rs`** - Flux operations (suspend, resume, delete, reconcile)
-- **`theme.rs`** - Theme configuration (prepared for future customization)
-- **`views/`** - View components (header, footer, resource list, detail, YAML, etc.)
+- **`operations.rs`** - Flux operations (suspend, resume, delete, reconcile, reconcile with source)
+- **`theme.rs`** - Theme configuration and loading
+- **`trace.rs`** - Trace operation orchestration
+- **`api.rs`** - API resource fetching with version fallback
+- **`views/`** - View components:
+  - `header.rs` - Top bar with namespace and status
+  - `footer.rs` - Bottom bar with keybindings and command autocomplete
+  - `resource_list.rs` - Main resource list view
+  - `detail.rs` - Resource detail view
+  - `yaml.rs` - YAML manifest viewer
+  - `trace.rs` - Trace view showing resource ownership chains
+  - `confirmation.rs` - Confirmation dialogs
+  - `help.rs` - Help screen
+  - `splash.rs` - Splash screen
+  - `resource_fields.rs` - Resource-specific field extraction
 
 **Key Design Decisions:**
+
 - Non-blocking async operations using `tokio::spawn`
 - Separate scroll offsets for different views
 - Dynamic footer wrapping for smaller screens
 - Extensible operation system via trait-based design
+- Command mode with autocomplete support
 
 #### 3. Models Module (`src/models/`)
 
 Generated Rust types from Flux CRDs.
 
-- **`_generated/`** - Auto-generated models from kopium
+- **`_generated/`** - Auto-generated models from kopium (version controlled)
+  - `source_controller.rs` - GitRepository, OCIRepository, HelmRepository, Bucket, HelmChart, ExternalArtifact
+  - `kustomize_controller.rs` - Kustomization
+  - `helm_controller.rs` - HelmRelease
+  - `image_reflector_controller.rs` - ImageRepository, ImagePolicy
+  - `image_automation_controller.rs` - ImageUpdateAutomation
+  - `notification_controller.rs` - Alert, Provider, Receiver
+  - `source_watcher.rs` - SourceWatcher resources
+  - `flux_operator_*.rs` - Flux Operator resources (ResourceSet, ResourceSetInputProvider, FluxReport, FluxInstance)
+- **`flux_resource_kind.rs`** - Centralized enum for all Flux resource kinds
 - **`extensions.rs`** - Manual extensions and helper traits
 
 **Key Design Decisions:**
+
 - Generated models are version controlled for reproducible builds
-- Models can be regenerated when CRDs update
+- Models can be regenerated when CRDs update using automated scripts
 - Extensions provide common functionality across resource types
+- Centralized resource kind enum eliminates hardcoded strings
+
+#### 4. Config Module (`src/config/`)
+
+Configuration management system.
+
+- **`schema.rs`** - Configuration schema definition
+- **`loader.rs`** - Configuration loading from files and environment
+- **`defaults.rs`** - Default configuration values
+- **`paths.rs`** - Configuration file path resolution
+- **`theme_loader.rs`** - Theme file loading and parsing
+
+**Key Design Decisions:**
+
+- YAML-based configuration files
+- Environment variable overrides
+- System-specific configuration directories
+- Theme support with external YAML files
+
+#### 5. Trace Module (`src/trace/`)
+
+Resource ownership chain tracing.
+
+- **`core.rs`** - Trace engine implementation
+- **`models.rs`** - Trace data structures
+
+**Key Design Decisions:**
+
+- Recursive resource relationship discovery
+- Support for Kustomization → HelmRelease → Deployment chains
+- Visual representation of ownership hierarchy
+
+#### 6. CLI Module (`src/cli/`)
+
+Command-line interface handling.
+
+- **`commands.rs`** - CLI command parsing and execution
+- **`logging.rs`** - Logging configuration
 
 ## Project Structure
 
 ```
 flux9s/
 ├── .github/
-│   └── workflows/          # CI/CD workflows
-│       ├── ci.yml          # PR and push testing
-│       ├── release.yml     # Release automation
+│   └── workflows/              # CI/CD workflows
+│       ├── ci.yml              # PR and push testing
+│       ├── release.yml          # Release automation
+│       ├── prepare-release.yml # Release preparation
+│       ├── auto-tag-release.yml # Automatic version tagging
 │       └── check-crd-updates.yml  # Weekly CRD update checks
-├── crds/                    # Flux CRD files (version controlled)
+├── crds/                       # Flux CRD files (version controlled)
 │   ├── source-controller.crds.yaml
 │   ├── kustomize-controller.crds.yaml
-│   └── ...
+│   ├── helm-controller.crds.yaml
+│   ├── notification-controller.crds.yaml
+│   ├── image-reflector-controller.crds.yaml
+│   ├── image-automation-controller.crds.yaml
+│   ├── source-watcher.crds.yaml
+│   └── flux-operator-*.crds.yaml  # Flux Operator CRDs
+├── scripts/                    # Automation scripts
+│   ├── fetch-crds.sh          # Download CRDs from GitHub releases
+│   ├── generate-models.sh     # Generate Rust models using kopium
+│   └── update-flux.sh         # Orchestrate CRD fetch and model generation
 ├── src/
-│   ├── kube/               # Kubernetes client setup
-│   ├── models/             # Generated and extended models
-│   │   ├── _generated/     # Auto-generated (version controlled)
-│   │   └── extensions.rs   # Manual extensions
-│   ├── tui/                # Terminal UI
-│   │   ├── app.rs          # Main app state
-│   │   ├── operations.rs   # Flux operations
-│   │   ├── theme.rs        # Theme configuration
-│   │   └── views/          # View components
-│   ├── watcher/            # Resource watching
-│   │   ├── mod.rs          # Watcher orchestration
-│   │   ├── resource.rs     # Resource definitions
-│   │   ├── state.rs        # State management
-│   │   └── registry.rs     # Resource registry
-│   ├── lib.rs              # Library entry point
-│   └── main.rs             # Binary entry point
-├── tests/                   # Test suite
-│   ├── crd_compatibility.rs    # CRD compatibility tests
-│   ├── resource_registry.rs    # Registry tests
-│   ├── model_compatibility.rs  # Model tests
-│   └── field_extraction.rs     # Field extraction tests
-├── Cargo.toml              # Rust project configuration
-├── LICENSE                 # Apache 2.0 License
-├── README.md              # User-facing documentation
-└── DEVELOPER_GUIDE.md     # This file
+│   ├── cli/                   # CLI command handling
+│   │   ├── commands.rs
+│   │   ├── logging.rs
+│   │   └── mod.rs
+│   ├── config/                # Configuration system
+│   │   ├── defaults.rs
+│   │   ├── loader.rs
+│   │   ├── paths.rs
+│   │   ├── schema.rs
+│   │   ├── theme_loader.rs
+│   │   └── mod.rs
+│   ├── kube/                  # Kubernetes client setup
+│   │   └── mod.rs
+│   ├── models/                # Generated and extended models
+│   │   ├── _generated/        # Auto-generated (version controlled)
+│   │   │   ├── mod.rs
+│   │   │   ├── source_controller.rs
+│   │   │   ├── kustomize_controller.rs
+│   │   │   ├── helm_controller.rs
+│   │   │   ├── image_reflector_controller.rs
+│   │   │   ├── image_automation_controller.rs
+│   │   │   ├── notification_controller.rs
+│   │   │   ├── source_watcher.rs
+│   │   │   └── flux_operator_*.rs
+│   │   ├── extensions.rs      # Manual extensions
+│   │   ├── flux_resource_kind.rs
+│   │   └── mod.rs
+│   ├── trace/                 # Trace operation
+│   │   ├── core.rs
+│   │   ├── models.rs
+│   │   └── mod.rs
+│   ├── tui/                   # Terminal UI
+│   │   ├── app.rs             # Main app state
+│   │   ├── operations.rs       # Flux operations
+│   │   ├── theme.rs           # Theme configuration
+│   │   ├── trace.rs           # Trace UI integration
+│   │   ├── api.rs             # API resource fetching
+│   │   ├── mod.rs
+│   │   └── views/             # View components
+│   │       ├── mod.rs
+│   │       ├── header.rs
+│   │       ├── footer.rs
+│   │       ├── resource_list.rs
+│   │       ├── detail.rs
+│   │       ├── yaml.rs
+│   │       ├── trace.rs
+│   │       ├── confirmation.rs
+│   │       ├── help.rs
+│   │       ├── splash.rs
+│   │       └── resource_fields.rs
+│   ├── watcher/               # Resource watching
+│   │   ├── mod.rs             # Watcher orchestration
+│   │   ├── resource.rs        # Resource definitions
+│   │   ├── state.rs           # State management
+│   │   └── registry.rs        # Resource registry
+│   ├── lib.rs                 # Library entry point
+│   └── main.rs                # Binary entry point
+├── tests/                      # Test suite
+│   ├── crd_compatibility.rs   # CRD compatibility tests
+│   ├── resource_registry.rs   # Registry tests
+│   ├── model_compatibility.rs # Model tests
+│   ├── field_extraction.rs    # Field extraction tests
+│   ├── trace_tests.rs         # Trace operation tests
+│   ├── unit/                  # Unit test helpers
+│   └── README.md
+├── examples/                   # Example files
+│   └── themes/                # Example theme files
+│       ├── dracula.yaml
+│       └── solarized-dark.yaml
+├── docs/                       # Documentation
+│   ├── CONFIGURATION_DESIGN.md
+│   ├── CONFIGURATION_IMPLEMENTATION.md
+│   ├── THEME_SYSTEM.md
+│   ├── TRACE_AND_RECONCILE_IMPROVEMENTS.md
+│   ├── VERSION_COMPATIBILITY.md
+│   ├── flux-crds.yaml         # Example CRD resources
+│   └── images/                # Screenshots
+├── Cargo.toml                 # Rust project configuration
+├── Cargo.lock                 # Dependency lock file
+├── Makefile                   # Build automation
+├── manifest.json              # CRD version manifest
+├── LICENSE                    # Apache 2.0 License
+├── CHANGELOG.md               # Change log
+├── README.md                  # User-facing documentation
+└── DEVELOPER_GUIDE.md         # This file
 ```
+
+## Supported Flux Resources
+
+flux9s supports all Flux CD resources from the official Flux controllers and Flux Operator. The definitive list of Flux CRDs and their API versions can be found in the [Flux Operator common types](https://github.com/controlplaneio-fluxcd/flux-operator/blob/main/api/v1/common_types.go#L83-L110).
+
+### Currently Supported Resources
+
+#### Source Controller (`source.toolkit.fluxcd.io`)
+
+- **GitRepository** (v1) - Git repository sources
+- **OCIRepository** (v1, v1beta2) - OCI artifact sources
+- **HelmRepository** (v1) - Helm chart repositories
+- **Bucket** (v1) - S3-compatible bucket sources
+- **HelmChart** (v1) - Helm chart artifacts
+- **ExternalArtifact** (v1) - External artifact sources
+
+#### Kustomize Controller (`kustomize.toolkit.fluxcd.io`)
+
+- **Kustomization** (v1) - Kustomize-based deployments
+
+#### Helm Controller (`helm.toolkit.fluxcd.io`)
+
+- **HelmRelease** (v2beta2) - Helm release management
+
+#### Image Reflector Controller (`image.toolkit.fluxcd.io`)
+
+- **ImageRepository** (v1) - Container image repositories
+- **ImagePolicy** (v1) - Image version policies
+
+#### Image Automation Controller (`image.toolkit.fluxcd.io`)
+
+- **ImageUpdateAutomation** (v1) - Automated image updates
+
+#### Notification Controller (`notification.toolkit.fluxcd.io`)
+
+- **Alert** (v1beta3) - Alert configurations
+- **Provider** (v1beta3) - Notification providers
+- **Receiver** (v1) - Webhook receivers
+
+#### Source Watcher (`source.toolkit.fluxcd.io`)
+
+- SourceWatcher resources
+
+#### Flux Operator (`fluxcd.controlplane.io`)
+
+- **ResourceSet** (v1) - Declarative resource sets
+- **ResourceSetInputProvider** (v1) - Input providers for ResourceSets
+- **FluxReport** (v1) - Flux installation reports
+- **FluxInstance** (v1) - Flux installation instances
+
+## CRD Generation Workflow
+
+flux9s uses an automated workflow to fetch CRDs and generate Rust models. This ensures models stay up-to-date with Flux releases.
+
+### Automated Scripts
+
+The project includes three main scripts in the `scripts/` directory:
+
+1. **`fetch-crds.sh`** - Downloads CRDs from GitHub releases
+
+   - Fetches Flux controller CRDs from official releases
+   - Fetches Flux Operator CRDs from the main branch
+   - Pins versions for reproducible builds
+   - Creates `manifest.json` with version information
+
+2. **`generate-models.sh`** - Generates Rust models using kopium
+
+   - Processes all CRD files in `crds/` directory
+   - Splits multi-document YAML files
+   - Generates Rust structs with proper derives
+   - Handles duplicate prelude modules
+   - Creates `mod.rs` for generated modules
+
+3. **`update-flux.sh`** - Orchestrates the full update process
+   - Runs `fetch-crds.sh` to download CRDs
+   - Runs `generate-models.sh` to generate models
+   - Verifies the build compiles successfully
+
+### Workflow Steps
+
+To update CRDs and regenerate models:
+
+```bash
+# Run the update script (recommended)
+./scripts/update-flux.sh
+
+# Or run steps individually:
+./scripts/fetch-crds.sh      # Download CRDs
+./scripts/generate-models.sh # Generate models
+cargo check                  # Verify build
+```
+
+### Version Management
+
+CRD versions are pinned in `scripts/fetch-crds.sh`:
+
+```bash
+CONTROLLERS="source-controller:v1.7.3
+kustomize-controller:v1.7.2
+helm-controller:v1.4.3
+notification-controller:v1.7.4
+image-reflector-controller:v1.0.3
+image-automation-controller:v1.0.3
+source-watcher:v2.0.2"
+```
+
+Flux Operator CRDs are fetched from the main branch (latest).
+
+### Generated Code Location
+
+Generated models are stored in `src/models/_generated/` and are **version controlled**. This ensures:
+
+- Reproducible builds without requiring kopium
+- Easier CI/CD (no need to install kopium in CI)
+- Users can build immediately without additional tools
+
+### Clippy Configuration
+
+Generated code has clippy warnings suppressed in `src/models/_generated/mod.rs`:
+
+```rust
+#![allow(clippy::all)]
+#![allow(unknown_lints)]
+#![allow(doc_markdown)]
+#![allow(clippy::doc_overindented_list_items)]
+```
+
+This ensures only our code is checked by clippy, not generated code.
 
 ## Development Workflow
 
@@ -176,48 +455,57 @@ cargo run
 
 # Run release build
 cargo run --release
+
+# Run with specific namespace
+cargo run -- --namespace flux-system
 ```
 
 ### Updating CRDs and Models
 
 When Flux CRDs are updated:
 
-1. **Download new CRDs** (or use the automated workflow):
+1. **Update versions** in `scripts/fetch-crds.sh` if needed
+2. **Run update script**:
    ```bash
-   # Example: Download source-controller CRDs
-   curl -L "https://github.com/fluxcd/source-controller/releases/download/v1.7.3/source-controller.crds.yaml" \
-     -o crds/source-controller.crds.yaml
+   ./scripts/update-flux.sh
    ```
-
-2. **Regenerate models**:
-   ```bash
-   # Install kopium if needed
-   cargo install kopium
-   
-   # Generate models (adjust paths as needed)
-   kopium --file crds/source-controller.crds.yaml --output src/models/_generated/
-   ```
-
-3. **Run tests** to ensure compatibility:
+3. **Review changes** in `src/models/_generated/`
+4. **Run tests** to ensure compatibility:
    ```bash
    cargo test --test crd_compatibility
+   cargo test --test model_compatibility
    ```
-
-4. **Commit changes**:
+5. **Commit changes**:
    ```bash
-   git add crds/ src/models/_generated/
+   git add crds/ src/models/_generated/ scripts/fetch-crds.sh manifest.json
    git commit -m "chore: update Flux CRDs to latest versions"
    ```
 
-### Adding a New Resource Type
+## Adding New Resource Types
 
-1. **Ensure CRD is included** in model generation
-2. **Re-export the type** in `src/watcher/resource.rs`:
+When adding support for a new Flux resource type:
+
+1. **Ensure CRD is fetched** - Add to `scripts/fetch-crds.sh` if needed
+2. **Regenerate models** - Run `./scripts/update-flux.sh`
+3. **Add to FluxResourceKind enum** (`src/models/flux_resource_kind.rs`):
+
+   ```rust
+   pub enum FluxResourceKind {
+       // ... existing variants
+       YourNewResource,
+   }
+   ```
+
+   Update `as_str()`, `from_str()`, and `from_str_case_insensitive()` methods.
+
+4. **Re-export the type** in `src/watcher/resource.rs`:
+
    ```rust
    pub use source_controller::YourNewResource;
    ```
 
-3. **Add `impl_watchable!` macro**:
+5. **Add `impl_watchable!` macro**:
+
    ```rust
    impl_watchable!(
        YourNewResource,
@@ -228,7 +516,8 @@ When Flux CRDs are updated:
    );
    ```
 
-4. **Add to registry** in `src/watcher/registry.rs`:
+6. **Add to registry** in `src/watcher/registry.rs`:
+
    ```rust
    ResourceEntry {
        display_name: "YourNewResource",
@@ -236,10 +525,35 @@ When Flux CRDs are updated:
    },
    ```
 
-5. **Add watch call** in `src/watcher/mod.rs` `watch_all()`:
+7. **Add watch call** in `src/watcher/mod.rs` `watch_all()`:
+
    ```rust
    self.watch::<resource::YourNewResource>()?;
    ```
+
+8. **Add fetch_resource! case** in `src/tui/mod.rs` `fetch_resource_yaml()`:
+
+   ```rust
+   Some(FluxResourceKind::YourNewResource) => fetch_resource!(YourNewResource),
+   ```
+
+9. **Add get_gvk case** in `src/tui/api.rs` `get_gvk_for_resource_type()`:
+
+   ```rust
+   Some(FluxResourceKind::YourNewResource) => (
+       YourNewResource::api_group(),
+       YourNewResource::api_version(),
+       YourNewResource::plural(),
+   ),
+   ```
+
+10. **Update tests** in `tests/resource_registry.rs`:
+    ```rust
+    let expected_types = vec![
+        // ... existing types
+        "YourNewResource",
+    ];
+    ```
 
 ## Testing
 
@@ -249,14 +563,18 @@ When Flux CRDs are updated:
 # Run all tests
 cargo test
 
+# Run unit tests only
+cargo test --lib --tests
+
 # Run specific test suite
 cargo test --test crd_compatibility
 cargo test --test resource_registry
 cargo test --test model_compatibility
 cargo test --test field_extraction
+cargo test --test trace_tests
 
-# Run unit tests only
-cargo test --lib --tests
+# Run integration tests
+cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests
 ```
 
 ### Test Organization
@@ -266,18 +584,20 @@ cargo test --lib --tests
 
 ### Test Coverage
 
-- **CRD Compatibility** - Ensures status field extraction works with various CRD structures
-- **Resource Registry** - Verifies all resource types are registered
-- **Model Compatibility** - Ensures generated models compile and API versions are correct
-- **Field Extraction** - Tests resource-specific field extraction
+- **CRD Compatibility** (`tests/crd_compatibility.rs`) - Ensures status field extraction works with various CRD structures
+- **Resource Registry** (`tests/resource_registry.rs`) - Verifies all resource types are registered and have command aliases
+- **Model Compatibility** (`tests/model_compatibility.rs`) - Ensures generated models compile and API versions are correct
+- **Field Extraction** (`tests/field_extraction.rs`) - Tests resource-specific field extraction
+- **Trace Tests** (`tests/trace_tests.rs`) - Tests trace operation functionality
 
 ### CI/CD Testing
 
-GitHub Actions automatically runs:
+GitHub Actions automatically runs (`.github/workflows/ci.yml`):
+
 - Formatting checks (`cargo fmt`)
-- Linting (`cargo clippy`)
+- Linting (`cargo clippy`) with warnings treated as errors
 - All test suites
-- Build verification on multiple platforms
+- Build verification
 
 ## Publishing
 
@@ -296,6 +616,7 @@ GitHub Actions automatically runs:
 
 - [ ] Version number updated in `Cargo.toml`
 - [ ] All tests pass: `cargo test`
+- [ ] Clippy passes: `cargo clippy -- -D warnings`
 - [ ] Documentation is up to date
 - [ ] README.md is complete
 - [ ] LICENSE file exists
@@ -304,17 +625,20 @@ GitHub Actions automatically runs:
 #### Publishing Steps
 
 1. **Update version in Cargo.toml**:
+
    ```toml
    [package]
-   version = "0.1.0"  # Increment as needed
+   version = "0.3.1"  # Increment as needed
    ```
 
 2. **Verify the package**:
+
    ```bash
    cargo package
    ```
 
 3. **Publish to crates.io**:
+
    ```bash
    cargo publish
    ```
@@ -325,24 +649,29 @@ GitHub Actions automatically runs:
 #### Version Management
 
 Follow [Semantic Versioning](https://semver.org/):
+
 - **MAJOR** - Breaking changes
 - **MINOR** - New features, backwards compatible
 - **PATCH** - Bug fixes, backwards compatible
 
 ### Automated Publishing
 
-The GitHub Actions workflow (`.github/workflows/release.yml`) automates:
-- Building binaries for Linux, macOS, Windows
-- Publishing to crates.io (requires `CRATES_IO_TOKEN` secret)
-- Creating GitHub releases with binaries
+The GitHub Actions workflows automate:
+
+- **`.github/workflows/prepare-release.yml`** - Prepares release by updating version
+- **`.github/workflows/release.yml`** - Builds binaries for Linux, macOS, Windows and publishes to crates.io
+- **`.github/workflows/auto-tag-release.yml`** - Automatically tags releases
 
 To trigger:
-1. Create and push a tag: `git tag v0.1.0 && git push origin v0.1.0`
-2. Workflow automatically builds, tests, and publishes
+
+1. Update version in `Cargo.toml`
+2. Push to main branch
+3. Workflows automatically build, test, and publish
 
 ### Weekly CRD Updates
 
 The `.github/workflows/check-crd-updates.yml` workflow:
+
 - Runs every Monday at 9 AM UTC
 - Checks for latest Flux CRD versions
 - Downloads and compares CRDs
@@ -356,6 +685,7 @@ The `.github/workflows/check-crd-updates.yml` workflow:
 **Decision**: Generated models (`_generated/*.rs`) and CRDs (`crds/*.yaml`) are version controlled.
 
 **Rationale**:
+
 - Simplified releases and builds (no kopium dependency for users)
 - Reproducible builds
 - Easier CI/CD
@@ -366,38 +696,58 @@ The `.github/workflows/check-crd-updates.yml` workflow:
 **Decision**: Use `Api::namespaced` when namespace is specified, `Api::all` otherwise.
 
 **Rationale**:
+
 - More efficient than always watching all namespaces
 - Reduces API load on large clusters
 - Allows efficient namespace switching
+- Watchers restart when namespace changes
 
 ### Error Handling
 
 **Decision**: Graceful handling of missing CRDs with throttling.
 
 **Rationale**:
+
 - Prevents API spam from 404 errors
 - Allows application to work even if some CRDs aren't installed
 - Provides better user experience
+- Stops watcher immediately on 404 (CRD doesn't exist)
 
 ### Operation System
 
 **Decision**: Trait-based extensible operation system.
 
 **Rationale**:
+
 - Easy to add new operations
 - Type-safe operation handling
 - Consistent operation interface
 - Testable operations
+- Support for confirmation dialogs
 
 ### Testing Strategy
 
 **Decision**: Comprehensive test suite focusing on CRD compatibility.
 
 **Rationale**:
+
 - Catches breaking changes when CRDs update
 - Ensures status field extraction works correctly
 - Verifies API version consistency
 - Provides confidence in updates
+- Tests resource registry completeness
+
+### Configuration System
+
+**Decision**: YAML-based configuration with environment variable overrides.
+
+**Rationale**:
+
+- Human-readable configuration
+- Easy to edit and version control
+- Environment variables for CI/CD
+- System-specific configuration directories
+- Theme support with external files
 
 ## Implementation Status
 
@@ -406,29 +756,34 @@ The `.github/workflows/check-crd-updates.yml` workflow:
 - ✅ Real-time resource monitoring via Watch API
 - ✅ K9s-inspired TUI with navigation
 - ✅ Unified and type-specific resource views
-- ✅ Resource operations (suspend, resume, delete, reconcile)
+- ✅ Resource operations (suspend, resume, delete, reconcile, reconcile with source)
 - ✅ YAML viewing
 - ✅ Namespace switching
 - ✅ Status indicators
-- ✅ Filtering and command mode
+- ✅ Filtering and command mode with autocomplete
 - ✅ Comprehensive test suite
 - ✅ CI/CD workflows
 - ✅ Automated CRD update checking
+- ✅ Trace operation for resource ownership chains
+- ✅ Configuration system with YAML files
+- ✅ Theme support with customizable skins
+- ✅ CLI commands for configuration management
+- ✅ Support for all Flux controller resources
+- ✅ Support for Flux Operator resources
+- ✅ Version-agnostic resource watching
 
 ### In Progress
 
-- 🔄 Additional resource-specific views
-- 🔄 Performance optimizations
-- 🔄 Enhanced error messages
+- 🔄 Performance optimizations for large clusters
+- 🔄 Enhanced error messages and diagnostics
 
 ### Planned Enhancements
 
-- ⏳ Trace operation for viewing reconciliation logs
 - ⏳ Custom column configuration
 - ⏳ Multiple cluster support
 - ⏳ Plugin/extensions system
-- ⏳ Theme customization
 - ⏳ Resource age and last reconciled columns
+- ⏳ Advanced filtering options
 
 ## Contributing
 
@@ -438,15 +793,18 @@ Contributions are welcome! Please:
 2. Create a feature branch
 3. Make your changes
 4. Add tests for new functionality
-5. Ensure all tests pass
-6. Submit a pull request
+5. Ensure all tests pass (`cargo test`)
+6. Run clippy (`cargo clippy -- -D warnings`)
+7. Format code (`cargo fmt`)
+8. Submit a pull request
 
 ### Code Style
 
 - Follow Rust standard formatting (`cargo fmt`)
-- Run clippy before submitting (`cargo clippy`)
+- Run clippy before submitting (`cargo clippy -- -D warnings`)
 - Write tests for new features
 - Update documentation as needed
+- Add examples to `docs/flux-crds.yaml` for new resource types
 
 ## Resources
 
@@ -454,4 +812,6 @@ Contributions are welcome! Please:
 - [kube-rs](https://github.com/kube-rs/kube) - Kubernetes client library
 - [kopium](https://github.com/kube-rs/kopium) - CRD to Rust model generator
 - [ratatui](https://github.com/ratatui-org/ratatui) - Terminal UI framework
-
+- [Flux CD](https://github.com/fluxcd/flux2) - GitOps toolkit
+- [Flux Operator](https://github.com/controlplaneio-fluxcd/flux-operator) - Flux installation operator
+- [Flux CRD Reference](https://github.com/controlplaneio-fluxcd/flux-operator/blob/main/api/v1/common_types.go#L83-L110) - Definitive list of Flux CRDs and API versions

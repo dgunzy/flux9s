@@ -86,6 +86,27 @@ pub const RESOURCE_REGISTRY: &[ResourceEntry] = &[
         display_name: "Receiver",
         command_aliases: &["receiver", "receivers"],
     },
+    // Flux Operator resources
+    ResourceEntry {
+        display_name: "ResourceSet",
+        command_aliases: &["resourceset", "resourcesets", "rset"],
+    },
+    ResourceEntry {
+        display_name: "ResourceSetInputProvider",
+        command_aliases: &[
+            "resourcesetinputprovider",
+            "resourcesetinputproviders",
+            "rsip",
+        ],
+    },
+    ResourceEntry {
+        display_name: "FluxReport",
+        command_aliases: &["fluxreport", "fluxreports", "fr"],
+    },
+    ResourceEntry {
+        display_name: "FluxInstance",
+        command_aliases: &["fluxinstance", "fluxinstances", "fi"],
+    },
 ];
 
 /// Get display name for a command alias

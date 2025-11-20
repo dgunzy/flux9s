@@ -37,9 +37,9 @@ async fn fetch_resource_yaml(
     // Import resource types - use the public re-exports from watcher module
     use crate::models::FluxResourceKind;
     use crate::watcher::{
-        Alert, Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRelease, HelmRepository,
-        ImagePolicy, ImageRepository, ImageUpdateAutomation, Kustomization, OCIRepository,
-        Provider, Receiver,
+        Alert, Bucket, ExternalArtifact, FluxInstance, FluxReport, GitRepository, HelmChart,
+        HelmRelease, HelmRepository, ImagePolicy, ImageRepository, ImageUpdateAutomation,
+        Kustomization, OCIRepository, Provider, Receiver, ResourceSet, ResourceSetInputProvider,
     };
 
     // Match resource type and fetch using appropriate API
@@ -72,6 +72,12 @@ async fn fetch_resource_yaml(
         Some(FluxResourceKind::Alert) => fetch_resource!(Alert),
         Some(FluxResourceKind::Provider) => fetch_resource!(Provider),
         Some(FluxResourceKind::Receiver) => fetch_resource!(Receiver),
+        Some(FluxResourceKind::ResourceSet) => fetch_resource!(ResourceSet),
+        Some(FluxResourceKind::ResourceSetInputProvider) => {
+            fetch_resource!(ResourceSetInputProvider)
+        }
+        Some(FluxResourceKind::FluxReport) => fetch_resource!(FluxReport),
+        Some(FluxResourceKind::FluxInstance) => fetch_resource!(FluxInstance),
         None => Err(anyhow::anyhow!("Unknown resource type: {}", resource_type)),
     }
 }

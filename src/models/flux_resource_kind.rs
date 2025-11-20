@@ -29,6 +29,11 @@ pub enum FluxResourceKind {
     Alert,
     Provider,
     Receiver,
+    // Flux Operator resources
+    ResourceSet,
+    ResourceSetInputProvider,
+    FluxReport,
+    FluxInstance,
 }
 
 impl FluxResourceKind {
@@ -49,6 +54,10 @@ impl FluxResourceKind {
             FluxResourceKind::Alert => "Alert",
             FluxResourceKind::Provider => "Provider",
             FluxResourceKind::Receiver => "Receiver",
+            FluxResourceKind::ResourceSet => "ResourceSet",
+            FluxResourceKind::ResourceSetInputProvider => "ResourceSetInputProvider",
+            FluxResourceKind::FluxReport => "FluxReport",
+            FluxResourceKind::FluxInstance => "FluxInstance",
         }
     }
 
@@ -69,6 +78,10 @@ impl FluxResourceKind {
             "Alert" => Some(FluxResourceKind::Alert),
             "Provider" => Some(FluxResourceKind::Provider),
             "Receiver" => Some(FluxResourceKind::Receiver),
+            "ResourceSet" => Some(FluxResourceKind::ResourceSet),
+            "ResourceSetInputProvider" => Some(FluxResourceKind::ResourceSetInputProvider),
+            "FluxReport" => Some(FluxResourceKind::FluxReport),
+            "FluxInstance" => Some(FluxResourceKind::FluxInstance),
             _ => None,
         }
     }
@@ -98,6 +111,12 @@ impl FluxResourceKind {
             "alert" | "alerts" => Some(FluxResourceKind::Alert),
             "provider" | "providers" => Some(FluxResourceKind::Provider),
             "receiver" | "receivers" => Some(FluxResourceKind::Receiver),
+            "resourceset" | "resourcesets" | "rset" => Some(FluxResourceKind::ResourceSet),
+            "resourcesetinputprovider" | "resourcesetinputproviders" | "rsip" => {
+                Some(FluxResourceKind::ResourceSetInputProvider)
+            }
+            "fluxreport" | "fluxreports" | "fr" => Some(FluxResourceKind::FluxReport),
+            "fluxinstance" | "fluxinstances" | "fi" => Some(FluxResourceKind::FluxInstance),
             _ => None,
         }
     }

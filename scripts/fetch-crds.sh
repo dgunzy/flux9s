@@ -50,7 +50,39 @@ done
 # Count for final message (need to do separately due to subshell)
 count=$(echo "$CONTROLLERS" | wc -l | tr -d ' ')
 echo ""
-echo "✓ Successfully downloaded ${count} CRD files to ${CRDS_DIR}"
+echo "✓ Successfully downloaded ${count} CRD files from Flux releases"
+
+# Flux Operator CRDs (from main branch, not releases)
+# Format: filename:url (one per line)
+FLUX_OPERATOR_CRDS="flux-operator-resourcesets:https://raw.githubusercontent.com/controlplaneio-fluxcd/flux-operator/main/config/crd/bases/fluxcd.controlplane.io_resourcesets.yaml
+flux-operator-resourcesetinputproviders:https://raw.githubusercontent.com/controlplaneio-fluxcd/flux-operator/main/config/crd/bases/fluxcd.controlplane.io_resourcesetinputproviders.yaml
+flux-operator-fluxreports:https://raw.githubusercontent.com/controlplaneio-fluxcd/flux-operator/main/config/crd/bases/fluxcd.controlplane.io_fluxreports.yaml
+flux-operator-fluxinstances:https://raw.githubusercontent.com/controlplaneio-fluxcd/flux-operator/main/config/crd/bases/fluxcd.controlplane.io_fluxinstances.yaml"
+
+echo ""
+echo "Fetching Flux Operator CRDs..."
+echo ""
+
+flux_operator_count=0
+echo "$FLUX_OPERATOR_CRDS" | while IFS=':' read -r filename url; do
+    output_file="${CRDS_DIR}/${filename}.crds.yaml"
+    
+    echo "  → ${filename}"
+    if curl -sSLf "$url" -o "$output_file"; then
+        flux_operator_count=$((flux_operator_count + 1))
+    else
+        echo "Error: Failed to download ${filename} CRD" >&2
+        exit 1
+    fi
+done
+
+flux_operator_count=$(echo "$FLUX_OPERATOR_CRDS" | wc -l | tr -d ' ')
+echo ""
+echo "✓ Successfully downloaded ${flux_operator_count} Flux Operator CRD files"
+
+total_count=$((count + flux_operator_count))
+echo ""
+echo "✓ Total: ${total_count} CRD files downloaded to ${CRDS_DIR}"
 
 # Create/update manifest.json with version info
 {
@@ -67,7 +99,19 @@ echo "✓ Successfully downloaded ${count} CRD files to ${CRDS_DIR}"
         printf "    \"%s\": \"%s\"" "$controller" "$version"
     done
     echo ""
-    echo "  }"
+    echo "  },"
+    echo "  \"flux_operator_crds\": ["
+    first=true
+    echo "$FLUX_OPERATOR_CRDS" | while IFS=':' read -r filename url; do
+        if [ "$first" = true ]; then
+            first=false
+        else
+            echo ","
+        fi
+        printf "    \"%s\"" "$filename"
+    done
+    echo ""
+    echo "  ]"
     echo "}"
 } > "$MANIFEST_FILE"
 

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-11-10T23:09:33Z",
+  "generated_at": "2025-11-20T16:51:35Z",
   "flux_versions": {
     "source-controller": "v1.7.3",
     "kustomize-controller": "v1.7.2",
@@ -8,5 +8,11 @@
     "image-reflector-controller": "v1.0.3",
     "image-automation-controller": "v1.0.3",
     "source-watcher": "v2.0.2"
-  }
+  },
+  "flux_operator_crds": [
+    "flux-operator-resourcesets",
+    "flux-operator-resourcesetinputproviders",
+    "flux-operator-fluxreports",
+    "flux-operator-fluxinstances"
+  ]
 }
