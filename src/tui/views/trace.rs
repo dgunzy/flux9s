@@ -70,7 +70,7 @@ pub fn render_resource_trace(
     for node in &trace_result.chain {
         use crate::models::FluxResourceKind;
         if matches!(
-            FluxResourceKind::from_str(&node.kind),
+            FluxResourceKind::parse_optional(&node.kind),
             Some(FluxResourceKind::Kustomization)
                 | Some(FluxResourceKind::HelmRelease)
                 | Some(FluxResourceKind::HelmChart)

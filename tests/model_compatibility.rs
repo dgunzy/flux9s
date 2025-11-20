@@ -18,8 +18,7 @@ fn test_generated_models_compile() {
     let _kustomization: Option<Kustomization> = None;
     let _helmrelease: Option<HelmRelease> = None;
 
-    // If we get here, the models compiled successfully
-    assert!(true);
+    // If we get here, the models compiled successfully - the test passes
 }
 
 #[test]

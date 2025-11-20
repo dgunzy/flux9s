@@ -57,7 +57,7 @@ async fn fetch_resource_yaml(
         }};
     }
 
-    match FluxResourceKind::from_str(resource_type) {
+    match FluxResourceKind::parse_optional(resource_type) {
         Some(FluxResourceKind::GitRepository) => fetch_resource!(GitRepository),
         Some(FluxResourceKind::OCIRepository) => fetch_resource!(OCIRepository),
         Some(FluxResourceKind::HelmRepository) => fetch_resource!(HelmRepository),

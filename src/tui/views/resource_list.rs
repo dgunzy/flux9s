@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
     text::Span,
-    widgets::{Block, Borders, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
     Frame,
 };
 use std::cmp;
@@ -120,13 +120,16 @@ pub fn render_resource_list(
                 };
 
                 Row::new(vec![
-                    Span::styled(status_indicator, Style::default().fg(status_color)).to_string(),
-                    r.namespace.clone(),
-                    r.name.clone(),
-                    r.resource_type.clone(),
-                    suspended_str,
-                    ready_str,
-                    message_display,
+                    Cell::from(Span::styled(
+                        status_indicator,
+                        Style::default().fg(status_color),
+                    )),
+                    Cell::from(r.namespace.clone()),
+                    Cell::from(r.name.clone()),
+                    Cell::from(r.resource_type.clone()),
+                    Cell::from(suspended_str),
+                    Cell::from(ready_str),
+                    Cell::from(message_display),
                 ])
                 .style(style)
             })
@@ -182,49 +185,54 @@ pub fn render_resource_list(
                 // Build row cells based on column names
                 let mut cells = Vec::new();
                 for col in &column_names {
-                    let cell_value: String = match *col {
-                        "STATUS" => {
-                            Span::styled(status_indicator, Style::default().fg(status_color))
-                                .to_string()
-                        }
-                        "NAMESPACE" => r.namespace.clone(),
-                        "NAME" => r.name.clone(),
-                        "TYPE" => r.resource_type.clone(),
-                        "SUSPENDED" => r
-                            .suspended
-                            .map(|s| {
-                                if s {
-                                    "True".to_string()
-                                } else {
-                                    "False".to_string()
-                                }
-                            })
-                            .unwrap_or_else(|| "?".to_string()),
-                        "READY" => r
-                            .ready
-                            .map(|r| {
-                                if r {
-                                    "True".to_string()
-                                } else {
-                                    "False".to_string()
-                                }
-                            })
-                            .unwrap_or_else(|| "?".to_string()),
-                        "REVISION" => r.revision.clone().unwrap_or("-".to_string()),
+                    let cell = match *col {
+                        "STATUS" => Cell::from(Span::styled(
+                            status_indicator,
+                            Style::default().fg(status_color),
+                        )),
+                        "NAMESPACE" => Cell::from(r.namespace.clone()),
+                        "NAME" => Cell::from(r.name.clone()),
+                        "TYPE" => Cell::from(r.resource_type.clone()),
+                        "SUSPENDED" => Cell::from(
+                            r.suspended
+                                .map(|s| {
+                                    if s {
+                                        "True".to_string()
+                                    } else {
+                                        "False".to_string()
+                                    }
+                                })
+                                .unwrap_or_else(|| "?".to_string()),
+                        ),
+                        "READY" => Cell::from(
+                            r.ready
+                                .map(|r| {
+                                    if r {
+                                        "True".to_string()
+                                    } else {
+                                        "False".to_string()
+                                    }
+                                })
+                                .unwrap_or_else(|| "?".to_string()),
+                        ),
+                        "REVISION" => Cell::from(r.revision.clone().unwrap_or("-".to_string())),
                         "MESSAGE" => {
                             let msg = r.message.as_deref().unwrap_or("-");
-                            if msg.len() > 50 {
+                            let display = if msg.len() > 50 {
                                 format!("{}...", &msg[..47])
                             } else {
                                 msg.to_string()
-                            }
+                            };
+                            Cell::from(display)
                         }
-                        _ => specific_fields
-                            .get(*col)
-                            .cloned()
-                            .unwrap_or("-".to_string()),
+                        _ => Cell::from(
+                            specific_fields
+                                .get(*col)
+                                .cloned()
+                                .unwrap_or("-".to_string()),
+                        ),
                     };
-                    cells.push(cell_value);
+                    cells.push(cell);
                 }
 
                 Row::new(cells).style(style)
@@ -258,10 +266,9 @@ pub fn render_resource_list(
         format!("All Resources ({})", resources.len())
     };
 
-    let table = Table::new(rows, constraints.clone())
+    let table = Table::new(rows, constraints)
         .header(header)
-        .block(Block::default().title(title).borders(Borders::ALL))
-        .widths(&constraints);
+        .block(Block::default().title(title).borders(Borders::ALL));
 
     f.render_widget(table, area);
 }

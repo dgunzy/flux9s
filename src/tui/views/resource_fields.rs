@@ -11,7 +11,7 @@ pub fn extract_resource_specific_fields(
     let mut fields = HashMap::new();
 
     if let Some(spec) = obj.get("spec").and_then(|s| s.as_object()) {
-        match FluxResourceKind::from_str(resource_type) {
+        match FluxResourceKind::parse_optional(resource_type) {
             Some(FluxResourceKind::GitRepository)
             | Some(FluxResourceKind::OCIRepository)
             | Some(FluxResourceKind::HelmRepository) => {
@@ -102,7 +102,7 @@ pub fn extract_resource_specific_fields(
 
     // Extract status fields
     if let Some(status) = obj.get("status").and_then(|s| s.as_object()) {
-        if FluxResourceKind::from_str(resource_type) == Some(FluxResourceKind::HelmRelease) {
+        if FluxResourceKind::parse_optional(resource_type) == Some(FluxResourceKind::HelmRelease) {
             if let Some(helm_chart) = status.get("helmChart").and_then(|hc| hc.as_str()) {
                 fields.insert("CHART".to_string(), helm_chart.to_string());
             }
@@ -126,7 +126,7 @@ pub fn extract_resource_specific_fields(
 
 /// Get column headers for a resource type
 pub fn get_resource_type_columns(resource_type: &str) -> Vec<&'static str> {
-    match FluxResourceKind::from_str(resource_type) {
+    match FluxResourceKind::parse_optional(resource_type) {
         Some(FluxResourceKind::GitRepository) | Some(FluxResourceKind::OCIRepository) => vec![
             "STATUS",
             "NAMESPACE",

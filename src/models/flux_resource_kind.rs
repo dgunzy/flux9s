@@ -5,6 +5,7 @@
 //! type safety for resource kind references.
 
 use std::fmt;
+use std::str::FromStr;
 
 /// Enumeration of all Flux CRD resource kinds
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,29 +62,10 @@ impl FluxResourceKind {
         }
     }
 
-    /// Try to parse a string into a FluxResourceKind
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "GitRepository" => Some(FluxResourceKind::GitRepository),
-            "OCIRepository" => Some(FluxResourceKind::OCIRepository),
-            "HelmRepository" => Some(FluxResourceKind::HelmRepository),
-            "Bucket" => Some(FluxResourceKind::Bucket),
-            "HelmChart" => Some(FluxResourceKind::HelmChart),
-            "ExternalArtifact" => Some(FluxResourceKind::ExternalArtifact),
-            "Kustomization" => Some(FluxResourceKind::Kustomization),
-            "HelmRelease" => Some(FluxResourceKind::HelmRelease),
-            "ImageRepository" => Some(FluxResourceKind::ImageRepository),
-            "ImagePolicy" => Some(FluxResourceKind::ImagePolicy),
-            "ImageUpdateAutomation" => Some(FluxResourceKind::ImageUpdateAutomation),
-            "Alert" => Some(FluxResourceKind::Alert),
-            "Provider" => Some(FluxResourceKind::Provider),
-            "Receiver" => Some(FluxResourceKind::Receiver),
-            "ResourceSet" => Some(FluxResourceKind::ResourceSet),
-            "ResourceSetInputProvider" => Some(FluxResourceKind::ResourceSetInputProvider),
-            "FluxReport" => Some(FluxResourceKind::FluxReport),
-            "FluxInstance" => Some(FluxResourceKind::FluxInstance),
-            _ => None,
-        }
+    /// Try to parse a string into a FluxResourceKind, returning None if invalid
+    /// Use this when you want Option<Self> instead of Result<Self, String>
+    pub fn parse_optional(s: &str) -> Option<Self> {
+        s.parse().ok()
     }
 
     /// Try to parse a string (case-insensitive) into a FluxResourceKind
@@ -134,6 +116,34 @@ impl From<FluxResourceKind> for String {
     }
 }
 
+impl FromStr for FluxResourceKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "GitRepository" => Ok(FluxResourceKind::GitRepository),
+            "OCIRepository" => Ok(FluxResourceKind::OCIRepository),
+            "HelmRepository" => Ok(FluxResourceKind::HelmRepository),
+            "Bucket" => Ok(FluxResourceKind::Bucket),
+            "HelmChart" => Ok(FluxResourceKind::HelmChart),
+            "ExternalArtifact" => Ok(FluxResourceKind::ExternalArtifact),
+            "Kustomization" => Ok(FluxResourceKind::Kustomization),
+            "HelmRelease" => Ok(FluxResourceKind::HelmRelease),
+            "ImageRepository" => Ok(FluxResourceKind::ImageRepository),
+            "ImagePolicy" => Ok(FluxResourceKind::ImagePolicy),
+            "ImageUpdateAutomation" => Ok(FluxResourceKind::ImageUpdateAutomation),
+            "Alert" => Ok(FluxResourceKind::Alert),
+            "Provider" => Ok(FluxResourceKind::Provider),
+            "Receiver" => Ok(FluxResourceKind::Receiver),
+            "ResourceSet" => Ok(FluxResourceKind::ResourceSet),
+            "ResourceSetInputProvider" => Ok(FluxResourceKind::ResourceSetInputProvider),
+            "FluxReport" => Ok(FluxResourceKind::FluxReport),
+            "FluxInstance" => Ok(FluxResourceKind::FluxInstance),
+            _ => Err(format!("Unknown Flux resource kind: {}", s)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,14 +158,14 @@ mod tests {
     #[test]
     fn test_from_str() {
         assert_eq!(
-            FluxResourceKind::from_str("GitRepository"),
+            FluxResourceKind::parse_optional("GitRepository"),
             Some(FluxResourceKind::GitRepository)
         );
         assert_eq!(
-            FluxResourceKind::from_str("OCIRepository"),
+            FluxResourceKind::parse_optional("OCIRepository"),
             Some(FluxResourceKind::OCIRepository)
         );
-        assert_eq!(FluxResourceKind::from_str("Unknown"), None);
+        assert_eq!(FluxResourceKind::parse_optional("Unknown"), None);
     }
 
     #[test]

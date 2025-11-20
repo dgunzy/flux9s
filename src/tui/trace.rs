@@ -26,7 +26,7 @@ pub fn format_trace_result(result: &TraceResult) -> String {
     for node in &result.chain {
         use crate::models::FluxResourceKind;
         if matches!(
-            FluxResourceKind::from_str(&node.kind),
+            FluxResourceKind::parse_optional(&node.kind),
             Some(FluxResourceKind::Kustomization)
                 | Some(FluxResourceKind::HelmRelease)
                 | Some(FluxResourceKind::HelmChart)

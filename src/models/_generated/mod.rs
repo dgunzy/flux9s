@@ -5,7 +5,7 @@
 
 #![allow(clippy::all)]
 #![allow(unknown_lints)]
-#![allow(doc_markdown)]
+#![allow(clippy::doc_markdown)]
 #![allow(clippy::doc_overindented_list_items)]
 
 pub mod flux_operator_fluxinstances;

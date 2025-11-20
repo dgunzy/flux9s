@@ -14,6 +14,24 @@ use ratatui::{
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+// Type aliases for complex types
+type TraceRequest = (
+    String,
+    String,
+    String,
+    kube::Client,
+    tokio::sync::oneshot::Sender<anyhow::Result<crate::tui::trace::TraceResult>>,
+);
+
+type OperationRequest = (
+    String,
+    String,
+    String,
+    char,
+    kube::Client,
+    tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+);
+
 /// Main application state
 pub struct App {
     state: ResourceState,
@@ -166,15 +184,7 @@ impl App {
         self.yaml_fetch_pending = None;
     }
 
-    pub fn trigger_trace(
-        &mut self,
-    ) -> Option<(
-        String,
-        String,
-        String,
-        kube::Client,
-        tokio::sync::oneshot::Sender<anyhow::Result<crate::tui::trace::TraceResult>>,
-    )> {
+    pub fn trigger_trace(&mut self) -> Option<TraceRequest> {
         if let Some((ref resource_type, ref namespace, ref name)) = self.trace_pending {
             if let Some(ref client) = self.kube_client {
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -606,39 +616,27 @@ impl App {
         op_key: char,
     ) {
         // Check readonly mode - prevent modification operations
-        if self.config.read_only {
-            if self.operation_registry.get_by_keybinding(op_key).is_some() {
-                // All operations are modifications, so block them all in readonly mode
-                self.status_message = Some((
-                    "Readonly mode is enabled. Use :readonly to toggle write actions.".to_string(),
-                    true,
-                ));
-                return;
-            }
+        if self.config.read_only && self.operation_registry.get_by_keybinding(op_key).is_some() {
+            // All operations are modifications, so block them all in readonly mode
+            self.status_message = Some((
+                "Readonly mode is enabled. Use :readonly to toggle write actions.".to_string(),
+                true,
+            ));
+            return;
         }
 
-        if self.operation_registry.get_by_keybinding(op_key).is_some() {
-            if self.kube_client.is_some() {
-                let rt = resource_type.to_string();
-                let ns = namespace.to_string();
-                let n = name.to_string();
+        if self.operation_registry.get_by_keybinding(op_key).is_some() && self.kube_client.is_some()
+        {
+            let rt = resource_type.to_string();
+            let ns = namespace.to_string();
+            let n = name.to_string();
 
-                // Mark operation as pending - will be executed in main loop
-                self.pending_operation = Some((rt, ns, n, op_key));
-            }
+            // Mark operation as pending - will be executed in main loop
+            self.pending_operation = Some((rt, ns, n, op_key));
         }
     }
 
-    pub fn trigger_operation_execution(
-        &mut self,
-    ) -> Option<(
-        String,
-        String,
-        String,
-        char,
-        kube::Client,
-        tokio::sync::oneshot::Sender<anyhow::Result<()>>,
-    )> {
+    pub fn trigger_operation_execution(&mut self) -> Option<OperationRequest> {
         if let Some((ref resource_type, ref namespace, ref name, op_key)) = self.pending_operation {
             if let Some(ref client) = self.kube_client {
                 if self.operation_registry.get_by_keybinding(op_key).is_some() {

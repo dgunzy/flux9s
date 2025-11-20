@@ -10,7 +10,7 @@ fn test_get_all_commands() {
     let commands = get_all_commands();
 
     // Should have entries for all Flux resource types
-    assert!(commands.len() > 0);
+    assert!(!commands.is_empty());
 
     // Check that common resource types are present
     let has_kustomization = commands.iter().any(|(name, _)| *name == "Kustomization");

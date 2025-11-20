@@ -96,7 +96,7 @@ impl FluxOperation for SuspendOperation {
     fn is_valid_for(&self, resource_type: &str) -> bool {
         use crate::models::FluxResourceKind;
         matches!(
-            FluxResourceKind::from_str(resource_type),
+            FluxResourceKind::parse_optional(resource_type),
             Some(FluxResourceKind::GitRepository)
                 | Some(FluxResourceKind::OCIRepository)
                 | Some(FluxResourceKind::HelmRepository)
@@ -165,7 +165,7 @@ impl FluxOperation for ResumeOperation {
     fn is_valid_for(&self, resource_type: &str) -> bool {
         use crate::models::FluxResourceKind;
         matches!(
-            FluxResourceKind::from_str(resource_type),
+            FluxResourceKind::parse_optional(resource_type),
             Some(FluxResourceKind::GitRepository)
                 | Some(FluxResourceKind::OCIRepository)
                 | Some(FluxResourceKind::HelmRepository)
@@ -339,7 +339,7 @@ impl FluxOperation for ReconcileWithSourceOperation {
 
         use crate::models::FluxResourceKind;
         // Only works for Kustomization and HelmRelease
-        let kind = FluxResourceKind::from_str(resource_type);
+        let kind = FluxResourceKind::parse_optional(resource_type);
         if !matches!(
             kind,
             Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
@@ -588,7 +588,7 @@ impl FluxOperation for ReconcileWithSourceOperation {
     fn is_valid_for(&self, resource_type: &str) -> bool {
         use crate::models::FluxResourceKind;
         matches!(
-            FluxResourceKind::from_str(resource_type),
+            FluxResourceKind::parse_optional(resource_type),
             Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
         )
     }
@@ -631,6 +631,12 @@ impl OperationRegistry {
     #[allow(dead_code)] // Used in tests
     pub fn get_all(&self) -> &[Box<dyn FluxOperation>] {
         &self.operations
+    }
+}
+
+impl Default for OperationRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -806,11 +812,5 @@ mod tests {
         let reconcile_with_source = registry.get_by_keybinding('W').unwrap();
         assert_eq!(reconcile_with_source.name(), "Reconcile with Source");
         assert!(!reconcile_with_source.requires_confirmation());
-    }
-}
-
-impl Default for OperationRegistry {
-    fn default() -> Self {
-        Self::new()
     }
 }
