@@ -6,12 +6,14 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 ![License](https://img.shields.io/crates/l/flux9s)
 ![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)
 
+
 ### Full View
 ![flux9s screenshot](docs/images/screenshot.png)
 ### Flux9s Trace Implementation 
 ![flux9s trace](docs/images/trace-screenshot.png)
 ### Flux9s Name filter
 ![flux9s filter](docs/images/filter-screenshot.png)
+
 
 ## Overview
 
