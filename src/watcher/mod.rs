@@ -264,21 +264,23 @@ impl ResourceWatcher {
     /// This uses DynamicObject to watch OCIRepository resources regardless of their API version.
     /// It tries v1beta2 first (older version that user has), then v1 if v1beta2 doesn't exist.
     fn watch_oci_repository(&mut self) -> Result<()> {
+        use crate::models::FluxResourceKind;
         let client = self.client.clone();
         let namespace = self.current_namespace.clone();
         let event_tx = self.event_tx.clone();
-        let resource_type = "OCIRepository".to_string();
+        let resource_type = FluxResourceKind::OCIRepository.as_str().to_string();
 
         let handle = tokio::spawn(async move {
             // Try v1beta2 first (since user has resources in this version), then v1
             let versions = vec!["v1beta2", "v1"];
 
             for version in versions {
+                use crate::models::FluxResourceKind;
                 let api_resource = ApiResource {
                     group: "source.toolkit.fluxcd.io".to_string(),
                     version: version.to_string(),
                     api_version: format!("source.toolkit.fluxcd.io/{}", version),
-                    kind: "OCIRepository".to_string(),
+                    kind: FluxResourceKind::OCIRepository.as_str().to_string(),
                     plural: "ocirepositories".to_string(),
                 };
 

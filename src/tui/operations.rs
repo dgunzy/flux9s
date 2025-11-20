@@ -94,14 +94,15 @@ impl FluxOperation for SuspendOperation {
     }
 
     fn is_valid_for(&self, resource_type: &str) -> bool {
+        use crate::models::FluxResourceKind;
         matches!(
-            resource_type,
-            "GitRepository"
-                | "OCIRepository"
-                | "HelmRepository"
-                | "Kustomization"
-                | "HelmRelease"
-                | "ImageUpdateAutomation"
+            FluxResourceKind::from_str(resource_type),
+            Some(FluxResourceKind::GitRepository)
+                | Some(FluxResourceKind::OCIRepository)
+                | Some(FluxResourceKind::HelmRepository)
+                | Some(FluxResourceKind::Kustomization)
+                | Some(FluxResourceKind::HelmRelease)
+                | Some(FluxResourceKind::ImageUpdateAutomation)
         )
     }
 }
@@ -162,14 +163,15 @@ impl FluxOperation for ResumeOperation {
     }
 
     fn is_valid_for(&self, resource_type: &str) -> bool {
+        use crate::models::FluxResourceKind;
         matches!(
-            resource_type,
-            "GitRepository"
-                | "OCIRepository"
-                | "HelmRepository"
-                | "Kustomization"
-                | "HelmRelease"
-                | "ImageUpdateAutomation"
+            FluxResourceKind::from_str(resource_type),
+            Some(FluxResourceKind::GitRepository)
+                | Some(FluxResourceKind::OCIRepository)
+                | Some(FluxResourceKind::HelmRepository)
+                | Some(FluxResourceKind::Kustomization)
+                | Some(FluxResourceKind::HelmRelease)
+                | Some(FluxResourceKind::ImageUpdateAutomation)
         )
     }
 }
@@ -335,8 +337,13 @@ impl FluxOperation for ReconcileWithSourceOperation {
         use kube::api::{Patch, PatchParams};
         use kube::core::DynamicObject;
 
+        use crate::models::FluxResourceKind;
         // Only works for Kustomization and HelmRelease
-        if resource_type != "Kustomization" && resource_type != "HelmRelease" {
+        let kind = FluxResourceKind::from_str(resource_type);
+        if !matches!(
+            kind,
+            Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
+        ) {
             return Err(anyhow::anyhow!(
                 "Reconcile with source only works for Kustomization and HelmRelease"
             ));
@@ -579,7 +586,11 @@ impl FluxOperation for ReconcileWithSourceOperation {
     }
 
     fn is_valid_for(&self, resource_type: &str) -> bool {
-        matches!(resource_type, "Kustomization" | "HelmRelease")
+        use crate::models::FluxResourceKind;
+        matches!(
+            FluxResourceKind::from_str(resource_type),
+            Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
+        )
     }
 }
 
@@ -630,6 +641,7 @@ mod tests {
 
     #[test]
     fn test_suspend_operation_properties() {
+        use crate::models::FluxResourceKind;
         let op = SuspendOperation;
 
         assert_eq!(op.keybinding(), 's');
@@ -639,7 +651,7 @@ mod tests {
         let resource = ResourceInfo {
             name: "test-ks".to_string(),
             namespace: "default".to_string(),
-            resource_type: "Kustomization".to_string(),
+            resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
             age: None,
             suspended: None,
             ready: None,
@@ -664,6 +676,7 @@ mod tests {
 
     #[test]
     fn test_delete_operation_properties() {
+        use crate::models::FluxResourceKind;
         let op = DeleteOperation;
 
         assert_eq!(op.keybinding(), 'd');
@@ -673,7 +686,7 @@ mod tests {
         let resource = ResourceInfo {
             name: "test-resource".to_string(),
             namespace: "flux-system".to_string(),
-            resource_type: "Kustomization".to_string(),
+            resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
             age: None,
             suspended: None,
             ready: None,
@@ -703,20 +716,21 @@ mod tests {
         let reconcile = ReconcileOperation;
 
         // Suspend should work for suspendable resources
-        assert!(suspend.is_valid_for("Kustomization"));
-        assert!(suspend.is_valid_for("GitRepository"));
-        assert!(suspend.is_valid_for("HelmRelease"));
+        use crate::models::FluxResourceKind;
+        assert!(suspend.is_valid_for(FluxResourceKind::Kustomization.as_str()));
+        assert!(suspend.is_valid_for(FluxResourceKind::GitRepository.as_str()));
+        assert!(suspend.is_valid_for(FluxResourceKind::HelmRelease.as_str()));
 
         // Delete should work for all resources
-        assert!(delete.is_valid_for("Kustomization"));
-        assert!(delete.is_valid_for("GitRepository"));
-        assert!(delete.is_valid_for("HelmRelease"));
-        assert!(delete.is_valid_for("Alert"));
+        assert!(delete.is_valid_for(FluxResourceKind::Kustomization.as_str()));
+        assert!(delete.is_valid_for(FluxResourceKind::GitRepository.as_str()));
+        assert!(delete.is_valid_for(FluxResourceKind::HelmRelease.as_str()));
+        assert!(delete.is_valid_for(FluxResourceKind::Alert.as_str()));
 
         // Reconcile should work for all resources
-        assert!(reconcile.is_valid_for("Kustomization"));
-        assert!(reconcile.is_valid_for("GitRepository"));
-        assert!(reconcile.is_valid_for("HelmRelease"));
+        assert!(reconcile.is_valid_for(FluxResourceKind::Kustomization.as_str()));
+        assert!(reconcile.is_valid_for(FluxResourceKind::GitRepository.as_str()));
+        assert!(reconcile.is_valid_for(FluxResourceKind::HelmRelease.as_str()));
     }
 
     #[test]
@@ -733,24 +747,26 @@ mod tests {
         let op = ReconcileWithSourceOperation;
 
         // Should only work for Kustomization and HelmRelease
-        assert!(op.is_valid_for("Kustomization"));
-        assert!(op.is_valid_for("HelmRelease"));
+        assert!(op.is_valid_for(FluxResourceKind::Kustomization.as_str()));
+        assert!(op.is_valid_for(FluxResourceKind::HelmRelease.as_str()));
 
         // Should not work for other resources
-        assert!(!op.is_valid_for("GitRepository"));
-        assert!(!op.is_valid_for("HelmChart"));
-        assert!(!op.is_valid_for("HelmRepository"));
-        assert!(!op.is_valid_for("OCIRepository"));
+        use crate::models::FluxResourceKind;
+        assert!(!op.is_valid_for(FluxResourceKind::GitRepository.as_str()));
+        assert!(!op.is_valid_for(FluxResourceKind::HelmChart.as_str()));
+        assert!(!op.is_valid_for(FluxResourceKind::HelmRepository.as_str()));
+        assert!(!op.is_valid_for(FluxResourceKind::OCIRepository.as_str()));
     }
 
     #[test]
     fn test_reconcile_with_source_confirmation_message() {
+        use crate::models::FluxResourceKind;
         let op = ReconcileWithSourceOperation;
 
         let resource = ResourceInfo {
             name: "test-kustomization".to_string(),
             namespace: "flux-system".to_string(),
-            resource_type: "Kustomization".to_string(),
+            resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
             age: None,
             suspended: None,
             ready: None,

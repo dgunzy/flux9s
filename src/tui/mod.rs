@@ -33,11 +33,13 @@ async fn fetch_resource_yaml(
     name: &str,
 ) -> anyhow::Result<serde_json::Value> {
     // Import resource types - use the public re-exports from watcher module
+    use crate::models::FluxResourceKind;
     use crate::watcher::{
         Alert, Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRelease, HelmRepository,
         ImagePolicy, ImageRepository, ImageUpdateAutomation, Kustomization, OCIRepository,
         Provider, Receiver,
     };
+
     // Match resource type and fetch using appropriate API
     macro_rules! fetch_resource {
         ($type:ty) => {{
@@ -53,22 +55,22 @@ async fn fetch_resource_yaml(
         }};
     }
 
-    match resource_type {
-        "GitRepository" => fetch_resource!(GitRepository),
-        "OCIRepository" => fetch_resource!(OCIRepository),
-        "HelmRepository" => fetch_resource!(HelmRepository),
-        "Bucket" => fetch_resource!(Bucket),
-        "HelmChart" => fetch_resource!(HelmChart),
-        "ExternalArtifact" => fetch_resource!(ExternalArtifact),
-        "Kustomization" => fetch_resource!(Kustomization),
-        "HelmRelease" => fetch_resource!(HelmRelease),
-        "ImageRepository" => fetch_resource!(ImageRepository),
-        "ImagePolicy" => fetch_resource!(ImagePolicy),
-        "ImageUpdateAutomation" => fetch_resource!(ImageUpdateAutomation),
-        "Alert" => fetch_resource!(Alert),
-        "Provider" => fetch_resource!(Provider),
-        "Receiver" => fetch_resource!(Receiver),
-        _ => Err(anyhow::anyhow!("Unknown resource type: {}", resource_type)),
+    match FluxResourceKind::from_str(resource_type) {
+        Some(FluxResourceKind::GitRepository) => fetch_resource!(GitRepository),
+        Some(FluxResourceKind::OCIRepository) => fetch_resource!(OCIRepository),
+        Some(FluxResourceKind::HelmRepository) => fetch_resource!(HelmRepository),
+        Some(FluxResourceKind::Bucket) => fetch_resource!(Bucket),
+        Some(FluxResourceKind::HelmChart) => fetch_resource!(HelmChart),
+        Some(FluxResourceKind::ExternalArtifact) => fetch_resource!(ExternalArtifact),
+        Some(FluxResourceKind::Kustomization) => fetch_resource!(Kustomization),
+        Some(FluxResourceKind::HelmRelease) => fetch_resource!(HelmRelease),
+        Some(FluxResourceKind::ImageRepository) => fetch_resource!(ImageRepository),
+        Some(FluxResourceKind::ImagePolicy) => fetch_resource!(ImagePolicy),
+        Some(FluxResourceKind::ImageUpdateAutomation) => fetch_resource!(ImageUpdateAutomation),
+        Some(FluxResourceKind::Alert) => fetch_resource!(Alert),
+        Some(FluxResourceKind::Provider) => fetch_resource!(Provider),
+        Some(FluxResourceKind::Receiver) => fetch_resource!(Receiver),
+        None => Err(anyhow::anyhow!("Unknown resource type: {}", resource_type)),
     }
 }
 

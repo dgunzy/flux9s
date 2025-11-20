@@ -1,5 +1,6 @@
 //! Helper functions for extracting resource-specific fields from JSON objects
 
+use crate::models::FluxResourceKind;
 use serde_json::Value;
 
 /// Extract resource-specific display fields from a JSON object
@@ -10,8 +11,10 @@ pub fn extract_resource_specific_fields(
     let mut fields = HashMap::new();
 
     if let Some(spec) = obj.get("spec").and_then(|s| s.as_object()) {
-        match resource_type {
-            "GitRepository" | "OCIRepository" | "HelmRepository" => {
+        match FluxResourceKind::from_str(resource_type) {
+            Some(FluxResourceKind::GitRepository)
+            | Some(FluxResourceKind::OCIRepository)
+            | Some(FluxResourceKind::HelmRepository) => {
                 if let Some(url) = spec.get("url").and_then(|u| u.as_str()) {
                     fields.insert("URL".to_string(), url.to_string());
                 }
@@ -19,7 +22,7 @@ pub fn extract_resource_specific_fields(
                     fields.insert("BRANCH".to_string(), branch.to_string());
                 }
             }
-            "Kustomization" => {
+            Some(FluxResourceKind::Kustomization) => {
                 if let Some(path) = spec.get("path").and_then(|p| p.as_str()) {
                     fields.insert("PATH".to_string(), path.to_string());
                 }
@@ -30,7 +33,7 @@ pub fn extract_resource_specific_fields(
                     );
                 }
             }
-            "HelmRelease" => {
+            Some(FluxResourceKind::HelmRelease) => {
                 if let Some(chart) = spec
                     .get("chart")
                     .and_then(|c| c.get("spec"))
@@ -48,7 +51,7 @@ pub fn extract_resource_specific_fields(
                     fields.insert("VERSION".to_string(), version.to_string());
                 }
             }
-            "HelmChart" => {
+            Some(FluxResourceKind::HelmChart) => {
                 if let Some(chart) = spec.get("chart").and_then(|c| c.as_str()) {
                     fields.insert("CHART".to_string(), chart.to_string());
                 }
@@ -61,12 +64,12 @@ pub fn extract_resource_specific_fields(
                     }
                 }
             }
-            "ImageRepository" => {
+            Some(FluxResourceKind::ImageRepository) => {
                 if let Some(image) = spec.get("image").and_then(|i| i.as_str()) {
                     fields.insert("IMAGE".to_string(), image.to_string());
                 }
             }
-            "ImagePolicy" => {
+            Some(FluxResourceKind::ImagePolicy) => {
                 if let Some(image_ref) = spec
                     .get("imageRepositoryRef")
                     .and_then(|ir| ir.get("name"))
@@ -75,7 +78,7 @@ pub fn extract_resource_specific_fields(
                     fields.insert("IMAGE".to_string(), image_ref.to_string());
                 }
             }
-            "ImageUpdateAutomation" => {
+            Some(FluxResourceKind::ImageUpdateAutomation) => {
                 if let Some(image_ref) = spec
                     .get("sourceRef")
                     .and_then(|sr| sr.get("name"))
@@ -99,7 +102,7 @@ pub fn extract_resource_specific_fields(
 
     // Extract status fields
     if let Some(status) = obj.get("status").and_then(|s| s.as_object()) {
-        if resource_type == "HelmRelease" {
+        if FluxResourceKind::from_str(resource_type) == Some(FluxResourceKind::HelmRelease) {
             if let Some(helm_chart) = status.get("helmChart").and_then(|hc| hc.as_str()) {
                 fields.insert("CHART".to_string(), helm_chart.to_string());
             }
@@ -123,8 +126,8 @@ pub fn extract_resource_specific_fields(
 
 /// Get column headers for a resource type
 pub fn get_resource_type_columns(resource_type: &str) -> Vec<&'static str> {
-    match resource_type {
-        "GitRepository" | "OCIRepository" => vec![
+    match FluxResourceKind::from_str(resource_type) {
+        Some(FluxResourceKind::GitRepository) | Some(FluxResourceKind::OCIRepository) => vec![
             "STATUS",
             "NAMESPACE",
             "NAME",
@@ -134,7 +137,7 @@ pub fn get_resource_type_columns(resource_type: &str) -> Vec<&'static str> {
             "SUSPENDED",
             "READY",
         ],
-        "HelmRepository" => vec![
+        Some(FluxResourceKind::HelmRepository) => vec![
             "STATUS",
             "NAMESPACE",
             "NAME",
@@ -143,7 +146,7 @@ pub fn get_resource_type_columns(resource_type: &str) -> Vec<&'static str> {
             "SUSPENDED",
             "READY",
         ],
-        "Kustomization" => vec![
+        Some(FluxResourceKind::Kustomization) => vec![
             "STATUS",
             "NAMESPACE",
             "NAME",
@@ -153,7 +156,7 @@ pub fn get_resource_type_columns(resource_type: &str) -> Vec<&'static str> {
             "SUSPENDED",
             "READY",
         ],
-        "HelmRelease" => vec![
+        Some(FluxResourceKind::HelmRelease) => vec![
             "STATUS",
             "NAMESPACE",
             "NAME",
@@ -163,7 +166,7 @@ pub fn get_resource_type_columns(resource_type: &str) -> Vec<&'static str> {
             "SUSPENDED",
             "READY",
         ],
-        "HelmChart" => vec![
+        Some(FluxResourceKind::HelmChart) => vec![
             "STATUS",
             "NAMESPACE",
             "NAME",
@@ -173,9 +176,13 @@ pub fn get_resource_type_columns(resource_type: &str) -> Vec<&'static str> {
             "SUSPENDED",
             "READY",
         ],
-        "ImageRepository" => vec!["STATUS", "NAMESPACE", "NAME", "IMAGE", "SUSPENDED", "READY"],
-        "ImagePolicy" => vec!["STATUS", "NAMESPACE", "NAME", "IMAGE", "SUSPENDED", "READY"],
-        "ImageUpdateAutomation" => vec![
+        Some(FluxResourceKind::ImageRepository) => {
+            vec!["STATUS", "NAMESPACE", "NAME", "IMAGE", "SUSPENDED", "READY"]
+        }
+        Some(FluxResourceKind::ImagePolicy) => {
+            vec!["STATUS", "NAMESPACE", "NAME", "IMAGE", "SUSPENDED", "READY"]
+        }
+        Some(FluxResourceKind::ImageUpdateAutomation) => vec![
             "STATUS",
             "NAMESPACE",
             "NAME",

@@ -104,7 +104,11 @@ pub async fn trace_object(
                 chain.push(owner_node.clone());
 
                 // If this is a Kustomization or HelmRelease, resolve its source
-                if flux_owner.kind == "Kustomization" || flux_owner.kind == "HelmRelease" {
+                use crate::models::FluxResourceKind;
+                if matches!(
+                    FluxResourceKind::from_str(&flux_owner.kind),
+                    Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
+                ) {
                     let source = resolve_source(client, &owner_node, &current_ns).await?;
                     return Ok(TraceResult {
                         object: initial_node,
@@ -144,7 +148,11 @@ pub async fn trace_object(
                         fetch_object(client, &owner_kind, &current_ns, &owner_name).await?;
 
                     // If this is a Kustomization or HelmRelease, resolve its source
-                    if owner_kind == "Kustomization" || owner_kind == "HelmRelease" {
+                    use crate::models::FluxResourceKind;
+                    if matches!(
+                        FluxResourceKind::from_str(&owner_kind),
+                        Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
+                    ) {
                         let source = resolve_source(client, &owner_node, &current_ns).await?;
                         return Ok(TraceResult {
                             object: initial_node,
@@ -201,16 +209,8 @@ async fn resolve_source(
 
 /// Check if a resource kind is a Flux resource
 fn is_flux_resource(kind: &str) -> bool {
-    matches!(
-        kind,
-        "Kustomization"
-            | "HelmRelease"
-            | "GitRepository"
-            | "OCIRepository"
-            | "HelmRepository"
-            | "Bucket"
-            | "HelmChart"
-    )
+    use crate::models::FluxResourceKind;
+    FluxResourceKind::from_str(kind).is_some()
 }
 
 /// Find Flux owner from labels
@@ -225,8 +225,9 @@ fn find_flux_owner_from_labels(obj: &Value) -> Option<SourceRef> {
             .get("kustomize.toolkit.fluxcd.io/name")
             .and_then(|n| n.as_str())
         {
+            use crate::models::FluxResourceKind;
             return Some(SourceRef {
-                kind: "Kustomization".to_string(),
+                kind: FluxResourceKind::Kustomization.as_str().to_string(),
                 name: name.to_string(),
                 namespace: labels
                     .get("kustomize.toolkit.fluxcd.io/namespace")
@@ -239,8 +240,9 @@ fn find_flux_owner_from_labels(obj: &Value) -> Option<SourceRef> {
             .get("helm.toolkit.fluxcd.io/name")
             .and_then(|n| n.as_str())
         {
+            use crate::models::FluxResourceKind;
             return Some(SourceRef {
-                kind: "HelmRelease".to_string(),
+                kind: FluxResourceKind::HelmRelease.as_str().to_string(),
                 name: name.to_string(),
                 namespace: labels
                     .get("helm.toolkit.fluxcd.io/namespace")
@@ -429,7 +431,11 @@ pub fn format_trace_result(result: &TraceResult) -> String {
 
     // Chain (Kustomization/HelmRelease)
     for node in &result.chain {
-        if node.kind == "Kustomization" || node.kind == "HelmRelease" {
+        use crate::models::FluxResourceKind;
+        if matches!(
+            FluxResourceKind::from_str(&node.kind),
+            Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
+        ) {
             // Skip if this is the same as the main object
             if node.kind == result.object.kind
                 && node.name == result.object.name

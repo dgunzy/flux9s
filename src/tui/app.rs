@@ -860,18 +860,21 @@ impl App {
                 if resource_parts.len() == 2 {
                     let resource_type = resource_parts[0];
                     let name = resource_parts[1];
+                    use crate::models::FluxResourceKind;
                     // Normalize resource type to proper case
-                    let resource_type_normalized = match resource_type.to_lowercase().as_str() {
-                        "kustomization" | "ks" => "Kustomization",
-                        "helmrelease" | "hr" => "HelmRelease",
-                        "gitrepository" | "gitrepo" => "GitRepository",
-                        "ocirepository" | "ocirepo" => "OCIRepository",
-                        "helmrepository" | "helmrepo" => "HelmRepository",
-                        "deployment" | "deploy" => "Deployment",
-                        "service" => "Service",
-                        "pod" => "Pod",
-                        _ => resource_type,
-                    };
+                    let resource_type_normalized =
+                        match FluxResourceKind::from_str_case_insensitive(resource_type) {
+                            Some(kind) => kind.as_str(),
+                            None => {
+                                // Handle standard Kubernetes resources
+                                match resource_type.to_lowercase().as_str() {
+                                    "deployment" | "deploy" => "Deployment",
+                                    "service" => "Service",
+                                    "pod" => "Pod",
+                                    _ => resource_type,
+                                }
+                            }
+                        };
                     let namespace = self
                         .namespace
                         .clone()
