@@ -1,45 +1,80 @@
-//! XDG directory path resolution
+//! Cross-platform directory path resolution
 //!
-//! Provides functions to resolve XDG Base Directory paths for configuration,
+//! Provides functions to resolve platform-appropriate paths for configuration,
 //! data, and state directories.
+//! - Linux/macOS: XDG Base Directory specification (~/.config, ~/.local/share)
+//! - Windows: Known Folder API (AppData\Roaming, AppData\Local)
 
 use std::path::{Path, PathBuf};
-use xdg::BaseDirectories;
 
 /// Get the configuration directory path
 ///
-/// Checks FLUX9S_CONFIG_DIR environment variable first, then falls back to
-/// XDG_CONFIG_HOME/flux9s
+/// Checks FLUX9S_CONFIG_DIR environment variable first, then falls back to:
+/// - Unix (Linux/macOS): XDG_CONFIG_HOME/flux9s or ~/.config/flux9s
+/// - Windows: %APPDATA%\flux9s\config
 pub fn config_dir() -> PathBuf {
     std::env::var("FLUX9S_CONFIG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            BaseDirectories::with_prefix("flux9s")
-                .map(|xdg| xdg.get_config_home())
-                .unwrap_or_else(|_| {
-                    // Fallback to current directory if XDG fails
-                    PathBuf::from(".").join(".config").join("flux9s")
-                })
+            #[cfg(windows)]
+            {
+                // On Windows, use ProjectDirs for proper AppData paths
+                use directories::ProjectDirs;
+                ProjectDirs::from("", "", "flux9s")
+                    .map(|dirs| dirs.config_dir().to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from(".").join(".config").join("flux9s"))
+            }
+            #[cfg(not(windows))]
+            {
+                // On Unix (Linux/macOS), use XDG_CONFIG_HOME or $HOME/.config
+                use directories::BaseDirs;
+                std::env::var("XDG_CONFIG_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| {
+                        BaseDirs::new()
+                            .map(|dirs| dirs.home_dir().join(".config"))
+                            .unwrap_or_else(|| PathBuf::from(".").join(".config"))
+                    })
+                    .join("flux9s")
+            }
         })
 }
 
 /// Get the data directory path
 ///
-/// Checks FLUX9S_DATA_DIR environment variable first, then falls back to
-/// XDG_DATA_HOME/flux9s
+/// Checks FLUX9S_DATA_DIR environment variable first, then falls back to:
+/// - Unix (Linux/macOS): XDG_DATA_HOME/flux9s or ~/.local/share/flux9s
+/// - Windows: %LOCALAPPDATA%\flux9s\data
 pub fn data_dir() -> PathBuf {
     std::env::var("FLUX9S_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            BaseDirectories::with_prefix("flux9s")
-                .map(|xdg| xdg.get_data_home())
-                .unwrap_or_else(|_| {
-                    // Fallback to current directory if XDG fails
-                    PathBuf::from(".")
-                        .join(".local")
-                        .join("share")
-                        .join("flux9s")
-                })
+            #[cfg(windows)]
+            {
+                // On Windows, use ProjectDirs for proper AppData paths
+                use directories::ProjectDirs;
+                ProjectDirs::from("", "", "flux9s")
+                    .map(|dirs| dirs.data_dir().to_path_buf())
+                    .unwrap_or_else(|| {
+                        PathBuf::from(".")
+                            .join(".local")
+                            .join("share")
+                            .join("flux9s")
+                    })
+            }
+            #[cfg(not(windows))]
+            {
+                // On Unix (Linux/macOS), use XDG_DATA_HOME or $HOME/.local/share
+                use directories::BaseDirs;
+                std::env::var("XDG_DATA_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| {
+                        BaseDirs::new()
+                            .map(|dirs| dirs.home_dir().join(".local").join("share"))
+                            .unwrap_or_else(|| PathBuf::from(".").join(".local").join("share"))
+                    })
+                    .join("flux9s")
+            }
         })
 }
 
