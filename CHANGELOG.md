@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2025-11-21
+
+## Version 0.4.3
+
+### Added
+- Support for building on Windows platforms
+
 ## [0.4.2] - 2025-11-20
 
 ### Version 0.4.2
