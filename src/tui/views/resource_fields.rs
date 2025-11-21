@@ -12,14 +12,21 @@ pub fn extract_resource_specific_fields(
 
     if let Some(spec) = obj.get("spec").and_then(|s| s.as_object()) {
         match FluxResourceKind::parse_optional(resource_type) {
-            Some(FluxResourceKind::GitRepository)
-            | Some(FluxResourceKind::OCIRepository)
-            | Some(FluxResourceKind::HelmRepository) => {
+            Some(FluxResourceKind::GitRepository) | Some(FluxResourceKind::HelmRepository) => {
                 if let Some(url) = spec.get("url").and_then(|u| u.as_str()) {
                     fields.insert("URL".to_string(), url.to_string());
                 }
                 if let Some(branch) = spec.get("branch").and_then(|b| b.as_str()) {
                     fields.insert("BRANCH".to_string(), branch.to_string());
+                }
+            }
+            Some(FluxResourceKind::OCIRepository) => {
+                if let Some(semver) = spec
+                    .get("ref")
+                    .and_then(|s| s.get("semver"))
+                    .and_then(|se| se.as_str())
+                {
+                    fields.insert("SEMVER".to_string(), semver.to_string());
                 }
             }
             Some(FluxResourceKind::Kustomization) => {
@@ -119,6 +126,23 @@ pub fn extract_resource_specific_fields(
                 fields.insert("STATUS".to_string(), release_status.to_string());
             }
         }
+        if FluxResourceKind::parse_optional(resource_type) == Some(FluxResourceKind::OCIRepository)
+        {
+            if let Some(digest) = status
+                .get("artifact")
+                .and_then(|a| a.get("digest"))
+                .and_then(|d| d.as_str())
+            {
+                fields.insert("DIGEST".to_string(), digest.to_string());
+            }
+            if let Some(revision) = status
+                .get("artifact")
+                .and_then(|a| a.get("revision"))
+                .and_then(|r| r.as_str())
+            {
+                fields.insert("REVISION".to_string(), revision.to_string());
+            }
+        }
     }
 
     fields
@@ -127,7 +151,7 @@ pub fn extract_resource_specific_fields(
 /// Get column headers for a resource type
 pub fn get_resource_type_columns(resource_type: &str) -> Vec<&'static str> {
     match FluxResourceKind::parse_optional(resource_type) {
-        Some(FluxResourceKind::GitRepository) | Some(FluxResourceKind::OCIRepository) => vec![
+        Some(FluxResourceKind::GitRepository) => vec![
             "STATUS",
             "NAMESPACE",
             "NAME",
@@ -137,6 +161,16 @@ pub fn get_resource_type_columns(resource_type: &str) -> Vec<&'static str> {
             "SUSPENDED",
             "READY",
         ],
+        Some(FluxResourceKind::OCIRepository) => {
+            vec![
+                "STATUS",
+                "NAMESPACE",
+                "NAME",
+                "SEMVER",
+                "DIGEST",
+                "REVISION",
+            ]
+        }
         Some(FluxResourceKind::HelmRepository) => vec![
             "STATUS",
             "NAMESPACE",

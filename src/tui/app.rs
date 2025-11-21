@@ -69,6 +69,10 @@ pub struct App {
     status_message: Option<(String, bool)>,                       // (message, is_error)
     theme: Theme,
     config: crate::config::Config, // Application configuration
+    // Cached layout dimensions to prevent bouncing/flickering
+    cached_terminal_size: Option<(u16, u16)>, // (width, height)
+    cached_header_height: u16,
+    cached_footer_height: u16,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -128,7 +132,23 @@ impl App {
             status_message: None,
             theme,
             config,
+            // Initialize layout cache - will be populated on first render
+            cached_terminal_size: None,
+            cached_header_height: 7, // Default minimum
+            cached_footer_height: 3, // Default minimum
         }
+    }
+
+    /// Invalidate the cached layout dimensions, forcing recalculation on next render.
+    /// Call this when filter state or resource counts change (anything that affects header height).
+    fn invalidate_layout_cache(&mut self) {
+        self.cached_terminal_size = None;
+    }
+
+    /// Public method to invalidate layout cache when resource types change.
+    /// Should be called from the main event loop when watch events add new resource types.
+    pub fn notify_resource_types_changed(&mut self) {
+        self.invalidate_layout_cache();
     }
 
     /// Change theme by name
@@ -488,6 +508,7 @@ impl App {
                 // Enter filter mode
                 self.filter_mode = true;
                 self.filter.clear();
+                self.invalidate_layout_cache(); // Filter state affects header height
             }
             crossterm::event::KeyCode::Char('y') => {
                 // View YAML - trigger async fetch
@@ -550,7 +571,11 @@ impl App {
             crossterm::event::KeyCode::Esc => {
                 // Exit filter mode
                 self.filter_mode = false;
+                let was_filtering = !self.filter.is_empty();
                 self.filter.clear();
+                if was_filtering {
+                    self.invalidate_layout_cache(); // Filter state affects header height
+                }
                 None
             }
             crossterm::event::KeyCode::Enter => {
@@ -558,16 +583,30 @@ impl App {
                 self.filter_mode = false;
                 self.selected_index = 0;
                 self.scroll_offset = 0;
+                // Only invalidate if filter was applied (non-empty) - this is when header changes
+                if !self.filter.is_empty() {
+                    self.invalidate_layout_cache();
+                }
                 None
             }
             crossterm::event::KeyCode::Backspace => {
+                let was_empty = self.filter.is_empty();
                 self.filter.pop();
+                // Invalidate when transitioning from non-empty to empty (header line change)
+                if !was_empty && self.filter.is_empty() {
+                    self.invalidate_layout_cache();
+                }
                 None
             }
             crossterm::event::KeyCode::Char(c) => {
+                let was_empty = self.filter.is_empty();
                 self.filter.push(c);
                 self.selected_index = 0;
                 self.scroll_offset = 0;
+                // Invalidate when transitioning from empty to non-empty (header line change)
+                if was_empty {
+                    self.invalidate_layout_cache();
+                }
                 None
             }
             _ => None,
@@ -935,7 +974,10 @@ impl App {
 
         // Use registry for resource type command mapping
         if cmd_lower == "all" || cmd_lower == "clear" {
-            self.selected_resource_type = None;
+            if self.selected_resource_type.is_some() {
+                self.selected_resource_type = None;
+                self.invalidate_layout_cache(); // Resource type filter affects header display
+            }
             return None;
         }
 
@@ -943,6 +985,7 @@ impl App {
             self.selected_resource_type = Some(display_name.to_string());
             self.selected_index = 0;
             self.scroll_offset = 0;
+            self.invalidate_layout_cache(); // Resource type filter affects header display
         }
 
         None
@@ -960,13 +1003,57 @@ impl App {
             resources.retain(|r| r.namespace == *namespace);
         }
 
-        // Apply text filter if set
+        // Apply filter if set
+        // Supports special syntax:
+        //   /label:          - resources with any label
+        //   /label:key       - resources with label key (any value)
+        //   /label:key=value - resources with label key=value
+        //   /ann:            - resources with any annotation
+        //   /ann:key         - resources with annotation key (any value)
+        //   /ann:key=value   - resources with annotation key=value
+        //   /annotations:... - alias for /ann:...
+        //   /text            - matches name
         if !self.filter.is_empty() {
-            resources.retain(|r| {
-                r.name.contains(&self.filter)
-                    || r.namespace.contains(&self.filter)
-                    || r.resource_type.contains(&self.filter)
-            });
+            if let Some(label_filter) = self.filter.strip_prefix("label:") {
+                // Label filter
+                if label_filter.is_empty() {
+                    // Just "label:" - show only resources that have at least one label
+                    resources.retain(|r| !r.labels.is_empty());
+                } else if let Some((key, value)) = label_filter.split_once('=') {
+                    // key=value match - filter by prefix match for progressive filtering
+                    resources.retain(|r| {
+                        r.labels
+                            .iter()
+                            .any(|(k, v)| k.starts_with(key) && v.starts_with(value))
+                    });
+                } else {
+                    // Key prefix match (any value) - progressive filtering as user types
+                    resources.retain(|r| r.labels.keys().any(|k| k.starts_with(label_filter)));
+                }
+            } else if let Some(ann_filter) = self
+                .filter
+                .strip_prefix("ann:")
+                .or_else(|| self.filter.strip_prefix("annotations:"))
+            {
+                // Annotation filter
+                if ann_filter.is_empty() {
+                    // Just "ann:" or "annotations:" - show only resources with at least one annotation
+                    resources.retain(|r| !r.annotations.is_empty());
+                } else if let Some((key, value)) = ann_filter.split_once('=') {
+                    // key=value match - filter by prefix match for progressive filtering
+                    resources.retain(|r| {
+                        r.annotations
+                            .iter()
+                            .any(|(k, v)| k.starts_with(key) && v.starts_with(value))
+                    });
+                } else {
+                    // Key prefix match (any value) - progressive filtering as user types
+                    resources.retain(|r| r.annotations.keys().any(|k| k.starts_with(ann_filter)));
+                }
+            } else {
+                // Standard text filter - matches name
+                resources.retain(|r| r.name.contains(&self.filter));
+            }
         }
 
         // Sort by namespace, then resource type, then name
@@ -1001,62 +1088,128 @@ impl App {
             }
         }
 
-        // Calculate header height dynamically based on resource type wrapping
-        // Filter info is now on its own line when active, so add 1 line if filtering
-        // Ensure header is tall enough for ASCII art (5 lines) + borders + padding
-        let base_height = 3; // Context line, Flux9s line, at least one resource line
-        let filter_line = if !self.filter.is_empty() || self.selected_resource_type.is_some() {
-            1
-        } else {
-            0
-        };
-        let resource_type_lines = {
-            let counts = self.state.count_by_type();
-            let available_width = (f.size().width * 70 / 100).saturating_sub(12);
-            let mut lines = 1;
-            let mut current_len = 11; // "Resources: "
-            for (rt, count) in counts.iter() {
-                let part = format!("{}:{} ", rt, count);
-                if current_len + part.len() > available_width as usize && current_len > 11 {
-                    lines += 1;
-                    current_len = part.len();
-                } else {
-                    current_len += part.len();
-                }
-            }
-            lines
-        };
-        // Ensure header is at least tall enough for ASCII art (5 lines) + borders
-        let min_header_height = 7; // 5 ASCII lines + 2 borders
-        let header_height =
-            (base_height + filter_line + resource_type_lines).max(min_header_height);
-
-        // Calculate footer height dynamically - footer can be 1-2 lines
-        // We need to calculate this before rendering to prevent bouncing
-        let footer_height = {
-            let available_width = f.size().width.saturating_sub(2);
-            // Calculate if footer would wrap (simplified calculation)
-            // Navigation segments: j/k Navigate, : Command, Enter Details, y YAML, s Suspend, r Resume, d Delete, R Reconcile, / Filter(Name), ? Help, Esc Back/Quit
-            let nav_segments_count = 11;
-            let estimated_chars_per_segment = 12; // Average chars per segment including key and label
-            let estimated_separators = (nav_segments_count - 1) * 3; // " | " separators
-            let estimated_total =
-                (nav_segments_count * estimated_chars_per_segment) + estimated_separators;
-            if estimated_total > available_width as usize {
-                2 // Would wrap to 2 lines
-            } else {
-                1 // Single line
-            }
-        };
-
-        // Ensure we have minimum terminal size - if too small, show error message
-        let terminal_height = f.size().height;
         let terminal_width = f.size().width;
-        let footer_constraint = footer_height + 2; // Footer content + borders
-        let min_height = header_height + footer_constraint + 3; // header + footer + min content
-        let min_width = 80;
+        let terminal_height = f.size().height;
+        let current_size = (terminal_width, terminal_height);
 
-        if terminal_height < min_height as u16 || terminal_width < min_width {
+        // Only recalculate layout dimensions when terminal size changes
+        // This prevents flickering/bouncing caused by per-frame recalculation
+        let size_changed = self.cached_terminal_size != Some(current_size);
+        if size_changed {
+            self.cached_terminal_size = Some(current_size);
+
+            // Calculate header height using EXACT same logic as header.rs
+            // header.rs uses: left_area.width.saturating_sub(12) where left_area is 70% of total
+            // We need to match this exactly to prevent mismatched wrapping calculations
+            let header_left_width = {
+                // Layout::split with Percentage(70) gives floor(width * 70 / 100)
+                // but we need to account for potential rounding - use the same method
+                let header_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+                    .split(Rect::new(0, 0, terminal_width, 1));
+                header_chunks[0].width
+            };
+            let available_width_for_resources = header_left_width.saturating_sub(12);
+
+            // Header content lines:
+            // 1. Context line (Context: xxx  Namespace: xxx)
+            // 2. Flux9s | Total line
+            // 3+ Resource type lines (variable based on wrapping)
+            // +1 if filter is active (filter status line)
+            // Plus 2 for borders
+            let base_content_lines: u16 = 2; // Context line + Flux9s/Total line
+            let filter_line: u16 =
+                if !self.filter.is_empty() || self.selected_resource_type.is_some() {
+                    1
+                } else {
+                    0
+                };
+
+            let resource_type_lines: u16 = {
+                let counts = self.state.count_by_type();
+                if counts.is_empty() {
+                    1 // At least one line for "no resources"
+                } else {
+                    let mut lines: u16 = 1;
+                    let mut current_len: usize = 11; // "Resources: " prefix
+
+                    // Sort counts to match header.rs rendering order (alphabetical)
+                    let mut type_counts: Vec<_> = counts.iter().collect();
+                    type_counts.sort_by_key(|(resource_type, _)| *resource_type);
+
+                    for (rt, count) in type_counts.iter() {
+                        let part = format!("{}:{} ", rt, count);
+                        // Match header.rs wrapping logic exactly (line 77-78)
+                        if current_len + part.len() > available_width_for_resources as usize
+                            && current_len > 11
+                        {
+                            lines += 1;
+                            current_len = part.len();
+                        } else {
+                            current_len += part.len();
+                        }
+                    }
+                    lines
+                }
+            };
+
+            // Total content lines + 2 for borders
+            let content_lines = base_content_lines + filter_line + resource_type_lines;
+            // Minimum height for ASCII art (5 lines) + 2 borders = 7
+            let min_header_height: u16 = 7;
+            self.cached_header_height = (content_lines + 2).max(min_header_height);
+
+            // Calculate footer height using EXACT same logic as footer.rs
+            // footer.rs nav_segments match these entries exactly
+            let nav_segments: &[(&str, &str)] = &[
+                ("j/k ", "Navigate"),
+                (":", "Command"),
+                ("Enter", "Details"),
+                ("y", "YAML"),
+                ("t", "Trace"),
+                ("s", "Suspend"),
+                ("r", "Resume"),
+                ("R", "Reconcile"),
+                ("W", "Reconcile+Source"),
+                ("d", "Delete"),
+                ("/", "Filter"),
+                ("?", "Help"),
+                ("Esc", "Back/Quit"),
+            ];
+
+            let footer_available_width = terminal_width.saturating_sub(2); // Account for borders
+
+            // Calculate exact total length (matching footer.rs:190-198)
+            let mut total_length: usize = 0;
+            for (idx, (key, label)) in nav_segments.iter().enumerate() {
+                let separator_len = if idx > 0 { 3 } else { 0 }; // " | "
+                let segment_len = if *key == "j/k " {
+                    key.len() + label.len()
+                } else {
+                    key.len() + 1 + label.len() // key + space + label
+                };
+                total_length += separator_len + segment_len;
+            }
+
+            // Calculate lines needed (matching footer.rs:201-205)
+            let footer_content_lines: u16 = if footer_available_width > 0 {
+                ((total_length as f32) / (footer_available_width as f32)).ceil() as u16
+            } else {
+                1
+            };
+
+            self.cached_footer_height = footer_content_lines.max(1) + 2; // Content + borders
+        }
+
+        let header_height = self.cached_header_height;
+        let footer_constraint = self.cached_footer_height;
+
+        // Ensure we have minimum terminal size
+        let min_height = header_height + footer_constraint + 3; // header + footer + min content
+        let min_width: u16 = 80;
+
+        if terminal_height < min_height || terminal_width < min_width {
             // Terminal too small - show error
             let error_msg = format!(
                 "Terminal too small! Need at least {}x{} (current: {}x{})",
@@ -1079,10 +1232,10 @@ impl App {
                 if self.config.ui.headless {
                     Constraint::Length(0) // No header in headless mode
                 } else {
-                    Constraint::Length(header_height as u16) // Dynamic header height
+                    Constraint::Length(header_height) // Cached header height
                 },
-                Constraint::Min(0), // Main content (flexible)
-                Constraint::Length(footer_constraint as u16), // Footer (content + borders)
+                Constraint::Min(0),                    // Main content (flexible)
+                Constraint::Length(footer_constraint), // Cached footer height
             ])
             .split(f.size());
 

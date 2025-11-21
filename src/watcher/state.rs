@@ -18,6 +18,37 @@ pub struct ResourceInfo {
     pub ready: Option<bool>,
     pub message: Option<String>,
     pub revision: Option<String>,
+    // Cached metadata for filtering
+    pub labels: HashMap<String, String>,
+    pub annotations: HashMap<String, String>,
+}
+
+/// Extract labels from a Kubernetes resource JSON object
+pub fn extract_labels(obj: &serde_json::Value) -> HashMap<String, String> {
+    obj.get("metadata")
+        .and_then(|m| m.get("labels"))
+        .and_then(|l| l.as_object())
+        .map(|labels| {
+            labels
+                .iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Extract annotations from a Kubernetes resource JSON object
+pub fn extract_annotations(obj: &serde_json::Value) -> HashMap<String, String> {
+    obj.get("metadata")
+        .and_then(|m| m.get("annotations"))
+        .and_then(|a| a.as_object())
+        .map(|annotations| {
+            annotations
+                .iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Thread-safe resource state store
@@ -135,6 +166,8 @@ mod tests {
             ready: Some(true),
             message: Some("Ready".to_string()),
             revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
         };
 
         use crate::models::FluxResourceKind;
@@ -168,6 +201,8 @@ mod tests {
             ready: None,
             message: None,
             revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
         };
         let key = resource_key(
             "default",
@@ -197,6 +232,8 @@ mod tests {
             ready: None,
             message: None,
             revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
         };
 
         let gitrepo = ResourceInfo {
@@ -208,6 +245,8 @@ mod tests {
             ready: None,
             message: None,
             revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
         };
 
         let kustomization2 = ResourceInfo {
@@ -219,6 +258,8 @@ mod tests {
             ready: None,
             message: None,
             revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
         };
 
         state.upsert(
@@ -258,6 +299,8 @@ mod tests {
                 ready: None,
                 message: None,
                 revision: None,
+                labels: HashMap::new(),
+                annotations: HashMap::new(),
             },
         );
 
@@ -272,6 +315,8 @@ mod tests {
                 ready: None,
                 message: None,
                 revision: None,
+                labels: HashMap::new(),
+                annotations: HashMap::new(),
             },
         );
 
@@ -286,6 +331,8 @@ mod tests {
                 ready: None,
                 message: None,
                 revision: None,
+                labels: HashMap::new(),
+                annotations: HashMap::new(),
             },
         );
 
@@ -317,6 +364,8 @@ mod tests {
                 ready: None,
                 message: None,
                 revision: None,
+                labels: HashMap::new(),
+                annotations: HashMap::new(),
             },
         );
 

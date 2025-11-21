@@ -277,6 +277,9 @@ pub async fn run_tui(
         // Process watch events (non-blocking)
         // Update state from watch events
         let mut events_processed = 0;
+        // Track resource type count to detect when header layout needs recalculation
+        let resource_type_count_before = app.state().count_by_type().len();
+
         while let Ok(event) = event_rx.try_recv() {
             events_processed += 1;
             match event {
@@ -284,6 +287,8 @@ pub async fn run_tui(
                     let key = crate::watcher::resource_key(&ns, &name, &resource_type);
                     let (suspended, ready, message, revision) =
                         crate::watcher::extract_status_fields(&obj_json);
+                    let labels = crate::watcher::extract_labels(&obj_json);
+                    let annotations = crate::watcher::extract_annotations(&obj_json);
                     app.state().upsert(
                         key.clone(),
                         crate::watcher::ResourceInfo {
@@ -295,6 +300,8 @@ pub async fn run_tui(
                             ready,
                             message,
                             revision,
+                            labels,
+                            annotations,
                         },
                     );
                     // Store full object for detail view
@@ -317,6 +324,11 @@ pub async fn run_tui(
 
         // Force a redraw if we processed events
         if events_processed > 0 {
+            // Check if number of resource types changed (affects header layout)
+            let resource_type_count_after = app.state().count_by_type().len();
+            if resource_type_count_after != resource_type_count_before {
+                app.notify_resource_types_changed();
+            }
             terminal.draw(|f| app.render(f))?;
         }
     }

@@ -7,6 +7,8 @@ use crate::watcher::ResourceInfo;
 use anyhow::Result;
 use kube::Api;
 use serde_json::json;
+#[cfg(test)]
+use std::collections::HashMap;
 
 use crate::tui::api::get_api_resource_with_fallback;
 
@@ -663,6 +665,8 @@ mod tests {
             ready: None,
             message: None,
             revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
         };
 
         let msg = op.confirmation_message(&resource);
@@ -698,6 +702,8 @@ mod tests {
             ready: None,
             message: None,
             revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
         };
 
         let msg = op.confirmation_message(&resource);
@@ -778,6 +784,8 @@ mod tests {
             ready: None,
             message: None,
             revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
         };
 
         let msg = op.confirmation_message(&resource);
