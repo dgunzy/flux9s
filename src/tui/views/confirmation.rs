@@ -1,5 +1,6 @@
 //! Confirmation dialog rendering
 
+use crate::tui::app::PendingOperation;
 use crate::tui::operations::OperationRegistry;
 use crate::tui::theme::Theme;
 use crate::watcher::{resource_key, ResourceState};
@@ -15,14 +16,17 @@ use ratatui::{
 pub fn render_confirmation(
     f: &mut Frame,
     area: Rect,
-    confirmation_pending: &(String, String, String, char),
+    confirmation_pending: &PendingOperation,
     operation_registry: &OperationRegistry,
     state: &ResourceState,
     theme: &Theme,
 ) {
-    let (ref resource_type, ref namespace, ref name, op_key) = confirmation_pending;
+    let resource_type = &confirmation_pending.resource_type;
+    let namespace = &confirmation_pending.namespace;
+    let name = &confirmation_pending.name;
+    let op_key = confirmation_pending.operation_key;
 
-    if let Some(operation) = operation_registry.get_by_keybinding(*op_key) {
+    if let Some(operation) = operation_registry.get_by_keybinding(op_key) {
         if let Some(resource) = state.get(&resource_key(namespace, name, resource_type)) {
             let msg = operation.confirmation_message(&resource);
             let lines = vec![

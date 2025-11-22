@@ -21,7 +21,7 @@ test: ## Run library and unit tests
 test-integration: ## Run integration tests
 	cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests
 
-ci: fmt-check clippy test test-integration ## Run all CI checks in order
+ci: fmt clippy test test-integration ## Run all CI checks in order
 
 # Build targets
 build: ## Build the project (debug)

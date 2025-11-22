@@ -1,5 +1,6 @@
 //! Footer view rendering
 
+use crate::tui::app::PendingOperation;
 use crate::tui::operations::OperationRegistry;
 use crate::tui::theme::Theme;
 use crate::watcher::{get_all_commands, ResourceState};
@@ -21,7 +22,7 @@ pub fn render_footer(
     filter_mode: bool,
     filter: &str,
     show_help: bool,
-    confirmation_pending: &Option<(String, String, String, char)>,
+    confirmation_pending: &Option<PendingOperation>,
     status_message: &Option<(String, bool)>,
     operation_registry: &OperationRegistry,
     state: &ResourceState,
@@ -47,15 +48,14 @@ pub fn render_footer(
             Span::styled("?", theme.footer_key_style()),
             Span::raw(" to hide help"),
         ]
-    } else if let Some((ref resource_type, ref namespace, ref name, op_key)) = confirmation_pending
-    {
+    } else if let Some(ref pending) = confirmation_pending {
         render_confirmation_footer_text(
             operation_registry,
             state,
-            resource_type,
-            namespace,
-            name,
-            *op_key,
+            &pending.resource_type,
+            &pending.namespace,
+            &pending.name,
+            pending.operation_key,
             theme,
         )
     } else if let Some((ref msg, is_error)) = status_message {

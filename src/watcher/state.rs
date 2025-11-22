@@ -3,7 +3,71 @@
 //! Tracks the current state of watched resources for display in the TUI.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, RwLock};
+
+/// A type-safe resource key that identifies a Flux resource.
+///
+/// Format: `resource_type:namespace:name`
+///
+/// This type provides safe parsing and construction of resource keys,
+/// avoiding fragile string splitting operations.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResourceKey {
+    pub resource_type: String,
+    pub namespace: String,
+    pub name: String,
+}
+
+impl ResourceKey {
+    /// Create a new ResourceKey from its components
+    pub fn new(
+        resource_type: impl Into<String>,
+        namespace: impl Into<String>,
+        name: impl Into<String>,
+    ) -> Self {
+        Self {
+            resource_type: resource_type.into(),
+            namespace: namespace.into(),
+            name: name.into(),
+        }
+    }
+
+    /// Parse a resource key string in the format "resource_type:namespace:name"
+    ///
+    /// Returns None if the string doesn't have exactly 3 colon-separated parts.
+    pub fn parse(key: &str) -> Option<Self> {
+        let parts: Vec<&str> = key.split(':').collect();
+        if parts.len() == 3 {
+            Some(Self {
+                resource_type: parts[0].to_string(),
+                namespace: parts[1].to_string(),
+                name: parts[2].to_string(),
+            })
+        } else {
+            tracing::warn!(
+                "Failed to parse resource key '{}': expected format 'resource_type:namespace:name'",
+                key
+            );
+            None
+        }
+    }
+
+    /// Convert the ResourceKey back to its string representation (unused so far)
+    pub fn to_key_string(&self) -> String {
+        format!("{}:{}:{}", self.resource_type, self.namespace, self.name)
+    }
+}
+
+impl fmt::Display for ResourceKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}/{} ({})",
+            self.namespace, self.name, self.resource_type
+        )
+    }
+}
 
 /// Resource metadata for display
 #[derive(Debug, Clone)]
@@ -129,6 +193,50 @@ pub fn resource_key(namespace: &str, name: &str, resource_type: &str) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_resource_key_new() {
+        let key = ResourceKey::new("Kustomization", "default", "my-resource");
+        assert_eq!(key.resource_type, "Kustomization");
+        assert_eq!(key.namespace, "default");
+        assert_eq!(key.name, "my-resource");
+    }
+
+    #[test]
+    fn test_resource_key_parse_valid() {
+        let key = ResourceKey::parse("Kustomization:default:my-resource").unwrap();
+        assert_eq!(key.resource_type, "Kustomization");
+        assert_eq!(key.namespace, "default");
+        assert_eq!(key.name, "my-resource");
+    }
+
+    #[test]
+    fn test_resource_key_parse_invalid() {
+        assert!(ResourceKey::parse("invalid").is_none());
+        assert!(ResourceKey::parse("only:two").is_none());
+        assert!(ResourceKey::parse("too:many:parts:here").is_none());
+        assert!(ResourceKey::parse("").is_none());
+    }
+
+    #[test]
+    fn test_resource_key_to_string() {
+        let key = ResourceKey::new("GitRepository", "flux-system", "flux-system");
+        assert_eq!(key.to_key_string(), "GitRepository:flux-system:flux-system");
+    }
+
+    #[test]
+    fn test_resource_key_display() {
+        let key = ResourceKey::new("Kustomization", "default", "my-app");
+        assert_eq!(format!("{}", key), "default/my-app (Kustomization)");
+    }
+
+    #[test]
+    fn test_resource_key_roundtrip() {
+        let original = ResourceKey::new("HelmRelease", "production", "nginx");
+        let key_string = original.to_key_string();
+        let parsed = ResourceKey::parse(&key_string).unwrap();
+        assert_eq!(original, parsed);
+    }
 
     #[test]
     fn test_resource_key_generation() {
