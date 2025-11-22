@@ -15,8 +15,8 @@ pub use trace::{trace_object, SourceRef, TraceNode, TraceResult, TraceSpec, Trac
 
 // Re-export commonly used types for convenience
 pub use watcher::{
-    extract_status_fields, get_all_commands, resource_key, ResourceInfo, ResourceState,
-    ResourceWatcher, WatchEvent, WatchableResource,
+    extract_status_fields, get_all_commands, resource_key, ResourceInfo, ResourceKey,
+    ResourceState, ResourceWatcher, WatchEvent, WatchableResource,
 };
 
 // Re-export TUI functions for testing

@@ -2,6 +2,7 @@
 
 use crate::tui::theme::Theme;
 use crate::tui::trace::{TraceNode, TraceResult};
+use crate::watcher::ResourceKey;
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -16,7 +17,7 @@ pub fn render_resource_trace(
     area: Rect,
     _selected_resource_key: &Option<String>,
     trace_result: &Option<TraceResult>,
-    trace_pending: &Option<(String, String, String)>,
+    trace_pending: &Option<ResourceKey>,
     scroll_offset: &mut usize,
     theme: &Theme,
 ) {

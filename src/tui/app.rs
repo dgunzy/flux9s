@@ -2,7 +2,7 @@
 
 use crate::tui::views::{self, *};
 use crate::tui::{OperationRegistry, Theme};
-use crate::watcher::ResourceState;
+use crate::watcher::{ResourceKey, ResourceState};
 use anyhow::Result;
 use crossterm::event::KeyEvent;
 use ratatui::{
@@ -14,23 +14,64 @@ use ratatui::{
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-// Type aliases for complex types
-type TraceRequest = (
-    String,
-    String,
-    String,
-    kube::Client,
-    tokio::sync::oneshot::Sender<anyhow::Result<crate::tui::trace::TraceResult>>,
-);
+/// Request to trace a resource's ownership chain
+pub struct TraceRequest {
+    /// The type of resource to trace (e.g., "Kustomization", "HelmRelease")
+    pub resource_type: String,
+    /// The namespace of the resource
+    pub namespace: String,
+    /// The name of the resource
+    pub name: String,
+    /// Kubernetes client to use for API calls
+    pub client: kube::Client,
+    /// Channel to send the trace result back
+    pub tx: tokio::sync::oneshot::Sender<anyhow::Result<crate::tui::trace::TraceResult>>,
+}
 
-type OperationRequest = (
-    String,
-    String,
-    String,
-    char,
-    kube::Client,
-    tokio::sync::oneshot::Sender<anyhow::Result<()>>,
-);
+/// Request to execute an operation on a resource
+pub struct OperationRequest {
+    /// The type of resource to operate on
+    pub resource_type: String,
+    /// The namespace of the resource
+    pub namespace: String,
+    /// The name of the resource
+    pub name: String,
+    /// The operation keybinding character (e.g., 's' for suspend, 'r' for resume)
+    pub operation_key: char,
+    /// Kubernetes client to use for API calls
+    pub client: kube::Client,
+    /// Channel to send the operation result back
+    pub tx: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+}
+
+/// Pending operation awaiting confirmation
+#[derive(Clone)]
+pub struct PendingOperation {
+    /// The type of resource to operate on
+    pub resource_type: String,
+    /// The namespace of the resource
+    pub namespace: String,
+    /// The name of the resource
+    pub name: String,
+    /// The operation keybinding character
+    pub operation_key: char,
+}
+
+impl PendingOperation {
+    pub fn new(
+        resource_type: String,
+        namespace: String,
+        name: String,
+        operation_key: char,
+    ) -> Self {
+        Self {
+            resource_type,
+            namespace,
+            name,
+            operation_key,
+        }
+    }
+}
 
 /// Main application state
 pub struct App {
@@ -54,7 +95,7 @@ pub struct App {
     yaml_fetch_pending: Option<String>, // Key of resource being fetched
     yaml_fetched: Option<serde_json::Value>, // Fetched YAML data
     yaml_fetch_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<serde_json::Value>>>, // Channel to receive fetch result
-    trace_pending: Option<(String, String, String)>, // (resource_type, namespace, name) for trace
+    trace_pending: Option<ResourceKey>, // Resource to trace
     trace_result: Option<crate::tui::trace::TraceResult>, // Trace result data
     trace_result_rx:
         Option<tokio::sync::oneshot::Receiver<anyhow::Result<crate::tui::trace::TraceResult>>>, // Channel to receive trace result
@@ -62,11 +103,11 @@ pub struct App {
     show_splash: bool,
     splash_start_time: Option<std::time::Instant>,
     operation_registry: OperationRegistry,
-    pending_operation: Option<(String, String, String, char)>, // (resource_type, namespace, name, operation_key)
+    pending_operation: Option<PendingOperation>, // Operation being executed
     operation_result_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>>, // Channel to receive operation result
     last_operation_key: Option<char>, // Store operation key for success message
-    confirmation_pending: Option<(String, String, String, char)>, // (resource_type, namespace, name, operation_key)
-    status_message: Option<(String, bool)>,                       // (message, is_error)
+    confirmation_pending: Option<PendingOperation>, // Operation awaiting user confirmation
+    status_message: Option<(String, bool)>, // (message, is_error)
     theme: Theme,
     config: crate::config::Config, // Application configuration
     // Cached layout dimensions to prevent bouncing/flickering
@@ -205,16 +246,19 @@ impl App {
     }
 
     pub fn trigger_trace(&mut self) -> Option<TraceRequest> {
-        if let Some((ref resource_type, ref namespace, ref name)) = self.trace_pending {
+        if let Some(ref rk) = self.trace_pending {
             if let Some(ref client) = self.kube_client {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                let rt = resource_type.clone();
-                let ns = namespace.clone();
-                let n = name.clone();
-                let client_clone = client.clone();
+                let request = TraceRequest {
+                    resource_type: rk.resource_type.clone(),
+                    namespace: rk.namespace.clone(),
+                    name: rk.name.clone(),
+                    client: client.clone(),
+                    tx,
+                };
                 self.trace_pending = None;
                 self.trace_result_rx = Some(rx);
-                return Some((rt, ns, n, client_clone, tx));
+                return Some(request);
             }
         }
         None
@@ -397,7 +441,7 @@ impl App {
                                 ));
                             } else if operation.requires_confirmation() {
                                 // Show confirmation dialog
-                                self.confirmation_pending = Some((
+                                self.confirmation_pending = Some(PendingOperation::new(
                                     resource.resource_type.clone(),
                                     resource.namespace.clone(),
                                     resource.name.clone(),
@@ -463,7 +507,7 @@ impl App {
                 };
 
                 if let Some(resource) = resource_info {
-                    self.trace_pending = Some((
+                    self.trace_pending = Some(ResourceKey::new(
                         resource.resource_type.clone(),
                         resource.namespace.clone(),
                         resource.name.clone(),
@@ -614,7 +658,7 @@ impl App {
     }
 
     fn handle_confirmation_key(&mut self, key: KeyEvent) -> Option<bool> {
-        if let Some((resource_type, namespace, name, op_key)) = &self.confirmation_pending {
+        if let Some(ref pending) = self.confirmation_pending {
             match key.code {
                 crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => {
                     // Check readonly mode before confirming
@@ -627,13 +671,15 @@ impl App {
                         ));
                         return None;
                     }
-                    // Confirm operation
-                    let rt = resource_type.clone();
-                    let ns = namespace.clone();
-                    let n = name.clone();
-                    let key = *op_key;
+                    // Confirm operation - clone data before clearing pending state
+                    let pending_clone = pending.clone();
                     self.confirmation_pending = None;
-                    self.execute_operation(&rt, &ns, &n, key);
+                    self.execute_operation(
+                        &pending_clone.resource_type,
+                        &pending_clone.namespace,
+                        &pending_clone.name,
+                        pending_clone.operation_key,
+                    );
                 }
                 crossterm::event::KeyCode::Char('n')
                 | crossterm::event::KeyCode::Char('N')
@@ -666,31 +712,39 @@ impl App {
 
         if self.operation_registry.get_by_keybinding(op_key).is_some() && self.kube_client.is_some()
         {
-            let rt = resource_type.to_string();
-            let ns = namespace.to_string();
-            let n = name.to_string();
-
             // Mark operation as pending - will be executed in main loop
-            self.pending_operation = Some((rt, ns, n, op_key));
+            self.pending_operation = Some(PendingOperation::new(
+                resource_type.to_string(),
+                namespace.to_string(),
+                name.to_string(),
+                op_key,
+            ));
         }
     }
 
     pub fn trigger_operation_execution(&mut self) -> Option<OperationRequest> {
-        if let Some((ref resource_type, ref namespace, ref name, op_key)) = self.pending_operation {
+        if let Some(ref pending) = self.pending_operation {
             if let Some(ref client) = self.kube_client {
-                if self.operation_registry.get_by_keybinding(op_key).is_some() {
+                if self
+                    .operation_registry
+                    .get_by_keybinding(pending.operation_key)
+                    .is_some()
+                {
                     let (tx, rx) = tokio::sync::oneshot::channel();
-                    let rt = resource_type.clone();
-                    let ns = namespace.clone();
-                    let n = name.clone();
-                    let key = op_key;
-                    let client_clone = client.clone();
+                    let request = OperationRequest {
+                        resource_type: pending.resource_type.clone(),
+                        namespace: pending.namespace.clone(),
+                        name: pending.name.clone(),
+                        operation_key: pending.operation_key,
+                        client: client.clone(),
+                        tx,
+                    };
 
+                    self.last_operation_key = Some(pending.operation_key); // Store operation key for success message
                     self.pending_operation = None;
-                    self.last_operation_key = Some(key); // Store operation key for success message
                     self.operation_result_rx = Some(rx);
 
-                    return Some((rt, ns, n, key, client_clone, tx));
+                    return Some(request);
                 }
             }
         }
@@ -877,15 +931,13 @@ impl App {
             if parts.is_empty() {
                 // If no args, trace currently selected resource
                 if let Some(ref key) = self.selected_resource_key {
-                    let key_parts: Vec<&str> = key.split(':').collect();
-                    if key_parts.len() == 3 {
-                        let resource_type = key_parts[0].to_string();
-                        let namespace = key_parts[1].to_string();
-                        let name = key_parts[2].to_string();
-                        self.trace_pending = Some((resource_type, namespace, name));
+                    if let Some(rk) = ResourceKey::parse(key) {
+                        self.trace_pending = Some(rk);
                         self.trace_result = None;
                     } else {
-                        self.status_message = Some(("No resource selected".to_string(), true));
+                        tracing::warn!("Failed to parse resource key for trace command: {}", key);
+                        self.status_message =
+                            Some(("Invalid resource key format".to_string(), true));
                     }
                 } else {
                     self.status_message = Some(("No resource selected".to_string(), true));
@@ -916,7 +968,7 @@ impl App {
                         .namespace
                         .clone()
                         .unwrap_or_else(|| "default".to_string());
-                    self.trace_pending = Some((
+                    self.trace_pending = Some(ResourceKey::new(
                         resource_type_normalized.to_string(),
                         namespace,
                         name.to_string(),

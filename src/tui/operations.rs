@@ -4,13 +4,63 @@
 //! Operations are implemented as a trait-based system for easy extension.
 
 use crate::watcher::ResourceInfo;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use kube::api::{Patch, PatchParams};
+use kube::core::DynamicObject;
 use kube::Api;
 use serde_json::json;
 #[cfg(test)]
 use std::collections::HashMap;
 
 use crate::tui::api::get_api_resource_with_fallback;
+
+/// Helper to get a namespaced API for a resource with version fallback
+async fn get_resource_api(
+    client: &kube::Client,
+    resource_type: &str,
+    namespace: &str,
+    name: &str,
+) -> Result<Api<DynamicObject>> {
+    let api_resource = get_api_resource_with_fallback(client, resource_type, namespace, name)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to get API resource for {}/{} in namespace {}",
+                resource_type, name, namespace
+            )
+        })?;
+    Ok(Api::namespaced_with(
+        client.clone(),
+        namespace,
+        &api_resource,
+    ))
+}
+
+/// Helper to check if a resource is suspended
+fn is_resource_suspended(obj: &DynamicObject) -> bool {
+    obj.data
+        .get("spec")
+        .and_then(|s| s.as_object())
+        .and_then(|spec| spec.get("suspend"))
+        .and_then(|s| s.as_bool())
+        .unwrap_or(false)
+}
+
+/// Helper to get or create annotations map from a resource
+fn get_annotations(obj: &DynamicObject) -> serde_json::Map<String, serde_json::Value> {
+    obj.data
+        .get("metadata")
+        .and_then(|m| m.get("annotations"))
+        .and_then(|a| a.as_object())
+        .cloned()
+        .unwrap_or_else(serde_json::Map::new)
+}
+
+/// Helper to add reconcile annotation to a resource
+fn add_reconcile_annotation(annotations: &mut serde_json::Map<String, serde_json::Value>) {
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    annotations.insert("reconcile.fluxcd.io/requestedAt".to_string(), json!(now));
+}
 
 /// Trait for Flux operations
 #[async_trait::async_trait]
@@ -52,15 +102,14 @@ impl FluxOperation for SuspendOperation {
         namespace: &str,
         name: &str,
     ) -> Result<()> {
-        use kube::api::{Patch, PatchParams};
-        use kube::core::DynamicObject;
-        use kube::Api;
+        tracing::debug!(
+            "Suspending {}/{} in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
 
-        // Get ApiResource with version fallback (version-agnostic)
-        let api_resource =
-            get_api_resource_with_fallback(client, resource_type, namespace, name).await?;
-        let api: Api<DynamicObject> =
-            Api::namespaced_with(client.clone(), namespace, &api_resource);
+        let api = get_resource_api(client, resource_type, namespace, name).await?;
 
         // Patch spec.suspend to true
         let patch = json!({
@@ -69,10 +118,21 @@ impl FluxOperation for SuspendOperation {
             }
         });
 
-        // Use Merge patch without force (force only works with Patch::Apply)
-        let patch_params = PatchParams::default();
-        api.patch(name, &patch_params, &Patch::Merge(patch)).await?;
+        api.patch(name, &PatchParams::default(), &Patch::Merge(patch))
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to suspend {}/{} in namespace {}",
+                    resource_type, name, namespace
+                )
+            })?;
 
+        tracing::info!(
+            "Successfully suspended {}/{} in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
         Ok(())
     }
 
@@ -121,15 +181,14 @@ impl FluxOperation for ResumeOperation {
         namespace: &str,
         name: &str,
     ) -> Result<()> {
-        use kube::api::{Patch, PatchParams};
-        use kube::core::DynamicObject;
-        use kube::Api;
+        tracing::debug!(
+            "Resuming {}/{} in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
 
-        // Get ApiResource with version fallback (version-agnostic)
-        let api_resource =
-            get_api_resource_with_fallback(client, resource_type, namespace, name).await?;
-        let api: Api<DynamicObject> =
-            Api::namespaced_with(client.clone(), namespace, &api_resource);
+        let api = get_resource_api(client, resource_type, namespace, name).await?;
 
         // Patch spec.suspend to false
         let patch = json!({
@@ -138,10 +197,21 @@ impl FluxOperation for ResumeOperation {
             }
         });
 
-        // Use Merge patch without force (force only works with Patch::Apply)
-        let patch_params = PatchParams::default();
-        api.patch(name, &patch_params, &Patch::Merge(patch)).await?;
+        api.patch(name, &PatchParams::default(), &Patch::Merge(patch))
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to resume {}/{} in namespace {}",
+                    resource_type, name, namespace
+                )
+            })?;
 
+        tracing::info!(
+            "Successfully resumed {}/{} in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
         Ok(())
     }
 
@@ -191,24 +261,40 @@ impl FluxOperation for DeleteOperation {
         name: &str,
     ) -> Result<()> {
         use kube::api::DeleteParams;
-        use kube::core::DynamicObject;
-        use kube::Api;
 
-        // Get ApiResource with version fallback (version-agnostic)
-        let api_resource =
-            get_api_resource_with_fallback(client, resource_type, namespace, name).await?;
-        let api: Api<DynamicObject> =
-            Api::namespaced_with(client.clone(), namespace, &api_resource);
+        tracing::debug!(
+            "Deleting {}/{} in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
+
+        let api = get_resource_api(client, resource_type, namespace, name).await?;
 
         // First, verify the resource exists (like Flux does)
-        let _obj = api
-            .get(name)
-            .await
-            .map_err(|e| anyhow::anyhow!("Resource not found: {}", e))?;
+        api.get(name).await.with_context(|| {
+            format!(
+                "Resource {}/{} not found in namespace {}",
+                resource_type, name, namespace
+            )
+        })?;
 
         // Then delete it
-        api.delete(name, &DeleteParams::default()).await?;
+        api.delete(name, &DeleteParams::default())
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to delete {}/{} in namespace {}",
+                    resource_type, name, namespace
+                )
+            })?;
 
+        tracing::info!(
+            "Successfully deleted {}/{} in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
         Ok(())
     }
 
@@ -251,43 +337,42 @@ impl FluxOperation for ReconcileOperation {
         namespace: &str,
         name: &str,
     ) -> Result<()> {
-        use kube::api::{Patch, PatchParams};
-        use kube::core::DynamicObject;
-        use kube::Api;
+        tracing::debug!(
+            "Reconciling {}/{} in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
 
-        // Get ApiResource with version fallback (version-agnostic)
-        let api_resource =
-            get_api_resource_with_fallback(client, resource_type, namespace, name).await?;
-        let api: Api<DynamicObject> =
-            Api::namespaced_with(client.clone(), namespace, &api_resource);
+        let api = get_resource_api(client, resource_type, namespace, name).await?;
 
         // First, get the resource to verify it exists and get current state
-        let obj = api
-            .get(name)
-            .await
-            .map_err(|e| anyhow::anyhow!("Resource not found: {}", e))?;
+        let obj = api.get(name).await.with_context(|| {
+            format!(
+                "Resource {}/{} not found in namespace {}",
+                resource_type, name, namespace
+            )
+        })?;
 
         // Check if resource is suspended (like Flux does)
-        if let Some(spec) = obj.data.get("spec").and_then(|s| s.as_object()) {
-            if let Some(suspended) = spec.get("suspend").and_then(|s| s.as_bool()) {
-                if suspended {
-                    return Err(anyhow::anyhow!("Resource is suspended"));
-                }
-            }
+        if is_resource_suspended(&obj) {
+            tracing::warn!(
+                "Cannot reconcile suspended resource {}/{} in namespace {}",
+                resource_type,
+                name,
+                namespace
+            );
+            return Err(anyhow::anyhow!(
+                "Cannot reconcile {}/{} in namespace {}: resource is suspended",
+                resource_type,
+                name,
+                namespace
+            ));
         }
 
-        // Get current annotations or create empty map
-        let mut annotations = obj
-            .data
-            .get("metadata")
-            .and_then(|m| m.get("annotations"))
-            .and_then(|a| a.as_object())
-            .cloned()
-            .unwrap_or_else(serde_json::Map::new);
-
-        // Add reconcile annotation with timestamp (RFC3339Nano format like Flux)
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-        annotations.insert("reconcile.fluxcd.io/requestedAt".to_string(), json!(now));
+        // Get current annotations and add reconcile annotation
+        let mut annotations = get_annotations(&obj);
+        add_reconcile_annotation(&mut annotations);
 
         // Create merge patch for annotations
         let patch = json!({
@@ -296,10 +381,21 @@ impl FluxOperation for ReconcileOperation {
             }
         });
 
-        // Use Merge patch without force (force only works with Patch::Apply)
-        let patch_params = PatchParams::default();
-        api.patch(name, &patch_params, &Patch::Merge(patch)).await?;
+        api.patch(name, &PatchParams::default(), &Patch::Merge(patch))
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to reconcile {}/{} in namespace {}",
+                    resource_type, name, namespace
+                )
+            })?;
 
+        tracing::info!(
+            "Successfully triggered reconciliation for {}/{} in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
         Ok(())
     }
 
@@ -336,10 +432,15 @@ impl FluxOperation for ReconcileWithSourceOperation {
         namespace: &str,
         name: &str,
     ) -> Result<()> {
-        use kube::api::{Patch, PatchParams};
-        use kube::core::DynamicObject;
-
         use crate::models::FluxResourceKind;
+
+        tracing::debug!(
+            "Reconciling {}/{} with source in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
+
         // Only works for Kustomization and HelmRelease
         let kind = FluxResourceKind::parse_optional(resource_type);
         if !matches!(
@@ -347,29 +448,35 @@ impl FluxOperation for ReconcileWithSourceOperation {
             Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
         ) {
             return Err(anyhow::anyhow!(
-                "Reconcile with source only works for Kustomization and HelmRelease"
+                "Reconcile with source only works for Kustomization and HelmRelease, not {}",
+                resource_type
             ));
         }
 
-        // Get ApiResource with version fallback (version-agnostic)
-        let api_resource =
-            get_api_resource_with_fallback(client, resource_type, namespace, name).await?;
-        let api: Api<DynamicObject> =
-            Api::namespaced_with(client.clone(), namespace, &api_resource);
+        let api = get_resource_api(client, resource_type, namespace, name).await?;
 
         // Get the resource to check if it exists and get sourceRef
-        let obj = api
-            .get(name)
-            .await
-            .map_err(|e| anyhow::anyhow!("Resource not found: {}", e))?;
+        let obj = api.get(name).await.with_context(|| {
+            format!(
+                "Resource {}/{} not found in namespace {}",
+                resource_type, name, namespace
+            )
+        })?;
 
         // Check if resource is suspended
-        if let Some(spec) = obj.data.get("spec").and_then(|s| s.as_object()) {
-            if let Some(suspended) = spec.get("suspend").and_then(|s| s.as_bool()) {
-                if suspended {
-                    return Err(anyhow::anyhow!("Resource is suspended"));
-                }
-            }
+        if is_resource_suspended(&obj) {
+            tracing::warn!(
+                "Cannot reconcile suspended resource {}/{} in namespace {}",
+                resource_type,
+                name,
+                namespace
+            );
+            return Err(anyhow::anyhow!(
+                "Cannot reconcile {}/{} in namespace {}: resource is suspended",
+                resource_type,
+                name,
+                namespace
+            ));
         }
 
         // Extract sourceRef
@@ -378,56 +485,66 @@ impl FluxOperation for ReconcileWithSourceOperation {
             .get("spec")
             .and_then(|s| s.get("sourceRef"))
             .and_then(|sr| sr.as_object())
-            .ok_or_else(|| anyhow::anyhow!("Resource has no sourceRef"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}/{} in namespace {} has no sourceRef",
+                    resource_type,
+                    name,
+                    namespace
+                )
+            })?;
 
         let source_kind = source_ref
             .get("kind")
             .and_then(|k| k.as_str())
-            .ok_or_else(|| anyhow::anyhow!("sourceRef missing kind"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}/{} sourceRef missing kind", resource_type, name))?;
         let source_name = source_ref
             .get("name")
             .and_then(|n| n.as_str())
-            .ok_or_else(|| anyhow::anyhow!("sourceRef missing name"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}/{} sourceRef missing name", resource_type, name))?;
         let source_namespace = source_ref
             .get("namespace")
             .and_then(|n| n.as_str())
             .unwrap_or(namespace);
 
+        tracing::debug!(
+            "Found source reference: {}/{} in namespace {}",
+            source_kind,
+            source_name,
+            source_namespace
+        );
+
         // Step 1: Reconcile the source first
-        // Get ApiResource with version fallback (version-agnostic)
-        let source_api_resource =
-            get_api_resource_with_fallback(client, source_kind, source_namespace, source_name)
-                .await?;
-        let source_api: Api<DynamicObject> =
-            Api::namespaced_with(client.clone(), source_namespace, &source_api_resource);
+        let source_api =
+            get_resource_api(client, source_kind, source_namespace, source_name).await?;
 
         // Get source object
-        let source_obj = source_api
-            .get(source_name)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to fetch source {}: {}", source_kind, e))?;
+        let source_obj = source_api.get(source_name).await.with_context(|| {
+            format!(
+                "Failed to fetch source {}/{} in namespace {}",
+                source_kind, source_name, source_namespace
+            )
+        })?;
 
         // Check if source is suspended
-        if let Some(spec) = source_obj.data.get("spec").and_then(|s| s.as_object()) {
-            if let Some(suspended) = spec.get("suspend").and_then(|s| s.as_bool()) {
-                if suspended {
-                    return Err(anyhow::anyhow!("Source {} is suspended", source_kind));
-                }
-            }
+        if is_resource_suspended(&source_obj) {
+            tracing::warn!(
+                "Cannot reconcile: source {}/{} in namespace {} is suspended",
+                source_kind,
+                source_name,
+                source_namespace
+            );
+            return Err(anyhow::anyhow!(
+                "Cannot reconcile: source {}/{} in namespace {} is suspended",
+                source_kind,
+                source_name,
+                source_namespace
+            ));
         }
 
-        // Get current annotations or create empty map
-        let mut source_annotations = source_obj
-            .data
-            .get("metadata")
-            .and_then(|m| m.get("annotations"))
-            .and_then(|a| a.as_object())
-            .cloned()
-            .unwrap_or_else(serde_json::Map::new);
-
-        // Add reconcile annotation to source
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-        source_annotations.insert("reconcile.fluxcd.io/requestedAt".to_string(), json!(now));
+        // Get current annotations and add reconcile annotation to source
+        let mut source_annotations = get_annotations(&source_obj);
+        add_reconcile_annotation(&mut source_annotations);
 
         // Patch source with reconcile annotation
         let source_patch = json!({
@@ -435,10 +552,26 @@ impl FluxOperation for ReconcileWithSourceOperation {
                 "annotations": source_annotations
             }
         });
-        let patch_params = PatchParams::default();
         source_api
-            .patch(source_name, &patch_params, &Patch::Merge(source_patch))
-            .await?;
+            .patch(
+                source_name,
+                &PatchParams::default(),
+                &Patch::Merge(source_patch),
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to trigger reconciliation on source {}/{} in namespace {}",
+                    source_kind, source_name, source_namespace
+                )
+            })?;
+
+        tracing::info!(
+            "Triggered reconciliation on source {}/{} in namespace {}",
+            source_kind,
+            source_name,
+            source_namespace
+        );
 
         // Step 2: Wait for source reconciliation to complete
         // Poll until lastHandledReconcileAt matches our requestedAt
@@ -539,21 +672,16 @@ impl FluxOperation for ReconcileWithSourceOperation {
 
         // Step 3: Reconcile the Kustomization/HelmRelease
         // Get fresh copy of the resource to ensure we have latest annotations
-        let current_obj = api.get(name).await?;
-        let mut annotations = current_obj
-            .data
-            .get("metadata")
-            .and_then(|m| m.get("annotations"))
-            .and_then(|a| a.as_object())
-            .cloned()
-            .unwrap_or_else(serde_json::Map::new);
+        let current_obj = api.get(name).await.with_context(|| {
+            format!(
+                "Failed to refetch {}/{} in namespace {}",
+                resource_type, name, namespace
+            )
+        })?;
 
-        // Use a new timestamp for the resource reconciliation
-        let resource_now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-        annotations.insert(
-            "reconcile.fluxcd.io/requestedAt".to_string(),
-            json!(resource_now),
-        );
+        // Get current annotations and add reconcile annotation
+        let mut annotations = get_annotations(&current_obj);
+        add_reconcile_annotation(&mut annotations);
 
         let resource_patch = json!({
             "metadata": {
@@ -561,10 +689,21 @@ impl FluxOperation for ReconcileWithSourceOperation {
             }
         });
 
-        api.patch(name, &patch_params, &Patch::Merge(resource_patch))
+        api.patch(name, &PatchParams::default(), &Patch::Merge(resource_patch))
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to reconcile {}: {}", resource_type, e))?;
+            .with_context(|| {
+                format!(
+                    "Failed to reconcile {}/{} in namespace {}",
+                    resource_type, name, namespace
+                )
+            })?;
 
+        tracing::info!(
+            "Successfully triggered reconciliation for {}/{} with source in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
         Ok(())
     }
 
