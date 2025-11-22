@@ -123,27 +123,61 @@ pub fn render_resource_detail(
             // Show key spec fields
             if let Some(url) = spec.get("url").and_then(|u| u.as_str()) {
                 lines.push(Line::from(vec![
-                    Span::styled("  URL: ", Style::default().fg(theme.text_label)),
+                    Span::styled("URL: ", Style::default().fg(theme.text_label)),
                     Span::raw(url),
                 ]));
             }
             if let Some(branch) = spec.get("branch").and_then(|b| b.as_str()) {
                 lines.push(Line::from(vec![
-                    Span::styled("  Branch: ", Style::default().fg(theme.text_label)),
+                    Span::styled("Branch: ", Style::default().fg(theme.text_label)),
                     Span::raw(branch),
                 ]));
             }
             if let Some(path) = spec.get("path").and_then(|p| p.as_str()) {
                 lines.push(Line::from(vec![
-                    Span::styled("  Path: ", Style::default().fg(theme.text_label)),
+                    Span::styled("Path: ", Style::default().fg(theme.text_label)),
                     Span::raw(path),
                 ]));
             }
             if let Some(interval) = spec.get("interval").and_then(|i| i.as_str()) {
                 lines.push(Line::from(vec![
-                    Span::styled("  Interval: ", Style::default().fg(theme.text_label)),
+                    Span::styled("Interval: ", Style::default().fg(theme.text_label)),
                     Span::raw(interval),
                 ]));
+            }
+            // OCIRepository specific: semver from spec.ref.semver
+            if let Some(semver) = spec
+                .get("ref")
+                .and_then(|r| r.get("semver"))
+                .and_then(|s| s.as_str())
+            {
+                lines.push(Line::from(vec![
+                    Span::styled("Semver: ", Style::default().fg(theme.text_label)),
+                    Span::raw(semver),
+                ]));
+            }
+            // OCIRepository specific: tag from spec.ref.tag
+            if let Some(tag) = spec
+                .get("ref")
+                .and_then(|r| r.get("tag"))
+                .and_then(|t| t.as_str())
+            {
+                lines.push(Line::from(vec![
+                    Span::styled("Tag: ", Style::default().fg(theme.text_label)),
+                    Span::raw(tag),
+                ]));
+            }
+        }
+
+        // Show status artifact info (digest for OCIRepository)
+        if let Some(status) = obj.get("status").and_then(|s| s.as_object()) {
+            if let Some(artifact) = status.get("artifact").and_then(|a| a.as_object()) {
+                if let Some(digest) = artifact.get("digest").and_then(|d| d.as_str()) {
+                    lines.push(Line::from(vec![
+                        Span::styled("Digest: ", Style::default().fg(theme.text_label)),
+                        Span::raw(digest),
+                    ]));
+                }
             }
         }
     }
