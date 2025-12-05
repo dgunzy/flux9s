@@ -7,7 +7,7 @@ k9s:
     fg: "#f8f8f2"      # Dracula foreground
     bg: "#282a36"      # Dracula background
     logo: "#bd93f9"    # Dracula purple
-  
+
   frame:
     border:
       fg: "#6272a4"    # Dracula comment (softer)
@@ -27,13 +27,13 @@ k9s:
     title:
       fg: "#f8f8f2"
       bg: "#282a36"
-  
+
   views:
     table:
       fg: "#f8f8f2"
       bg: "#282a36"
       cursor:
-        fg: "#282a36"
+        fg: "#ff79c6"
         bg: "#bd93f9"  # Dracula purple for selection
       header:
         fg: "#8be9fd"  # Dracula cyan
@@ -45,5 +45,3 @@ k9s:
     logs:
       fg: "#f8f8f2"
       bg: "#282a36"
-
-
