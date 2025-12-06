@@ -48,6 +48,15 @@ pub enum ConfigSubcommand {
         /// Theme name to test
         name: String,
     },
+    /// Restore namespace hotkeys to defaults (empty, will auto-discover)
+    RestoreNamespaceHotkeys {
+        /// Cluster name for cluster-specific config
+        #[arg(long)]
+        cluster: Option<String>,
+        /// Context name for context-specific config
+        #[arg(long)]
+        context: Option<String>,
+    },
 }
 
 /// Handle configuration subcommands
@@ -112,12 +121,15 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
         ConfigSubcommand::Validate => {
             let cluster = None; // TODO: Get from kubeconfig
             let context = None; // TODO: Get from kubeconfig
-            match ConfigLoader::load(cluster, context) {
+
+            // Validate by actually loading and parsing the config
+            // This will catch YAML syntax errors, invalid types, etc.
+            match ConfigLoader::validate(cluster, context) {
                 Ok(_) => {
-                    println!("Configuration is valid");
+                    println!("flux9s configuration is valid");
                 }
                 Err(e) => {
-                    eprintln!("Configuration validation failed: {}", e);
+                    eprintln!("flux9s configuration validation failed: {}", e);
                     std::process::exit(1);
                 }
             }
@@ -158,6 +170,28 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
                 std::process::exit(1);
             }
         },
+        ConfigSubcommand::RestoreNamespaceHotkeys { cluster, context } => {
+            // Load existing config or create default
+            let mut config = ConfigLoader::load(cluster.as_deref(), context.as_deref())
+                .unwrap_or_else(|_| ConfigLoader::load_defaults());
+
+            // Clear namespace hotkeys (empty means use auto-discovered defaults)
+            config.namespace_hotkeys = Vec::new();
+
+            // Save config
+            if let Some(cluster_name) = cluster {
+                ConfigLoader::save_cluster(&config, &cluster_name, context.as_deref())
+                    .context("Failed to save cluster configuration")?;
+                println!(
+                    "Namespace hotkeys restored to defaults for cluster: {}",
+                    cluster_name
+                );
+            } else {
+                ConfigLoader::save_root(&config).context("Failed to save configuration")?;
+                println!("Namespace hotkeys restored to defaults");
+                println!("(Empty config will auto-discover namespaces at startup)");
+            }
+        }
     }
 
     Ok(())

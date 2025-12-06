@@ -68,6 +68,33 @@ impl FluxResourceKind {
         s.parse().ok()
     }
 
+    /// Get all Flux resource kinds
+    ///
+    /// Returns an array of all FluxResourceKind variants.
+    /// This is useful for iterating over all resource types dynamically.
+    pub fn all() -> &'static [Self] {
+        &[
+            FluxResourceKind::GitRepository,
+            FluxResourceKind::OCIRepository,
+            FluxResourceKind::HelmRepository,
+            FluxResourceKind::Bucket,
+            FluxResourceKind::HelmChart,
+            FluxResourceKind::ExternalArtifact,
+            FluxResourceKind::Kustomization,
+            FluxResourceKind::HelmRelease,
+            FluxResourceKind::ImageRepository,
+            FluxResourceKind::ImagePolicy,
+            FluxResourceKind::ImageUpdateAutomation,
+            FluxResourceKind::Alert,
+            FluxResourceKind::Provider,
+            FluxResourceKind::Receiver,
+            FluxResourceKind::ResourceSet,
+            FluxResourceKind::ResourceSetInputProvider,
+            FluxResourceKind::FluxReport,
+            FluxResourceKind::FluxInstance,
+        ]
+    }
+
     /// Try to parse a string (case-insensitive) into a FluxResourceKind
     pub fn from_str_case_insensitive(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {

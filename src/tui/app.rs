@@ -108,8 +108,10 @@ pub struct App {
     last_operation_key: Option<char>, // Store operation key for success message
     confirmation_pending: Option<PendingOperation>, // Operation awaiting user confirmation
     status_message: Option<(String, bool)>, // (message, is_error)
+    status_message_time: Option<std::time::Instant>, // When status message was set
     theme: Theme,
-    config: crate::config::Config, // Application configuration
+    config: crate::config::Config,  // Application configuration
+    namespace_hotkeys: Vec<String>, // Namespace hotkeys (0-9), where 0=all, 1=flux-system, etc.
     // Cached layout dimensions to prevent bouncing/flickering
     cached_terminal_size: Option<(u16, u16)>, // (width, height)
     cached_header_height: u16,
@@ -171,13 +173,58 @@ impl App {
             last_operation_key: None,
             confirmation_pending: None,
             status_message: None,
+            status_message_time: None,
             theme,
-            config,
+            config: config.clone(),
+            namespace_hotkeys: Self::build_namespace_hotkeys(&config, Vec::new()), // Will be updated with discovered namespaces
             // Initialize layout cache - will be populated on first render
             cached_terminal_size: None,
             cached_header_height: 7, // Default minimum
             cached_footer_height: 3, // Default minimum
         }
+    }
+
+    /// Build namespace hotkeys from config and discovered namespaces
+    ///
+    /// If config.namespace_hotkeys is non-empty, use it (validated to max 10 items).
+    /// Otherwise, build defaults: 0=all, 1=flux-system, 2-9=discovered namespaces.
+    fn build_namespace_hotkeys(
+        config: &crate::config::Config,
+        discovered_namespaces: Vec<String>,
+    ) -> Vec<String> {
+        // If config has hotkeys, use them (but validate length)
+        if !config.namespace_hotkeys.is_empty() {
+            if config.namespace_hotkeys.len() > 10 {
+                tracing::warn!(
+                    "namespace_hotkeys has {} items, maximum is 10. Truncating to first 10.",
+                    config.namespace_hotkeys.len()
+                );
+                return config.namespace_hotkeys[..10].to_vec();
+            }
+            return config.namespace_hotkeys.clone();
+        }
+
+        // Build defaults: 0=all, 1=flux-system, 2-9=discovered namespaces
+        let mut hotkeys = vec!["all".to_string(), "flux-system".to_string()];
+
+        // Add discovered namespaces (skip flux-system if already in list)
+        for ns in discovered_namespaces {
+            if ns != "flux-system" && hotkeys.len() < 10 {
+                hotkeys.push(ns);
+            }
+        }
+
+        hotkeys
+    }
+
+    /// Update namespace hotkeys with discovered namespaces
+    pub fn update_namespace_hotkeys(&mut self, discovered_namespaces: Vec<String>) {
+        self.namespace_hotkeys = Self::build_namespace_hotkeys(&self.config, discovered_namespaces);
+    }
+
+    /// Get namespace hotkeys
+    pub fn namespace_hotkeys(&self) -> &[String] {
+        &self.namespace_hotkeys
     }
 
     /// Invalidate the cached layout dimensions, forcing recalculation on next render.
@@ -332,6 +379,20 @@ impl App {
             return self.handle_confirmation_key(key);
         }
 
+        // Handle Esc to dismiss status messages
+        if self.status_message.is_some()
+            && !self.command_mode
+            && !self.filter_mode
+            && key.code == crossterm::event::KeyCode::Esc
+        {
+            self.status_message = None;
+            self.status_message_time = None;
+            return None;
+        }
+
+        // Check status message timeout
+        self.check_status_message_timeout();
+
         // Clear status messages on any key press (except in special modes and operation keys)
         // Don't clear if this is an operation key - we'll set a new message
         let is_operation_key = matches!(
@@ -347,11 +408,10 @@ impl App {
             && !self.command_mode
             && !self.filter_mode
             && !is_operation_key
+            && key.code != crossterm::event::KeyCode::Esc
         {
-            // Don't clear on Esc (might be used for navigation)
-            if key.code != crossterm::event::KeyCode::Esc {
-                self.status_message = None;
-            }
+            self.status_message = None;
+            self.status_message_time = None;
         }
 
         if self.command_mode {
@@ -363,6 +423,52 @@ impl App {
 
         if self.filter_mode {
             return self.handle_filter_key(key);
+        }
+
+        // Handle namespace hotkeys (0-9)
+        if let crossterm::event::KeyCode::Char(c) = key.code {
+            if c.is_ascii_digit() {
+                let index = c as usize - '0' as usize;
+                if index < self.namespace_hotkeys.len() {
+                    let ns_name = &self.namespace_hotkeys[index];
+                    let new_namespace = if ns_name == "all" {
+                        None
+                    } else {
+                        Some(ns_name.clone())
+                    };
+
+                    // Update namespace and restart watchers if changed
+                    if self.namespace != new_namespace {
+                        self.namespace = new_namespace.clone();
+
+                        // Clear state when switching namespaces
+                        self.state.clear();
+                        {
+                            let mut objects = self.resource_objects.write().unwrap();
+                            objects.clear();
+                        }
+
+                        // Restart watchers with new namespace
+                        if let Some(ref mut watcher) = self.watcher {
+                            if let Err(e) = watcher.set_namespace(new_namespace) {
+                                self.set_status_message((
+                                    format!("Failed to switch namespace: {}", e),
+                                    true,
+                                ));
+                            } else {
+                                self.set_status_message((
+                                    format!("Switched to namespace: {}", ns_name),
+                                    false,
+                                ));
+                            }
+                        }
+
+                        self.selected_index = 0;
+                        self.scroll_offset = 0;
+                    }
+                    return None;
+                }
+            }
         }
 
         match key.code {
@@ -434,7 +540,7 @@ impl App {
                         if operation.is_valid_for(&resource.resource_type) {
                             // Check readonly mode first
                             if self.config.read_only {
-                                self.status_message = Some((
+                                self.set_status_message((
                                     "Readonly mode is enabled. Use :readonly to toggle write actions."
                                         .to_string(),
                                     true,
@@ -466,7 +572,7 @@ impl App {
                                             resource.name
                                         )
                                     };
-                                    self.status_message = Some((feedback_msg, false));
+                                    self.set_status_message((feedback_msg, false));
                                 }
                                 // Execute immediately
                                 self.execute_operation(
@@ -478,7 +584,7 @@ impl App {
                             }
                         } else {
                             // Operation not valid for this resource type
-                            self.status_message = Some((
+                            self.set_status_message((
                                 format!(
                                     "Operation '{}' is not valid for {}",
                                     operation.name(),
@@ -526,6 +632,9 @@ impl App {
                     if self.yaml_scroll_offset > 0 {
                         self.yaml_scroll_offset -= 1;
                     }
+                } else if self.current_view == View::ResourceTrace {
+                    // Scroll up in trace view
+                    self.trace_scroll_offset = self.trace_scroll_offset.saturating_sub(1);
                 } else {
                     // Normal navigation
                     if self.selected_index > 0 {
@@ -540,6 +649,9 @@ impl App {
                 if self.current_view == View::ResourceYAML {
                     // Scroll down in YAML view - we'll handle max scroll in render
                     self.yaml_scroll_offset += 1;
+                } else if self.current_view == View::ResourceTrace {
+                    // Scroll down in trace view
+                    self.trace_scroll_offset += 1;
                 } else {
                     // Normal navigation
                     let resources = self.get_filtered_resources();
@@ -664,7 +776,7 @@ impl App {
                     // Check readonly mode before confirming
                     if self.config.read_only {
                         self.confirmation_pending = None;
-                        self.status_message = Some((
+                        self.set_status_message((
                             "Readonly mode is enabled. Use :readonly to toggle write actions."
                                 .to_string(),
                             true,
@@ -703,7 +815,7 @@ impl App {
         // Check readonly mode - prevent modification operations
         if self.config.read_only && self.operation_registry.get_by_keybinding(op_key).is_some() {
             // All operations are modifications, so block them all in readonly mode
-            self.status_message = Some((
+            self.set_status_message((
                 "Readonly mode is enabled. Use :readonly to toggle write actions.".to_string(),
                 true,
             ));
@@ -772,6 +884,18 @@ impl App {
 
     pub fn set_status_message(&mut self, message: (String, bool)) {
         self.status_message = Some(message);
+        self.status_message_time = Some(std::time::Instant::now());
+    }
+
+    /// Check and clear status message if timeout exceeded
+    pub fn check_status_message_timeout(&mut self) {
+        const STATUS_MESSAGE_TIMEOUT_SECS: u64 = 4;
+        if let (Some(_), Some(time)) = (&self.status_message, &self.status_message_time) {
+            if time.elapsed().as_secs() >= STATUS_MESSAGE_TIMEOUT_SECS {
+                self.status_message = None;
+                self.status_message_time = None;
+            }
+        }
     }
 
     pub fn set_view_trace(&mut self) {
@@ -784,22 +908,26 @@ impl App {
             Ok(_) => {
                 if let Some(op_key) = self.last_operation_key.take() {
                     if let Some(operation) = self.operation_registry.get_by_keybinding(op_key) {
-                        self.status_message = Some((
+                        self.set_status_message((
                             format!("{} completed successfully", operation.name()),
                             false,
                         ));
                     } else {
-                        self.status_message =
-                            Some(("Operation completed successfully".to_string(), false));
+                        self.set_status_message((
+                            "Operation completed successfully".to_string(),
+                            false,
+                        ));
                     }
                 } else {
-                    self.status_message =
-                        Some(("Operation completed successfully".to_string(), false));
+                    self.set_status_message((
+                        "Operation completed successfully".to_string(),
+                        false,
+                    ));
                 }
             }
             Err(e) => {
                 self.last_operation_key = None;
-                self.status_message = Some((format!("Operation failed: {}", e), true));
+                self.set_status_message((format!("Operation failed: {}", e), true));
             }
         }
     }
@@ -901,7 +1029,7 @@ impl App {
             } else {
                 "disabled"
             };
-            self.status_message = Some((format!("Readonly mode {}", status), false));
+            self.set_status_message((format!("Readonly mode {}", status), false));
             return None;
         }
 
@@ -912,15 +1040,15 @@ impl App {
                 match self.set_theme(&name) {
                     Ok(_) => {
                         let msg = format!("Theme changed to: {}", name);
-                        self.status_message = Some((msg, false));
+                        self.set_status_message((msg, false));
                     }
                     Err(e) => {
                         let msg = format!("Failed to load theme '{}': {}. Use `default` to return to default theme", name, e);
-                        self.status_message = Some((msg, true));
+                        self.set_status_message((msg, true));
                     }
                 }
             } else {
-                self.status_message = Some(("Usage: :skin <theme-name>".to_string(), true));
+                self.set_status_message(("Usage: :skin <theme-name>".to_string(), true));
             }
             return None;
         }
@@ -940,7 +1068,7 @@ impl App {
                             Some(("Invalid resource key format".to_string(), true));
                     }
                 } else {
-                    self.status_message = Some(("No resource selected".to_string(), true));
+                    self.set_status_message(("No resource selected".to_string(), true));
                 }
             } else {
                 // Parse resource type/name format (e.g., "kustomization/cabot-book" or "Kustomization/cabot-book")
@@ -975,7 +1103,7 @@ impl App {
                     ));
                     self.trace_result = None;
                 } else {
-                    self.status_message = Some((
+                    self.set_status_message((
                         "Usage: :trace <resource-type>/<name> or :trace (for selected)".to_string(),
                         true,
                     ));
@@ -1306,6 +1434,7 @@ impl App {
                 self.config.read_only,
                 &self.theme,
                 self.config.ui.no_icons,
+                self.namespace_hotkeys(),
             );
         }
         self.render_main(f, chunks[1]);
@@ -1322,6 +1451,8 @@ impl App {
             &self.operation_registry,
             &self.state,
             &self.theme,
+            self.namespace_hotkeys(),
+            &self.namespace,
         );
     }
 
@@ -1341,7 +1472,7 @@ impl App {
         }
 
         if self.show_help {
-            render_help(f, area, &self.theme);
+            render_help(f, area, &self.theme, self.namespace_hotkeys());
         } else {
             match self.current_view {
                 View::ResourceList => {
@@ -1393,7 +1524,7 @@ impl App {
                     );
                 }
                 View::Help => {
-                    render_help(f, area, &self.theme);
+                    render_help(f, area, &self.theme, self.namespace_hotkeys());
                 }
             }
         }

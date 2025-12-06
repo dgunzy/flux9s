@@ -10,7 +10,7 @@ mod theme;
 mod trace;
 pub mod views;
 
-pub use api::get_api_resource_with_fallback;
+pub use api::{get_api_resource_with_fallback, get_gvk_for_resource_type};
 
 pub use app::*;
 pub use operations::*;
@@ -111,7 +111,21 @@ pub async fn run_tui(
     // Create app state with config and theme
     let mut app = App::new(state, context, namespace.clone(), config.clone(), theme);
     app.set_watcher(watcher);
-    app.set_kube_client(client);
+    app.set_kube_client(client.clone());
+
+    // Discover namespaces with Flux resources for hotkeys (if not configured)
+    if config.namespace_hotkeys.is_empty() {
+        if let Ok(discovered) = crate::kube::discover_namespaces_with_flux_resources(&client).await
+        {
+            app.update_namespace_hotkeys(discovered);
+            tracing::debug!(
+                "Discovered {} namespaces for hotkeys",
+                app.namespace_hotkeys().len()
+            );
+        } else {
+            tracing::warn!("Failed to discover namespaces, using defaults");
+        }
+    }
 
     tracing::debug!("TUI initialized, entering main loop");
 
@@ -294,6 +308,9 @@ pub async fn run_tui(
         if let Some(result) = app.try_get_operation_result() {
             app.set_operation_result(result);
         }
+
+        // Check status message timeout (non-blocking check)
+        app.check_status_message_timeout();
 
         // Handle input events (non-blocking)
         if crossterm::event::poll(std::time::Duration::from_millis(100))? {

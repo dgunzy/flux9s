@@ -1,74 +1,147 @@
 //! Help view rendering
 
 use crate::tui::theme::Theme;
-use crate::watcher::get_all_commands;
 use ratatui::{
-    layout::Rect,
-    text::Line,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
-/// Render the help view
-pub fn render_help(f: &mut Frame, area: Rect, _theme: &Theme) {
-    let mut help_text = vec![
-        Line::from("Keyboard Shortcuts:"),
-        Line::from("  q / q! / Esc  - Quit"),
-        Line::from("  ?        - Show/hide help"),
-        Line::from("  j/k      - Navigate up/down (vim)"),
-        Line::from("  :        - Command mode (e.g., :kustomization)"),
-        Line::from("  /        - Filter resources"),
-        Line::from("  Enter    - View resource details"),
-        Line::from("  y        - View YAML manifest"),
-        Line::from("  Tab      - Autocomplete command"),
-        Line::from(""),
-        Line::from("Operations (select resource first):"),
-        Line::from("  t        - Trace resource ownership chain"),
-        Line::from("  s        - Suspend reconciliation"),
-        Line::from("  r        - Resume reconciliation"),
-        Line::from("  R        - Reconcile resource"),
-        Line::from("  W        - Reconcile with source (Kustomization/HelmRelease)"),
-        Line::from("  d        - Delete resource"),
-        Line::from(""),
-        Line::from("Filter Syntax (/):"),
-        Line::from("  /text              - Filter by name"),
-        Line::from("  /label:key         - Filter by label key (any value)"),
-        Line::from("  /label:key=value   - Filter by label key=value"),
-        Line::from("  /ann:key           - Filter by annotation key"),
-        Line::from("  /ann:key=value     - Filter by annotation key=value"),
-        Line::from("  /annotations:...   - Alias for /ann:..."),
-        Line::from(""),
-        Line::from("Commands:"),
-        Line::from("  :help / :h / :?              - Show/hide this help"),
-        Line::from("  :readonly                    - Toggle readonly mode"),
-        Line::from("  :skin <name>                 - Change theme/skin"),
-        Line::from("  :ns <name> / :namespace <name> - Switch namespace"),
-        Line::from("  :ns all / :ns -A             - Show all namespaces"),
-        Line::from("  :all / :clear                - Show all resources"),
-        Line::from("  :q / :quit / :exit           - Quit application"),
-        Line::from(""),
+/// Render the help view with columns (K9s-style)
+pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: &[String]) {
+    // Create inner area with padding for the border
+    let inner_area = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+
+    // Split into 4 columns
+    let column_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(25), // RESOURCE
+            Constraint::Percentage(25), // GENERAL
+            Constraint::Percentage(25), // NAVIGATION
+            Constraint::Percentage(25), // Namespace Hotkeys
+        ])
+        .split(inner_area);
+
+    // RESOURCE column
+    let resource_items = vec![
+        ("<Enter>", "View resource details"),
+        ("<y>", "View YAML manifest"),
+        ("<t>", "Trace ownership chain"),
+        ("<s>", "Suspend reconciliation"),
+        ("<r>", "Resume reconciliation"),
+        ("<R>", "Reconcile resource"),
+        ("<W>", "Reconcile with source"),
+        ("<d>", "Delete resource"),
     ];
+    render_help_column(f, column_chunks[0], "RESOURCE", &resource_items, theme);
 
-    // Add commands from registry (show first few with aliases)
-    let commands = get_all_commands();
-    for (display_name, aliases) in commands.iter().take(8) {
-        let alias_str = aliases.first().unwrap_or(display_name);
-        let cmd_line = format!(
-            "  :{} / :{}  - Show {}",
-            alias_str.to_lowercase(),
-            display_name.to_lowercase(),
-            display_name
-        );
-        help_text.push(Line::from(cmd_line));
+    // GENERAL column
+    let general_items = vec![
+        ("<q>", "Quit"),
+        ("<Esc>", "Back/Quit"),
+        ("<?>", "Show/hide help"),
+        ("<:>", "Command mode"),
+        ("</>", "Filter resources"),
+        ("<Tab>", "Autocomplete command"),
+        (":help", "Show/hide help"),
+        (":readonly", "Toggle readonly mode"),
+        (":skin <n>", "Change theme/skin"),
+        (":ns <n>", "Switch namespace"),
+        (":ns all", "Show all namespaces"),
+        (":all", "Show all resources"),
+        (":q", "Quit application"),
+    ];
+    render_help_column(f, column_chunks[1], "GENERAL", &general_items, theme);
+
+    // NAVIGATION column
+    let nav_items = vec![
+        ("<j>", "Navigate down"),
+        ("<k>", "Navigate up"),
+        ("<Enter>", "View details"),
+        ("<Esc>", "Back/Quit"),
+    ];
+    render_help_column(f, column_chunks[2], "NAVIGATION", &nav_items, theme);
+
+    // HOTKEYS column - namespace hotkeys (0-9)
+    let mut hotkey_items: Vec<(String, String)> = Vec::new();
+
+    for (idx, ns) in namespace_hotkeys.iter().enumerate() {
+        if idx > 9 {
+            break; // Only 0-9 supported
+        }
+        let display_ns = if ns == "all" {
+            "all"
+        } else if ns.len() > 25 {
+            &ns[..25] // Truncate very long names (doubled from 12)
+        } else {
+            ns
+        };
+        hotkey_items.push((format!("<{}>", idx), display_ns.to_string()));
     }
 
-    if commands.len() > 8 {
-        help_text.push(Line::from(format!("  ... and {} more", commands.len() - 8)));
+    // If no hotkeys configured, show defaults
+    if hotkey_items.is_empty() {
+        hotkey_items.push(("<0>".to_string(), "all".to_string()));
+        hotkey_items.push(("<1>".to_string(), "flux-system".to_string()));
     }
 
-    help_text.push(Line::from("  :all / :clear  - Show all resources"));
+    // Convert to &str slices for rendering
+    let hotkey_items_ref: Vec<(&str, &str)> = hotkey_items
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    render_help_column(
+        f,
+        column_chunks[3],
+        "Namespace Hotkeys",
+        &hotkey_items_ref,
+        theme,
+    );
 
+    // Render single border around all columns
     let block = Block::default().title("Help").borders(Borders::ALL);
-    let paragraph = Paragraph::new(help_text).block(block);
+    f.render_widget(block, area);
+}
+
+/// Render a single help column (no borders, just content)
+fn render_help_column(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    items: &[(&str, &str)],
+    theme: &Theme,
+) {
+    let mut lines = Vec::new();
+
+    // Header
+    lines.push(Line::from(vec![Span::styled(
+        title,
+        Style::default()
+            .fg(theme.table_header)
+            .add_modifier(Modifier::BOLD),
+    )]));
+
+    // Items
+    for (key, description) in items {
+        let key_span = Span::styled(
+            format!("{} ", key),
+            Style::default()
+                .fg(theme.footer_key)
+                .add_modifier(Modifier::BOLD),
+        );
+        let desc_span = Span::raw(*description);
+        lines.push(Line::from(vec![key_span, desc_span]));
+    }
+
+    // No borders - just render the content
+    let paragraph = Paragraph::new(lines);
     f.render_widget(paragraph, area);
 }

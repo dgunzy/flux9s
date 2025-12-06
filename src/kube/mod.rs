@@ -256,6 +256,66 @@ pub async fn get_default_namespace() -> Option<String> {
     Some("flux-system".to_string())
 }
 
+/// Discover namespaces that contain Flux resources
+///
+/// Returns a list of namespaces sorted by the number of Flux resources they contain.
+/// This is used to populate default namespace hotkeys (2-9).
+///
+/// Uses FluxResourceKind enum to query all Flux resource types dynamically,
+/// avoiding hardcoded resource types and API versions.
+pub async fn discover_namespaces_with_flux_resources(client: &Client) -> Result<Vec<String>> {
+    use crate::models::FluxResourceKind;
+    use crate::tui::get_gvk_for_resource_type;
+    use kube::api::{Api, ListParams};
+    use kube::core::{ApiResource, DynamicObject};
+
+    // Map to count resources per namespace
+    let mut namespace_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    // Query all Flux resource types using FluxResourceKind enum
+    // This ensures we use the single source of truth for resource definitions
+    for kind in FluxResourceKind::all() {
+        let resource_type = kind.as_str();
+
+        // Get API metadata from the resource type using the centralized function
+        match get_gvk_for_resource_type(resource_type) {
+            Ok((group, version, plural)) => {
+                let api_resource = ApiResource {
+                    group: group.clone(),
+                    version: version.clone(),
+                    api_version: format!("{}/{}", group, version),
+                    kind: String::new(), // Not needed for listing
+                    plural: plural.clone(),
+                };
+
+                let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
+
+                // List all resources of this type across all namespaces
+                // Ignore errors for individual resource types (some may not exist in cluster)
+                if let Ok(list) = api.list(&ListParams::default()).await {
+                    for item in list.items {
+                        if let Some(namespace) = item.metadata.namespace.as_ref() {
+                            *namespace_counts.entry(namespace.clone()).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                // Log but continue - some resource types might not be available
+                tracing::debug!("Failed to get API metadata for {}: {}", resource_type, e);
+            }
+        }
+    }
+
+    // Sort by count (descending), then by name
+    let mut namespaces: Vec<(String, usize)> = namespace_counts.into_iter().collect();
+    namespaces.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    // Return just the namespace names
+    Ok(namespaces.into_iter().map(|(ns, _)| ns).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
