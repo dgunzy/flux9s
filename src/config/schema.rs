@@ -25,6 +25,12 @@ pub struct Config {
     #[serde(default)]
     pub logger: LoggerConfig,
 
+    /// Namespace hotkeys configuration (0-9)
+    /// Array of namespace names, where index corresponds to hotkey (0=all, 1=flux-system, etc.)
+    /// Maximum 10 items (0-9)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub namespace_hotkeys: Vec<String>,
+
     /// Cluster-specific settings (merged with cluster configs)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cluster: HashMap<String, serde_yaml::Value>,
@@ -116,6 +122,7 @@ impl Default for Config {
             default_namespace: default_namespace(),
             ui: UiConfig::default(),
             logger: LoggerConfig::default(),
+            namespace_hotkeys: Vec::new(), // Empty means use auto-discovered defaults
             cluster: HashMap::new(),
         }
     }

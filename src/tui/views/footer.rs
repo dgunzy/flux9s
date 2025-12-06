@@ -27,6 +27,8 @@ pub fn render_footer(
     operation_registry: &OperationRegistry,
     state: &ResourceState,
     theme: &Theme,
+    namespace_hotkeys: &[String],
+    current_namespace: &Option<String>,
 ) -> usize {
     if command_mode {
         return render_command_footer(f, area, command_buffer, theme);
@@ -38,7 +40,7 @@ pub fn render_footer(
 
     // Handle default navigation footer (wrapped for smaller screens)
     if !show_help && confirmation_pending.is_none() && status_message.is_none() {
-        return render_navigation_footer(f, area, theme);
+        return render_navigation_footer(f, area, theme, namespace_hotkeys, current_namespace);
     }
 
     // Build footer text for non-default cases
@@ -133,24 +135,69 @@ fn render_filter_footer(f: &mut Frame, area: Rect, filter: &str, theme: &Theme) 
     1
 }
 
-fn render_navigation_footer(f: &mut Frame, area: Rect, theme: &Theme) -> usize {
+fn render_navigation_footer(
+    f: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    namespace_hotkeys: &[String],
+    current_namespace: &Option<String>,
+) -> usize {
     // Default navigation hints - wrap for smaller screens
     // Returns the number of lines used
-    let nav_segments = vec![
-        ("j/k ", "Navigate", theme.footer_key),
-        (":", "Command", theme.footer_key),
-        ("Enter", "Details", theme.footer_key),
-        ("y", "YAML", theme.footer_key),
-        ("t", "Trace", theme.footer_key),
-        ("s", "Suspend", theme.footer_key),
-        ("r", "Resume", theme.footer_key),
-        ("R", "Reconcile", theme.footer_key),
-        ("W", "Reconcile+Source", theme.footer_key),
-        ("d", "Delete", theme.footer_key),
-        ("/", "Filter(Name)", theme.footer_key),
-        ("?", "Help", theme.footer_key),
-        ("Esc", "Back/Quit", theme.footer_key),
+    // Use owned strings for dynamic content
+    let mut nav_segments: Vec<(String, String, ratatui::style::Color)> = vec![
+        ("j/k ".to_string(), "Navigate".to_string(), theme.footer_key),
+        (":".to_string(), "Command".to_string(), theme.footer_key),
+        ("Enter".to_string(), "Details".to_string(), theme.footer_key),
+        ("y".to_string(), "YAML".to_string(), theme.footer_key),
+        ("t".to_string(), "Trace".to_string(), theme.footer_key),
+        ("s".to_string(), "Suspend".to_string(), theme.footer_key),
+        ("r".to_string(), "Resume".to_string(), theme.footer_key),
+        ("R".to_string(), "Reconcile".to_string(), theme.footer_key),
+        (
+            "W".to_string(),
+            "Reconcile+Source".to_string(),
+            theme.footer_key,
+        ),
+        ("d".to_string(), "Delete".to_string(), theme.footer_key),
+        (
+            "/".to_string(),
+            "Filter(Name)".to_string(),
+            theme.footer_key,
+        ),
+        ("?".to_string(), "Help".to_string(), theme.footer_key),
+        ("Esc".to_string(), "Back/Quit".to_string(), theme.footer_key),
     ];
+
+    // Add namespace hotkeys (show first few that fit)
+    if !namespace_hotkeys.is_empty() {
+        // Show up to 3 namespace hotkeys in footer (0, 1, 2)
+        for (idx, ns) in namespace_hotkeys.iter().take(3).enumerate() {
+            let key = idx.to_string();
+            let display_ns = if ns == "all" {
+                "all".to_string()
+            } else {
+                // Truncate long namespace names
+                if ns.len() > 8 {
+                    ns[..8].to_string()
+                } else {
+                    ns.clone()
+                }
+            };
+            // Highlight current namespace
+            let is_current = if ns == "all" {
+                current_namespace.is_none()
+            } else {
+                current_namespace.as_ref() == Some(ns)
+            };
+            let label = if is_current {
+                format!("NS:{}*", display_ns)
+            } else {
+                format!("NS:{}", display_ns)
+            };
+            nav_segments.push((key, label, theme.footer_key));
+        }
+    }
 
     // Build a single line with all segments and separators
     // Let ratatui's Paragraph widget handle the wrapping
@@ -163,11 +210,11 @@ fn render_navigation_footer(f: &mut Frame, area: Rect, theme: &Theme) -> usize {
         }
 
         // Add segment spans
-        if *key == "j/k " {
-            spans.push(Span::raw(key.to_string()));
-            spans.push(Span::styled(label.to_string(), Style::default().fg(*color)));
+        if key == "j/k " {
+            spans.push(Span::raw(key.clone()));
+            spans.push(Span::styled(label.clone(), Style::default().fg(*color)));
         } else {
-            spans.push(Span::styled(key.to_string(), Style::default().fg(*color)));
+            spans.push(Span::styled(key.clone(), Style::default().fg(*color)));
             spans.push(Span::raw(format!(" {}", label)));
         }
     }

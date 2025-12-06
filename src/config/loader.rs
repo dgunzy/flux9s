@@ -67,6 +67,41 @@ impl ConfigLoader {
         Ok(config)
     }
 
+    /// Validate configuration by loading and checking for errors
+    ///
+    /// This performs strict validation - it will fail on:
+    /// - Invalid YAML syntax
+    /// - Unknown configuration keys (by attempting to parse with strict mode)
+    /// - Invalid value types
+    /// - File read errors
+    pub fn validate(cluster: Option<&str>, context: Option<&str>) -> Result<()> {
+        use anyhow::Context;
+
+        // Try to load root config file if it exists
+        let root_path = paths::root_config_path();
+        if root_path.exists() {
+            let contents = std::fs::read_to_string(&root_path)
+                .with_context(|| format!("Failed to read config file: {}", root_path.display()))?;
+
+            // Parse with serde_yaml - this will catch YAML syntax errors
+            let config: Config = serde_yaml::from_str(&contents)
+                .with_context(|| format!("Failed to parse config file: {}", root_path.display()))?;
+
+            // Validate namespace_hotkeys length
+            if config.namespace_hotkeys.len() > 10 {
+                return Err(anyhow::anyhow!(
+                    "namespaceHotkeys has {} items, maximum is 10",
+                    config.namespace_hotkeys.len()
+                ));
+            }
+        }
+
+        // Try to load the full merged config to catch any merge issues
+        let _ = Self::load(cluster, context).context("Failed to load merged configuration")?;
+
+        Ok(())
+    }
+
     /// Load default configuration
     pub fn load_defaults() -> Config {
         defaults::default_config()
@@ -90,6 +125,7 @@ impl ConfigLoader {
                 since_seconds: other.logger.since_seconds,
                 text_wrap: other.logger.text_wrap,
             },
+            namespace_hotkeys: other.namespace_hotkeys.clone(),
             cluster: other.cluster,
         }
     }

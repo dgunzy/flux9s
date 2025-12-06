@@ -32,6 +32,11 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
         "logger.buffer" => Ok(config.logger.buffer.to_string()),
         "logger.sinceSeconds" => Ok(config.logger.since_seconds.to_string()),
         "logger.textWrap" => Ok(config.logger.text_wrap.to_string()),
+        "namespaceHotkeys" => {
+            // Return as YAML array
+            serde_yaml::to_string(&config.namespace_hotkeys)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize namespaceHotkeys: {}", e))
+        }
         _ => Err(anyhow::anyhow!("Unknown configuration key: {}", key)),
     }
 }
@@ -86,6 +91,32 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
             config.logger.text_wrap = value
                 .parse()
                 .context("logger.textWrap must be 'true' or 'false'")?;
+        }
+        "namespaceHotkeys" => {
+            // Parse as YAML array or comma-separated list
+            let hotkeys: Vec<String> = if value.trim_start().starts_with('[') {
+                // YAML array format
+                serde_yaml::from_str(value).context(
+                    "namespaceHotkeys must be a YAML array (e.g., ['all', 'flux-system', 'ns1'])",
+                )?
+            } else {
+                // Comma-separated list format
+                value
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            };
+
+            // Validate length (max 10)
+            if hotkeys.len() > 10 {
+                return Err(anyhow::anyhow!(
+                    "namespaceHotkeys can have at most 10 items (0-9), got {}",
+                    hotkeys.len()
+                ));
+            }
+
+            config.namespace_hotkeys = hotkeys;
         }
         _ => return Err(anyhow::anyhow!("Unknown configuration key: {}", key)),
     }
