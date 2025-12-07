@@ -117,6 +117,7 @@ impl ConfigLoader {
                 headless: other.ui.headless,
                 no_icons: other.ui.no_icons,
                 skin: other.ui.skin.clone(),
+                skin_read_only: other.ui.skin_read_only.clone(),
                 splashless: other.ui.splashless,
             },
             logger: LoggerConfig {
@@ -126,6 +127,7 @@ impl ConfigLoader {
                 text_wrap: other.logger.text_wrap,
             },
             namespace_hotkeys: other.namespace_hotkeys.clone(),
+            context_skins: other.context_skins.clone(),
             cluster: other.cluster,
         }
     }

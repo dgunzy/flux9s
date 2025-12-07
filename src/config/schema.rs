@@ -31,6 +31,11 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub namespace_hotkeys: Vec<String>,
 
+    /// Context-specific skin configuration
+    /// Map of context name to skin name
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub context_skins: HashMap<String, String>,
+
     /// Cluster-specific settings (merged with cluster configs)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cluster: HashMap<String, serde_yaml::Value>,
@@ -52,9 +57,13 @@ pub struct UiConfig {
     #[serde(default = "default_false")]
     pub no_icons: bool,
 
-    /// Default theme name
+    /// Default skin name
     #[serde(default = "default_skin")]
     pub skin: String,
+
+    /// Skin name for readonly mode (overrides skin when readOnly=true)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skin_read_only: Option<String>,
 
     /// Skip startup splash screen
     #[serde(default = "default_false")]
@@ -123,6 +132,7 @@ impl Default for Config {
             ui: UiConfig::default(),
             logger: LoggerConfig::default(),
             namespace_hotkeys: Vec::new(), // Empty means use auto-discovered defaults
+            context_skins: HashMap::new(),
             cluster: HashMap::new(),
         }
     }
@@ -135,6 +145,7 @@ impl Default for UiConfig {
             headless: default_false(),
             no_icons: default_false(),
             skin: default_skin(),
+            skin_read_only: None,
             splashless: default_false(),
         }
     }

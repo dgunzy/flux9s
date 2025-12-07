@@ -71,30 +71,47 @@ pub fn render_header(
     };
 
     // Wrap resource types into lines
+    // Show "Resources:" only on the first line, then wrap the list
     let mut resource_lines = Vec::new();
-    let mut current_line = String::from("Resources: ");
+    let mut current_line = String::new();
+    let mut is_first_line = true;
+
     for part in &type_summary_parts {
         let part_with_space = format!("{} ", part);
-        if current_line.len() + part_with_space.len() > available_width as usize
-            && current_line.len() > 11
-        {
-            // Start new line - extract the content after "Resources: "
-            let content = current_line.trim_start_matches("Resources: ").to_string();
-            resource_lines.push(Line::from(vec![
-                Span::styled("Resources: ", Style::default().fg(theme.header_resources)),
-                Span::raw(content),
-            ]));
-            current_line = format!("{} ", part);
+        let prefix = if is_first_line {
+            "Resources: "
         } else {
+            // Indent continuation lines to align with content
+            "           " // Same width as "Resources: "
+        };
+
+        if current_line.len() + part_with_space.len() > available_width as usize
+            && !current_line.is_empty()
+        {
+            // Start new line
+            resource_lines.push(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(theme.header_resources)),
+                Span::raw(current_line.clone()),
+            ]));
+            current_line = part_with_space;
+            is_first_line = false;
+        } else {
+            if current_line.is_empty() && is_first_line {
+                // First line - don't add prefix yet, will add when flushing
+            }
             current_line.push_str(&part_with_space);
         }
     }
     // Add the last line
-    if current_line.len() > 11 {
-        let content = current_line.trim_start_matches("Resources: ").to_string();
+    if !current_line.is_empty() {
+        let prefix = if is_first_line {
+            "Resources: "
+        } else {
+            "           "
+        };
         resource_lines.push(Line::from(vec![
-            Span::styled("Resources: ", Style::default().fg(theme.header_resources)),
-            Span::raw(content),
+            Span::styled(prefix, Style::default().fg(theme.header_resources)),
+            Span::raw(current_line),
         ]));
     }
 

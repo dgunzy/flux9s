@@ -27,13 +27,17 @@ pub fn render_resource_list(
     no_icons: bool,
 ) {
     let visible_height = (area.height as usize).saturating_sub(2);
+    const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling
 
-    // Adjust scroll offset based on selected index
-    if selected_index >= *scroll_offset + visible_height {
-        *scroll_offset = selected_index.saturating_sub(visible_height - 1);
+    // Adjust scroll offset based on selected index with buffer
+    // When selected row is near bottom, scroll to keep buffer
+    if selected_index >= *scroll_offset + visible_height.saturating_sub(SCROLL_BUFFER) {
+        *scroll_offset =
+            selected_index.saturating_sub(visible_height.saturating_sub(SCROLL_BUFFER + 1));
     }
-    if selected_index < *scroll_offset {
-        *scroll_offset = selected_index;
+    // When selected row is above visible area, scroll to show it with buffer
+    if selected_index < *scroll_offset + SCROLL_BUFFER {
+        *scroll_offset = selected_index.saturating_sub(SCROLL_BUFFER);
     }
 
     // Ensure selected_index is valid

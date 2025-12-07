@@ -27,6 +27,7 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
         "ui.headless" => Ok(config.ui.headless.to_string()),
         "ui.noIcons" => Ok(config.ui.no_icons.to_string()),
         "ui.skin" => Ok(config.ui.skin.clone()),
+        "ui.skinReadOnly" => Ok(config.ui.skin_read_only.clone().unwrap_or_default()),
         "ui.splashless" => Ok(config.ui.splashless.to_string()),
         "logger.tail" => Ok(config.logger.tail.to_string()),
         "logger.buffer" => Ok(config.logger.buffer.to_string()),
@@ -70,6 +71,13 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
         }
         "ui.skin" => {
             config.ui.skin = value.to_string();
+        }
+        "ui.skinReadOnly" => {
+            if value.is_empty() {
+                config.ui.skin_read_only = None;
+            } else {
+                config.ui.skin_read_only = Some(value.to_string());
+            }
         }
         "ui.splashless" => {
             config.ui.splashless = value
