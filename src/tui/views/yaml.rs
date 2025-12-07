@@ -4,7 +4,8 @@ use crate::tui::theme::Theme;
 use crate::watcher::ResourceState;
 use ratatui::{
     layout::Rect,
-    text::Line,
+    style::{Color, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
@@ -45,7 +46,7 @@ pub fn render_resource_yaml(
     yaml_fetched: &Option<serde_json::Value>,
     yaml_fetch_pending: &Option<String>,
     yaml_scroll_offset: &mut usize,
-    _theme: &Theme,
+    theme: &Theme,
 ) {
     let key = match selected_resource_key {
         Some(k) => k,
@@ -122,15 +123,12 @@ pub fn render_resource_yaml(
     *yaml_scroll_offset = (*yaml_scroll_offset).min(max_scroll);
 
     // Get visible lines based on scroll offset
-    // Preserve leading spaces for proper YAML indentation
+    // Preserve leading spaces for proper YAML indentation and apply syntax highlighting
     let visible_lines: Vec<Line> = all_lines
         .iter()
         .skip(*yaml_scroll_offset)
         .take(visible_height as usize)
-        .map(|line| {
-            // Preserve the line as-is, including leading spaces for indentation
-            Line::from(*line)
-        })
+        .map(|line| highlight_yaml_line(line, theme))
         .collect();
 
     let block = Block::default().title(title).borders(Borders::ALL);
@@ -139,4 +137,150 @@ pub fn render_resource_yaml(
         .block(block)
         .wrap(Wrap { trim: false });
     f.render_widget(paragraph, area);
+}
+
+/// Highlight a YAML line with kubecolor-like syntax highlighting
+fn highlight_yaml_line(line: &str, _theme: &Theme) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut chars = line.chars().peekable();
+    let mut current_token = String::new();
+    let mut in_string = false;
+    let mut string_quote = None;
+    let mut in_comment = false;
+    let mut after_colon = false;
+
+    // Process the line character by character
+    while let Some(ch) = chars.next() {
+        if in_comment {
+            // Everything after # is a comment
+            current_token.push(ch);
+            continue;
+        }
+
+        if in_string {
+            current_token.push(ch);
+            if ch == string_quote.unwrap() {
+                // End of string
+                spans.push(Span::styled(
+                    current_token.clone(),
+                    Style::default().fg(Color::Green),
+                ));
+                current_token.clear();
+                in_string = false;
+                string_quote = None;
+                after_colon = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '#' => {
+                // Start of comment
+                if !current_token.is_empty() {
+                    // Flush current token
+                    let color = if after_colon {
+                        get_value_color(&current_token)
+                    } else {
+                        Color::Cyan // Key
+                    };
+                    spans.push(Span::styled(
+                        current_token.clone(),
+                        Style::default().fg(color),
+                    ));
+                    current_token.clear();
+                }
+                in_comment = true;
+                current_token.push(ch);
+            }
+            ':' => {
+                // Key-value separator
+                if !current_token.is_empty() {
+                    // This is a key
+                    spans.push(Span::styled(
+                        current_token.clone(),
+                        Style::default().fg(Color::Cyan),
+                    ));
+                    current_token.clear();
+                }
+                spans.push(Span::styled(":", Style::default().fg(Color::Cyan)));
+                after_colon = true;
+            }
+            '"' | '\'' => {
+                // Start of string
+                if !current_token.is_empty() {
+                    // Flush current token (might be part of key or value)
+                    let color = if after_colon {
+                        get_value_color(&current_token)
+                    } else {
+                        Color::Cyan // Key
+                    };
+                    spans.push(Span::styled(
+                        current_token.clone(),
+                        Style::default().fg(color),
+                    ));
+                    current_token.clear();
+                }
+                in_string = true;
+                string_quote = Some(ch);
+                current_token.push(ch);
+            }
+            '-' if current_token.is_empty() && chars.peek().map(|c| *c == ' ') == Some(true) => {
+                // List item marker
+                spans.push(Span::styled("-", Style::default().fg(Color::Cyan)));
+                chars.next(); // Skip the space
+            }
+            ' ' | '\t' => {
+                if !current_token.is_empty() {
+                    // Flush token
+                    let color = if after_colon {
+                        get_value_color(&current_token)
+                    } else {
+                        Color::Cyan // Key
+                    };
+                    spans.push(Span::styled(
+                        current_token.clone(),
+                        Style::default().fg(color),
+                    ));
+                    current_token.clear();
+                }
+                // Preserve whitespace
+                spans.push(Span::raw(ch.to_string()));
+            }
+            _ => {
+                current_token.push(ch);
+            }
+        }
+    }
+
+    // Flush remaining token
+    if !current_token.is_empty() {
+        let color = if in_comment {
+            Color::DarkGray
+        } else if in_string {
+            Color::Green
+        } else if after_colon {
+            get_value_color(&current_token)
+        } else {
+            Color::Cyan // Key
+        };
+        spans.push(Span::styled(current_token, Style::default().fg(color)));
+    }
+
+    Line::from(spans)
+}
+
+/// Determine the color for a YAML value based on its type
+fn get_value_color(token: &str) -> Color {
+    match token {
+        "true" | "True" | "TRUE" | "false" | "False" | "FALSE" => Color::Yellow,
+        "null" | "Null" | "NULL" | "~" => Color::Red,
+        _ => {
+            // Check if it's a number
+            if token.parse::<f64>().is_ok() || token.parse::<i64>().is_ok() {
+                Color::Yellow
+            } else {
+                Color::White
+            }
+        }
+    }
 }

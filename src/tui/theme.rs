@@ -30,6 +30,7 @@ pub struct Theme {
     // Table colors
     pub table_header: Color,
     pub table_selected: Color,
+    pub table_selected_bg: Color, // Background color for selected row
     pub table_normal: Color,
 
     // Text colors
@@ -78,6 +79,7 @@ impl Default for Theme {
             // Table colors
             table_header: Color::Cyan,
             table_selected: Color::Blue,
+            table_selected_bg: Color::DarkGray, // Dark gray background for selected row
             table_normal: Color::White,
 
             // Text colors
@@ -137,7 +139,9 @@ impl Theme {
     }
 
     pub fn table_selected_style(&self) -> Style {
-        Style::default().fg(self.table_selected)
+        Style::default()
+            .fg(self.table_selected)
+            .bg(self.table_selected_bg)
     }
 
     pub fn footer_key_style(&self) -> Style {

@@ -2,7 +2,9 @@
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
+use std::path::PathBuf;
 
+use crate::config::schema::Config;
 use crate::config::{paths, ConfigLoader, ThemeLoader};
 
 /// Display version information
@@ -12,6 +14,23 @@ pub fn display_version() {
     println!("  {}", env!("CARGO_PKG_AUTHORS"));
     println!("  License: {}", env!("CARGO_PKG_LICENSE"));
     println!("  Repository: {}", env!("CARGO_PKG_REPOSITORY"));
+}
+
+/// Skins management subcommands
+#[derive(Subcommand, Debug)]
+pub enum SkinsSubcommand {
+    /// List available skins
+    List,
+    /// Install a skin from a YAML file
+    Set {
+        /// Path to the skin YAML file
+        file: PathBuf,
+    },
+    /// Test loading a skin
+    Test {
+        /// Skin name to test
+        name: String,
+    },
 }
 
 /// Configuration management subcommands
@@ -41,12 +60,10 @@ pub enum ConfigSubcommand {
     Path,
     /// Validate configuration
     Validate,
-    /// List available themes/skins
-    Themes,
-    /// Test loading a theme
-    TestTheme {
-        /// Theme name to test
-        name: String,
+    /// Manage skins
+    Skins {
+        #[command(subcommand)]
+        subcommand: SkinsSubcommand,
     },
     /// Restore namespace hotkeys to defaults (empty, will auto-discover)
     RestoreNamespaceHotkeys {
@@ -110,9 +127,8 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
             let config =
                 ConfigLoader::load(cluster, context).context("Failed to load configuration")?;
 
-            let yaml =
-                serde_yaml::to_string(&config).context("Failed to serialize configuration")?;
-            print!("{}", yaml);
+            // Display config with all fields visible, showing defaults
+            display_config_with_defaults(&config);
         }
         ConfigSubcommand::Path => {
             let config_path = paths::root_config_path();
@@ -134,41 +150,69 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
                 }
             }
         }
-        ConfigSubcommand::Themes => {
-            let themes = ThemeLoader::list_themes();
-            println!("Available themes:");
-            for theme in themes {
-                println!("  - {}", theme);
-            }
-        }
-        ConfigSubcommand::TestTheme { name } => match ThemeLoader::load_theme(&name) {
-            Ok(theme) => {
-                println!("✓ Successfully loaded theme: {}", name);
-                println!("\nTheme colors:");
-                println!("  Header context: {:?}", theme.header_context);
-                println!("  Header ASCII: {:?}", theme.header_ascii);
-                println!("  Text primary: {:?}", theme.text_primary);
-                println!("  Status ready: {:?}", theme.status_ready);
-                println!("  Status error: {:?}", theme.status_error);
-                println!("  Table header: {:?}", theme.table_header);
-                println!("  Table normal: {:?}", theme.table_normal);
-                println!("  Footer key: {:?}", theme.footer_key);
-            }
-            Err(e) => {
-                eprintln!("✗ Failed to load theme '{}': {}", name, e);
-                eprintln!("\nChecked locations:");
-                eprintln!(
-                    "  - {}",
-                    paths::user_skins_dir()
-                        .join(format!("{}.yaml", name))
-                        .display()
+        ConfigSubcommand::Skins { subcommand } => match subcommand {
+            SkinsSubcommand::List => {
+                let themes = ThemeLoader::list_themes();
+                println!("Available skins:");
+                for theme in themes {
+                    println!("  - {}", theme);
+                }
+                println!("\nSkin locations:");
+                println!("  Config directory: {}", paths::skins_dir().display());
+                println!(
+                    "  Legacy data directory: {}",
+                    paths::user_skins_dir().display()
                 );
-                eprintln!(
-                    "  - {}",
-                    paths::skins_dir().join(format!("{}.yaml", name)).display()
-                );
-                std::process::exit(1);
+                println!("\nTo install a skin:");
+                println!("  flux9s config skins set <path-to-skin.yaml>");
             }
+            SkinsSubcommand::Set { file } => {
+                // Validate and install the skin
+                let skin_name =
+                    ThemeLoader::install_theme(&file).context("Failed to install skin")?;
+
+                // Automatically set the skin in config
+                let cluster = None; // TODO: Get from kubeconfig
+                let context = None; // TODO: Get from kubeconfig
+                let mut config = ConfigLoader::load(cluster, context)
+                    .unwrap_or_else(|_| ConfigLoader::load_defaults());
+
+                config.ui.skin = skin_name.clone();
+
+                // Save config
+                ConfigLoader::save_root(&config).context("Failed to save configuration")?;
+
+                println!("✓ Skin '{}' set in configuration", skin_name);
+            }
+            SkinsSubcommand::Test { name } => match ThemeLoader::load_theme(&name) {
+                Ok(theme) => {
+                    println!("✓ Successfully loaded skin: {}", name);
+                    println!("\nSkin colors:");
+                    println!("  Header context: {:?}", theme.header_context);
+                    println!("  Header ASCII: {:?}", theme.header_ascii);
+                    println!("  Text primary: {:?}", theme.text_primary);
+                    println!("  Status ready: {:?}", theme.status_ready);
+                    println!("  Status error: {:?}", theme.status_error);
+                    println!("  Table header: {:?}", theme.table_header);
+                    println!("  Table normal: {:?}", theme.table_normal);
+                    println!("  Footer key: {:?}", theme.footer_key);
+                }
+                Err(e) => {
+                    eprintln!("✗ Failed to load skin '{}': {}", name, e);
+                    eprintln!("\nChecked locations:");
+                    eprintln!(
+                        "  - {}",
+                        paths::skins_dir().join(format!("{}.yaml", name)).display()
+                    );
+                    eprintln!(
+                        "  - {}",
+                        paths::user_skins_dir()
+                            .join(format!("{}.yaml", name))
+                            .display()
+                    );
+                    std::process::exit(1);
+                }
+            },
         },
         ConfigSubcommand::RestoreNamespaceHotkeys { cluster, context } => {
             // Load existing config or create default
@@ -195,4 +239,68 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Display configuration with all fields visible, indicating defaults
+fn display_config_with_defaults(config: &Config) {
+    println!("readOnly: {}", config.read_only);
+    println!("defaultNamespace: {}", config.default_namespace);
+    println!();
+    println!("ui:");
+    println!("  enableMouse: {}", config.ui.enable_mouse);
+    println!("  headless: {}", config.ui.headless);
+    println!("  noIcons: {}", config.ui.no_icons);
+    println!("  skin: {}", config.ui.skin);
+    if let Some(ref skin_ro) = config.ui.skin_read_only {
+        println!("  skinReadOnly: {}", skin_ro);
+    } else {
+        println!("  skinReadOnly: null  # (default: uses 'skin' when readOnly=true)");
+    }
+    println!("  splashless: {}", config.ui.splashless);
+    println!();
+    println!("logger:");
+    println!("  tail: {}", config.logger.tail);
+    println!("  buffer: {}", config.logger.buffer);
+    println!("  sinceSeconds: {}", config.logger.since_seconds);
+    println!("  textWrap: {}", config.logger.text_wrap);
+    println!();
+    if config.namespace_hotkeys.is_empty() {
+        println!("namespaceHotkeys: []  # (default: auto-discover at startup)");
+    } else {
+        println!("namespaceHotkeys:");
+        for (idx, ns) in config.namespace_hotkeys.iter().enumerate() {
+            println!("  - {}  # Hotkey {}", ns, idx);
+        }
+    }
+    println!();
+    if config.context_skins.is_empty() {
+        println!("contextSkins: {{}}  # (default: empty, no context-specific skins)");
+    } else {
+        println!("contextSkins:");
+        for (context, skin) in &config.context_skins {
+            println!("  {}: {}", context, skin);
+        }
+    }
+    println!();
+    println!();
+    println!("# Configuration Reference:");
+    println!("#   readOnly - Disable modification operations (default: true)");
+    println!("#   defaultNamespace - Starting namespace (default: flux-system)");
+    println!("#   ui.enableMouse - Enable mouse support (default: false)");
+    println!("#   ui.headless - Hide header (default: false)");
+    println!("#   ui.noIcons - Disable Unicode icons (default: false)");
+    println!("#   ui.skin - Default skin name (default: default)");
+    println!("#   ui.skinReadOnly - Skin for readonly mode, overrides ui.skin when readOnly=true");
+    println!("#   ui.splashless - Skip startup splash (default: false)");
+    println!("#   logger.tail - Default log line count (default: 100)");
+    println!("#   logger.buffer - Max log lines in view (default: 5000)");
+    println!("#   logger.sinceSeconds - Historical log timeframe in seconds (default: 300)");
+    println!("#   logger.textWrap - Enable line wrapping (default: false)");
+    println!("#   namespaceHotkeys - Array of namespace names for 0-9 hotkeys (max 10, default: auto-discover)");
+    println!("#   contextSkins - Map of context name to skin name (default: empty)");
+    println!("#");
+    println!("# Environment Variables (override config):");
+    println!("#   FLUX9S_SKIN - Override skin (highest priority)");
+    println!("#   FLUX9S_READ_ONLY - Override readonly mode");
+    println!("#   FLUX9S_DEFAULT_NAMESPACE - Override default namespace");
 }

@@ -246,6 +246,66 @@ impl App {
         Ok(())
     }
 
+    /// Reload skin based on current readonly mode and config
+    /// Uses the same priority logic as startup: env var > context > readonly > default
+    pub fn reload_skin_for_readonly_mode(&mut self, context_name: Option<&str>) {
+        // Determine which skin to use (priority order):
+        // 1. FLUX9S_SKIN environment variable (highest priority)
+        // 2. Context-specific skin from config.context_skins
+        // 3. Readonly-specific skin (config.ui.skin_read_only) if readonly mode
+        // 4. Default skin (config.ui.skin)
+        let skin_name = if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
+            tracing::debug!(
+                "Using skin from FLUX9S_SKIN environment variable: {}",
+                env_skin
+            );
+            env_skin
+        } else if let Some(context) = context_name {
+            if let Some(context_skin) = self.config.context_skins.get(context) {
+                tracing::debug!(
+                    "Using context-specific skin for '{}': {}",
+                    context,
+                    context_skin
+                );
+                context_skin.clone()
+            } else if self.config.read_only && self.config.ui.skin_read_only.is_some() {
+                let skin = self.config.ui.skin_read_only.as_ref().unwrap();
+                tracing::debug!("Using readonly-specific skin: {}", skin);
+                skin.clone()
+            } else {
+                tracing::debug!("Using default skin: {}", self.config.ui.skin);
+                self.config.ui.skin.clone()
+            }
+        } else if self.config.read_only && self.config.ui.skin_read_only.is_some() {
+            let skin = self.config.ui.skin_read_only.as_ref().unwrap();
+            tracing::debug!("Using readonly-specific skin: {}", skin);
+            skin.clone()
+        } else {
+            tracing::debug!("Using default skin: {}", self.config.ui.skin);
+            self.config.ui.skin.clone()
+        };
+
+        // Load the skin
+        match crate::config::ThemeLoader::load_theme(&skin_name) {
+            Ok(theme) => {
+                self.theme = theme;
+                tracing::debug!(
+                    "Skin reloaded: name='{}', readOnly={}, context={:?}",
+                    skin_name,
+                    self.config.read_only,
+                    context_name
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to reload skin '{}' when toggling readonly mode: {}, keeping current theme",
+                    skin_name,
+                    e
+                );
+            }
+        }
+    }
+
     pub fn set_kube_client(&mut self, client: kube::Client) {
         self.kube_client = Some(client);
     }
@@ -1029,6 +1089,12 @@ impl App {
             } else {
                 "disabled"
             };
+
+            // Reload skin based on readonly mode
+            // Clone context name to avoid borrow checker issues
+            let context_name = self.context.clone();
+            self.reload_skin_for_readonly_mode(Some(&context_name));
+
             self.set_status_message((format!("Readonly mode {}", status), false));
             return None;
         }

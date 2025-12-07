@@ -78,25 +78,54 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| config::ConfigLoader::load_defaults());
     let read_only = config.read_only;
 
-    // Load theme based on config
-    let theme = config::ThemeLoader::load_theme(&config.ui.skin).unwrap_or_else(|e| {
-        if args.debug {
-            tracing::warn!(
-                "Failed to load theme '{}': {}, using default",
-                config.ui.skin,
-                e
+    // Determine which skin to use (priority order):
+    // 1. FLUX9S_SKIN environment variable (highest priority)
+    // 2. Context-specific skin from config.context_skins
+    // 3. Readonly-specific skin (config.ui.skin_read_only) if readonly mode
+    // 4. Default skin (config.ui.skin)
+    let skin_name = if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
+        tracing::debug!(
+            "Using skin from FLUX9S_SKIN environment variable: {}",
+            env_skin
+        );
+        env_skin
+    } else if let Some(context) = context_name {
+        if let Some(context_skin) = config.context_skins.get(context) {
+            tracing::debug!(
+                "Using context-specific skin for '{}': {}",
+                context,
+                context_skin
             );
+            context_skin.clone()
+        } else if read_only && config.ui.skin_read_only.is_some() {
+            let skin = config.ui.skin_read_only.as_ref().unwrap();
+            tracing::debug!("Using readonly-specific skin: {}", skin);
+            skin.clone()
+        } else {
+            tracing::debug!("Using default skin: {}", config.ui.skin);
+            config.ui.skin.clone()
         }
+    } else if read_only && config.ui.skin_read_only.is_some() {
+        let skin = config.ui.skin_read_only.as_ref().unwrap();
+        tracing::debug!("Using readonly-specific skin: {}", skin);
+        skin.clone()
+    } else {
+        tracing::debug!("Using default skin: {}", config.ui.skin);
+        config.ui.skin.clone()
+    };
+
+    // Load theme based on determined skin name
+    let theme = config::ThemeLoader::load_theme(&skin_name).unwrap_or_else(|e| {
+        tracing::warn!("Failed to load skin '{}': {}, using default", skin_name, e);
         tui::Theme::default()
     });
 
-    if args.debug {
-        tracing::debug!(
-            "Configuration loaded: readOnly={}, skin={}",
-            read_only,
-            config.ui.skin
-        );
-    }
+    tracing::debug!(
+        "Skin loaded: name='{}', readOnly={}, context={:?}",
+        skin_name,
+        read_only,
+        context_name
+    );
 
     // Initialize Kubernetes client
     tracing::debug!("Initializing Kubernetes client");
