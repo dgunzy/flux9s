@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2025-12-07
+
+### Version 0.5.4
+
+#### Added
+- Improved skin customization options
+- Enhanced command-line interface (CLI)
+
+#### Fixed
+- Resolved scrolling bug reported in issue #61
+
 ## [0.5.3] - 2025-12-06
 
 ### Version 0.5.3
