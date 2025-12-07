@@ -6,14 +6,17 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 ![License](https://img.shields.io/crates/l/flux9s)
 ![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)
 
-
 ### Full View
-![flux9s screenshot](docs/images/screenshot.png)
-### Flux9s Trace Implementation 
-![flux9s trace](docs/images/trace-screenshot.png)
-### Flux9s Name filter
-![flux9s filter](docs/images/filter-screenshot.png)
 
+![flux9s screenshot](docs/images/screenshot.png)
+
+### Flux9s Trace Implementation
+
+![flux9s trace](docs/images/trace-screenshot.png)
+
+### Flux9s Name filter
+
+![flux9s filter](docs/images/filter-screenshot.png)
 
 ## Overview
 
@@ -132,7 +135,8 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 
 - `flux9s config --help` - Show the config options
 - `flux9s config set {KEY} {VALUE}` - set a yaml option with the cli.
-- `flux9s config set ui.skin {skinname}` - set a skin that is in your systems flux9s/skins.
+- `config set ui.skinReadOnly rose-pine` - set a skin that is in your systems flux9s/skins dir when readonly enabled.
+- `flux9s config skins set navy.yaml` - import a skin, validate, set in config.
 
 > **Note:** Not all K9s skins are compatible with flux9s. flux9s skins follow a similar format but may require adjustments to work properly.
 
@@ -141,7 +145,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 This project is inspired by and built with the following excellent tools:
 
 - **[K9s](https://github.com/derailed/k9s)** - The terminal UI for Kubernetes that inspired this project
-- **[Flux](https://github.com/fluxcd/flux2)** - The open and extensible continuous delivery solution for Kubernetes. Powered by GitOps Toolkit. 
+- **[Flux](https://github.com/fluxcd/flux2)** - The open and extensible continuous delivery solution for Kubernetes. Powered by GitOps Toolkit.
 - **[kube-rs](https://github.com/kube-rs/kube)** - The Rust Kubernetes client library powering the Kubernetes API interactions
 - **[kopium](https://github.com/kube-rs/kopium)** - The tool used to generate Rust types from Kubernetes CRDs
 
