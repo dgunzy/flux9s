@@ -1,4 +1,4 @@
-.PHONY: help update-flux fetch-crds generate-models clean-models build check test ci fmt fmt-check clippy
+.PHONY: help update-flux fetch-crds generate-models clean-models build check test ci fmt fmt-check clippy audit
 
 help: ## Show this help message
 	@echo "Flux TUI - Build and Maintenance Commands"
@@ -21,7 +21,10 @@ test: ## Run library and unit tests
 test-integration: ## Run integration tests
 	cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests
 
-ci: fmt clippy test test-integration ## Run all CI checks in order
+audit: ## Run cargo-audit to check for CVEs (ignores unmaintained warnings)
+	cargo audit --ignore RUSTSEC-2024-0436
+
+ci: fmt clippy audit test test-integration ## Run all CI checks in order
 
 # Build targets
 build: ## Build the project (debug)

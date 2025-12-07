@@ -45,6 +45,15 @@ jobs:
       - name: Run clippy
         run: cargo clippy --lib --tests -- -D warnings -A clippy::too_many_arguments -A clippy::items-after-test-module -A clippy::type-complexity -A clippy::should-implement-trait -A renamed_and_removed_lints -A clippy::collapsible-if -A clippy::len-zero -A clippy::assertions-on-constants -A dead-code
 
+      - name: Install cargo-audit
+        run: |
+          if ! command -v cargo-audit &> /dev/null; then
+            cargo install cargo-audit --locked
+          fi
+
+      - name: Run cargo-audit (CVE scan)
+        run: cargo audit --ignore RUSTSEC-2024-0436
+
       - name: Run tests
         run: cargo test --lib --tests
 
