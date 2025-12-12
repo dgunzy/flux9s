@@ -54,6 +54,8 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         (":help", "Show/hide help"),
         (":readonly", "Toggle readonly mode"),
         (":skin <n>", "Change theme/skin"),
+        (":ctx <n>", "Switch context"),
+        (":ctx", "List contexts"),
         (":ns <n>", "Switch namespace"),
         (":ns all", "Show all namespaces"),
         (":all", "Show all resources"),

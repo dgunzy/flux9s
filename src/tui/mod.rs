@@ -309,6 +309,49 @@ pub async fn run_tui(
             app.set_operation_result(result);
         }
 
+        // Handle context switch if pending
+        if let Some(new_context) = app.take_pending_context_switch() {
+            tracing::info!("Switching to context: {}", new_context);
+
+            match crate::kube::create_client_for_context(&new_context).await {
+                Ok(new_client) => {
+                    // Create new watcher with new client
+                    // ResourceWatcher::new returns a tuple (watcher, receiver), not a Result
+                    let (mut new_watcher, new_event_rx) =
+                        crate::watcher::ResourceWatcher::new(new_client.clone(), namespace.clone());
+
+                    // Start watching all resources with the new watcher
+                    if let Err(e) = new_watcher.watch_all() {
+                        tracing::error!("Failed to start watchers after context switch: {}", e);
+                        app.set_status_message((format!("Failed to start watchers: {}", e), true));
+                        return Ok(());
+                    }
+
+                    // Update app with new context and watcher
+                    app.complete_context_switch(new_context.clone());
+                    app.set_kube_client(new_client.clone());
+                    app.set_watcher(new_watcher);
+
+                    // Replace event receiver
+                    event_rx = new_event_rx;
+
+                    app.set_status_message((
+                        format!("Successfully switched to context: {}", new_context),
+                        false,
+                    ));
+
+                    // Reload skin for new context
+                    app.reload_skin_for_readonly_mode(Some(&new_context));
+
+                    tracing::info!("Context switch completed: {}", new_context);
+                }
+                Err(e) => {
+                    app.set_status_message((format!("Failed to switch context: {}", e), true));
+                    tracing::error!("Context switch failed: {}", e);
+                }
+            }
+        }
+
         // Check status message timeout (non-blocking check)
         app.check_status_message_timeout();
 

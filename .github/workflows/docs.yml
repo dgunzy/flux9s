@@ -71,7 +71,7 @@ jobs:
       - name: Build Hugo site
         working-directory: docs
         run: |
-          hugo --minify --baseURL "https://dgunzy.github.io/flux9s/"
+          hugo --minify --baseURL "https://flux9s.ca/"
 
       - name: Copy metadata.json to public
         working-directory: docs

@@ -12,6 +12,7 @@
 //! to prevent proxy issues with corporate environments.
 
 use anyhow::Result;
+use kube::config::Kubeconfig;
 use kube::{Client, Config};
 use url::Url;
 
@@ -213,31 +214,87 @@ fn no_proxy_contains(no_proxy: &str, host: &str) -> bool {
         })
 }
 
+/// Load kubeconfig using kube crate's built-in path resolution
+///
+/// This function uses the kube crate's Kubeconfig::read() method which:
+/// - Respects KUBECONFIG environment variable
+/// - Falls back to platform-specific default locations (~/.kube/config on Unix, %USERPROFILE%\.kube\config on Windows)
+/// - Handles multiple kubeconfig files separated by path separator
+/// - Is OS-agnostic and cross-platform compatible
+fn load_kubeconfig() -> Result<Kubeconfig> {
+    Kubeconfig::read().map_err(|e| anyhow::anyhow!("Failed to load kubeconfig: {}", e))
+}
+
 /// Get the current Kubernetes context name
 pub async fn get_context() -> Result<String> {
-    // Try to get context from KUBECONFIG or default location
-    let kubeconfig_path = std::env::var("KUBECONFIG").ok().or_else(|| {
-        let home = std::env::var("HOME").ok()?;
-        Some(format!("{}/.kube/config", home))
-    });
+    let kubeconfig = load_kubeconfig()?;
 
-    if let Some(path) = kubeconfig_path {
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            // Parse current-context from kubeconfig
-            for line in contents.lines() {
-                if line.trim().starts_with("current-context:") {
-                    if let Some(context) = line.split(':').nth(1) {
-                        return Ok(context.trim().to_string());
-                    }
-                }
-            }
+    // Get current context from kubeconfig
+    // If no current context is set, Config::infer() will use the first context
+    // or we can fall back to checking what Config::infer() would use
+    if let Some(current_context) = kubeconfig.current_context {
+        Ok(current_context)
+    } else {
+        // Fallback: if no current context is set in kubeconfig, use "default"
+        // This matches kubectl behavior when no current-context is set
+        Ok("default".to_string())
+    }
+}
+
+/// List all available Kubernetes contexts from kubeconfig
+pub fn list_contexts() -> Result<Vec<String>> {
+    let kubeconfig = load_kubeconfig()?;
+
+    let context_names: Vec<String> = kubeconfig
+        .contexts
+        .iter()
+        .map(|ctx| ctx.name.clone())
+        .collect();
+
+    if context_names.is_empty() {
+        anyhow::bail!("No contexts found in kubeconfig");
+    }
+
+    Ok(context_names)
+}
+
+/// Create a Kubernetes client for a specific context
+pub async fn create_client_for_context(context_name: &str) -> Result<Client> {
+    // Validate that context exists
+    let contexts = list_contexts()?;
+    if !contexts.contains(&context_name.to_string()) {
+        anyhow::bail!(
+            "Context '{}' not found. Available contexts: {}",
+            context_name,
+            contexts.join(", ")
+        );
+    }
+
+    // Load config with specific context
+    let config = Config::from_kubeconfig(&kube::config::KubeConfigOptions {
+        context: Some(context_name.to_string()),
+        ..Default::default()
+    })
+    .await?;
+
+    // Extract cluster host for NO_PROXY auto-detection
+    let cluster_url_str = config.cluster_url.to_string();
+    tracing::debug!(
+        "Cluster URL for context {}: {}",
+        context_name,
+        cluster_url_str
+    );
+
+    if let Ok(url) = Url::parse(&cluster_url_str) {
+        if let Some(host) = url.host_str() {
+            tracing::debug!("Detected cluster host: {}", host);
+            ensure_no_proxy_bypass(host);
         }
     }
 
-    // Fallback: try to get from Config
-    let _config = Config::infer().await?;
-    // Config doesn't expose current_context directly, use a default
-    Ok("default".to_string())
+    let client = Client::try_from(config)?;
+    tracing::info!("Kubernetes client created for context: {}", context_name);
+    Ok(client)
 }
 
 /// Get the default namespace for Flux resources
@@ -427,5 +484,97 @@ mod tests {
             "devprod.example.com",
             "devprod.example.com"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_get_context_with_kubeconfig() {
+        // This test will only pass if a kubeconfig exists
+        // In CI environments without kubeconfig, this will fail gracefully
+        if load_kubeconfig().is_ok() {
+            let context = get_context().await;
+            // Should return either a context name or "default"
+            assert!(context.is_ok());
+            let ctx_name = context.unwrap();
+            assert!(!ctx_name.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_list_contexts_with_kubeconfig() {
+        // This test will only pass if a kubeconfig exists
+        // In CI environments without kubeconfig, this will fail gracefully
+        if let Ok(contexts) = list_contexts() {
+            assert!(!contexts.is_empty(), "Should have at least one context");
+            // All context names should be non-empty strings
+            for ctx in &contexts {
+                assert!(!ctx.is_empty(), "Context name should not be empty");
+            }
+        }
+    }
+
+    #[test]
+    fn test_load_kubeconfig_error_handling() {
+        // Test that load_kubeconfig provides a meaningful error message
+        // We can't easily test the success case without a real kubeconfig,
+        // but we can verify the error handling
+        let result = load_kubeconfig();
+        // Either succeeds (if kubeconfig exists) or provides a clear error
+        match result {
+            Ok(_kubeconfig) => {
+                // If kubeconfig exists, it's valid
+                // The structure is verified by successful parsing
+            }
+            Err(e) => {
+                // Error should be descriptive
+                let error_msg = e.to_string();
+                assert!(
+                    error_msg.contains("kubeconfig") || error_msg.contains("Failed to load"),
+                    "Error message should mention kubeconfig: {}",
+                    error_msg
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_client_for_context_invalid_context() {
+        // Test that create_client_for_context returns an error for invalid context
+        // This test requires a kubeconfig to exist
+        if load_kubeconfig().is_ok() {
+            let result = create_client_for_context("nonexistent-context-12345").await;
+            assert!(result.is_err());
+            // Convert error to string to check message
+            if let Err(e) = result {
+                let error_msg = e.to_string();
+                assert!(
+                    error_msg.contains("not found") || error_msg.contains("Context"),
+                    "Error should mention context not found: {}",
+                    error_msg
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_client_for_context_validates_context_exists() {
+        // Test that create_client_for_context validates context exists before creating client
+        if let Ok(contexts) = list_contexts() {
+            if !contexts.is_empty() {
+                // Try to create client with a context that doesn't exist
+                let invalid_result =
+                    create_client_for_context("definitely-does-not-exist-xyz").await;
+                assert!(invalid_result.is_err());
+                // Convert error to string to check message
+                if let Err(e) = invalid_result {
+                    let error_msg = e.to_string();
+                    // Error should list available contexts
+                    assert!(
+                        error_msg.contains("Available contexts") || error_msg.contains("not found"),
+                        "Error should mention available contexts: {}",
+                        error_msg
+                    );
+                }
+            }
+        }
     }
 }

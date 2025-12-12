@@ -27,15 +27,17 @@ Use these keyboard shortcuts to navigate flux9s:
 
 Type these commands in command mode (press `:`):
 
-| Command           | Description                    |
-| ----------------- | ------------------------------ |
-| `:ns <namespace>` | Switch to a specific namespace |
-| `:ns all`         | View all namespaces            |
-| `:all`            | Show all resources             |
-| `:skin <name>`    | Change theme/skin              |
-| `:readonly`       | Toggle readonly mode           |
-| `:help`           | Show/hide help                 |
-| `:q` or `:q!`     | Quit application               |
+| Command           | Description                              |
+| ----------------- | ---------------------------------------- |
+| `:ctx <name>`     | Switch to a different Kubernetes context |
+| `:ctx`            | List all available Kubernetes contexts   |
+| `:ns <namespace>` | Switch to a specific namespace           |
+| `:ns all`         | View all namespaces                      |
+| `:all`            | Show all resources                       |
+| `:skin <name>`    | Change theme/skin                        |
+| `:readonly`       | Toggle readonly mode                     |
+| `:help`           | Show/hide help                           |
+| `:q` or `:q!`     | Quit application                         |
 
 ## Operations
 
