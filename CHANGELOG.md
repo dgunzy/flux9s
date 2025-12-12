@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8] - 2025-12-12
+
+## Version 0.5.8
+
+### Added
+- New `:ctx` for context switching
+- Agent files for improved functionality
+
+### Changed
+- Website tweaks and improvements
+
 ## [0.5.7] - 2025-12-12
 
 ## Version 0.5.7
