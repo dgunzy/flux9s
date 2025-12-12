@@ -14,7 +14,7 @@ echo "Fetching metadata for ${REPO}..."
 cat > "${METADATA_FILE}" <<EOF
 {
   "crates_downloads": 0,
-  "homebrew_downloads": 0,
+  "github_binary_downloads": 0,
   "github_stars": 0,
   "github_releases": 0,
   "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -61,15 +61,16 @@ else
   echo "  Failed to fetch GitHub stars"
 fi
 
-# Fetch GitHub releases count and Homebrew downloads (sum of all release asset downloads)
-echo "Fetching GitHub releases and Homebrew download counts..."
+# Fetch GitHub releases count and binary download counts
+echo "Fetching GitHub releases and binary download counts..."
 # Fetch releases with pagination - get first 100 releases (should be enough)
 RELEASES_RESPONSE=$(curl -s "${GITHUB_HEADERS[@]}" "https://api.github.com/repos/${REPO}/releases?per_page=100" || echo "[]")
 GITHUB_RELEASES=$(echo "${RELEASES_RESPONSE}" | jq '. | length' 2>/dev/null || echo "0")
 
-# Calculate total Homebrew downloads by summing all release asset download counts
-# Homebrew typically downloads tar.gz/zip files from releases
-HOMEBREW_DOWNLOADS=$(echo "${RELEASES_RESPONSE}" | jq '[.[]?.assets[]?.download_count // 0] | add // 0' 2>/dev/null || echo "0")
+# Calculate total GitHub binary downloads by summing ALL release asset download counts
+# This includes all binaries: Linux, macOS, Windows, etc.
+# Note: This includes Homebrew downloads since Homebrew downloads binaries from GitHub releases
+GITHUB_BINARY_DOWNLOADS=$(echo "${RELEASES_RESPONSE}" | jq '[.[]?.assets[]?.download_count // 0] | add // 0' 2>/dev/null || echo "0")
 
 # If we got 100 releases, there might be more, but we'll just show 100+
 if [ "${GITHUB_RELEASES}" = "100" ]; then
@@ -89,12 +90,12 @@ else
   echo "  Failed to fetch GitHub releases"
 fi
 
-# Update Homebrew downloads
-if [ -n "${HOMEBREW_DOWNLOADS}" ] && [ "${HOMEBREW_DOWNLOADS}" != "null" ]; then
-  jq ".homebrew_downloads = ${HOMEBREW_DOWNLOADS}" "${METADATA_FILE}" > "${METADATA_FILE}.tmp" && mv "${METADATA_FILE}.tmp" "${METADATA_FILE}"
-  echo "  Homebrew downloads (from GitHub releases): ${HOMEBREW_DOWNLOADS}"
+# Update GitHub binary downloads (all release assets - includes Homebrew downloads)
+if [ -n "${GITHUB_BINARY_DOWNLOADS}" ] && [ "${GITHUB_BINARY_DOWNLOADS}" != "null" ]; then
+  jq ".github_binary_downloads = ${GITHUB_BINARY_DOWNLOADS}" "${METADATA_FILE}" > "${METADATA_FILE}.tmp" && mv "${METADATA_FILE}.tmp" "${METADATA_FILE}"
+  echo "  GitHub binary downloads (includes Homebrew): ${GITHUB_BINARY_DOWNLOADS}"
 else
-  echo "  Homebrew downloads: 0"
+  echo "  GitHub binary downloads: 0"
 fi
 
 echo "Metadata saved to ${METADATA_FILE}"
