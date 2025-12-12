@@ -1,0 +1,102 @@
+baseURL = 'https://dgunzy.github.io/flux9s/'
+title = 'flux9s Documentation'
+description = 'A K9s-inspired terminal UI for monitoring Flux GitOps resources in real-time'
+
+# Language settings
+languageCode = 'en'
+defaultContentLanguage = 'en'
+
+# Theme configuration
+theme = ['github.com/google/docsy']
+
+# Hugo configuration
+enableGitInfo = true
+enableRobotsTXT = true
+enableEmoji = true
+
+# Build settings
+buildDrafts = false
+buildFuture = false
+
+# Markup settings
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 3
+
+# Menu configuration
+[menu]
+  [[menu.main]]
+    name = "Home"
+    url = "/"
+    weight = 1
+  [[menu.main]]
+    name = "Getting Started"
+    url = "/getting-started/"
+    weight = 2
+  [[menu.main]]
+    name = "User Guide"
+    url = "/user-guide/"
+    weight = 3
+  [[menu.main]]
+    name = "Configuration"
+    url = "/configuration/"
+    weight = 4
+  [[menu.main]]
+    name = "Developer Guide"
+    url = "/developer-guide/"
+    weight = 5
+
+# Parameters
+[params]
+  # Project information
+  github_repo = "https://github.com/dgunzy/flux9s"
+  github_branch = "main"
+  github_subdir = "docs"
+  
+  # UI settings
+  [params.ui]
+    sidebar_menu_compact = false
+    sidebar_menu_foldable = true
+    sidebar_search = true
+    breadcrumb_disable = false
+    sidebar_menu_sticky = true
+    navbar_logo = false
+    navbar_align = "left"
+    # Keep TOC enabled (user requested to keep toc tree)
+    # Hide page meta (edit links, etc.) - but keep TOC
+    page_meta = false
+  
+  # Dark mode support
+  [params.ui.dark_mode]
+    toggle = true
+    default = "auto"  # auto, light, dark
+  
+  # Links
+  [[params.links.user]]
+    name = "GitHub"
+    url = "https://github.com/dgunzy/flux9s"
+    icon = "fab fa-github"
+    desc = "View source code on GitHub"
+  [[params.links.user]]
+    name = "Crates.io"
+    url = "https://crates.io/crates/flux9s"
+    icon = "fas fa-box"
+    desc = "View on crates.io"
+  [[params.links.user]]
+    name = "Homebrew"
+    url = "https://formulae.brew.sh/formula/flux9s"
+    icon = "fas fa-beer"
+    desc = "Install via Homebrew"
+
+# Taxonomies
+[taxonomies]
+  category = "categories"
+  tag = "tags"
+
+# Custom output formats
+[outputs]
+  home = ["HTML", "RSS", "JSON"]

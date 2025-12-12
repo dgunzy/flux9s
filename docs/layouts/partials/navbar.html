@@ -1,0 +1,32 @@
+{{/* Override Docsy navbar to add dark mode toggle */}}
+{{ $nav := .Site.Params.ui.navbar }}
+<nav class="td-navbar navbar navbar-expand-lg navbar-dark">
+  <div class="container-fluid flex-column flex-sm-row">
+    <a class="navbar-brand" href="{{ .Site.Home.RelPermalink }}">
+      <span class="navbar-brand__logo navbar-logo">
+        {{ if .Site.Params.ui.navbar_logo }}
+          {{ with resources.Get .Site.Params.ui.navbar_logo }}
+            <img src="{{ .RelPermalink }}" alt="flux9s Logo" height="30" />
+          {{ end }}
+        {{ end }}
+      </span>
+      <span class="navbar-brand__name">{{ .Site.Title }}</span>
+    </a>
+    <div class="td-navbar-nav-scroll ms-md-auto" id="main_navbar">
+      <ul class="navbar-nav">
+        {{ $p := . }}
+        {{ range .Site.Menus.main }}
+        <li class="nav-item">
+          <a class="nav-link {{ if $p.IsMenuCurrent "main" . }}active{{ end }}" href="{{ .URL }}">{{ .Name }}</a>
+        </li>
+        {{ end }}
+      </ul>
+    </div>
+    <div class="d-flex align-items-center ms-3">
+      {{/* Dark mode toggle */}}
+      <button class="theme-toggle btn btn-link text-decoration-none" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">
+        <i class="fas fa-moon" id="theme-icon"></i>
+      </button>
+    </div>
+  </div>
+</nav>

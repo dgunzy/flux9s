@@ -1,0 +1,23 @@
+// Style alert boxes.
+
+.alert {
+  font-weight: $font-weight-medium;
+  color: inherit;
+  border-radius: 0;
+
+  :last-child {
+    margin-bottom: 0;
+  }
+
+  .alert-heading {
+    color: var(--bs-alert-link-color);
+  }
+
+  @each $color, $value in $theme-colors {
+    &-#{$color} {
+      border-style: solid;
+      border-color: $value;
+      border-width: 0 0 0 4px;
+    }
+  }
+}
