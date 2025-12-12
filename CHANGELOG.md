@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] - 2025-12-12
+
+### Version 0.5.6
+
+#### Added
+- Support for SOCKS proxy connections (#68)
+
+#### Changed
+- Compiled binary is statically linked
+
 ## [0.5.5] - 2025-12-07
 
 ## Version 0.5.5
