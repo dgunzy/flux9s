@@ -24,7 +24,7 @@ notoc: true
     
     <!-- Action Buttons -->
     <div class="mb-5">
-      <a class="btn btn-lg btn-primary me-3 mb-3" href="/getting-started/">
+      <a class="btn btn-lg btn-primary me-3 mb-3" href="{{< relref \"getting-started/\" >}}">
         Get Started <i class="fas fa-arrow-alt-circle-right ms-2"></i>
       </a>
       <a class="btn btn-lg btn-outline-primary mb-3" href="https://github.com/dgunzy/flux9s">
@@ -41,6 +41,10 @@ notoc: true
       <div class="col-md-3 col-sm-6 text-center stat-item mb-4">
         <h3 id="github-stars" class="mb-2">-</h3>
         <p class="text-muted mb-0">GitHub Stars</p>
+      </div>
+      <div class="col-md-3 col-sm-6 text-center stat-item mb-4">
+        <h3 id="github-downloads" class="mb-2">-</h3>
+        <p class="text-muted mb-0">GitHub Downloads</p>
       </div>
       <div class="col-md-3 col-sm-6 text-center stat-item mb-4">
         <h3 id="github-releases" class="mb-2">-</h3>
