@@ -1,0 +1,33 @@
+// Variables loaded after Bootstrap - for dark mode overrides
+[data-bs-theme="dark"] {
+  --bs-primary: #{$purple-500};
+  --bs-secondary: #{$purple-400};
+  --bs-info: #{$purple-600};
+  --bs-body-bg: #{$dark-bg};
+  --bs-body-color: #{$dark-text};
+  --bs-link-color: #{$purple-400};
+  --bs-link-hover-color: #{$purple-300};
+  --bs-border-color: #{$purple-800};
+  
+  // Ensure body uses dark background
+  body {
+    background-color: #{$dark-bg} !important;
+    color: #{$dark-text} !important;
+  }
+}
+
+[data-bs-theme="light"] {
+  --bs-primary: #{$primary};
+  --bs-secondary: #{$secondary};
+  --bs-info: #{$info};
+  --bs-body-bg: #{$light-bg};
+  --bs-body-color: #{$light-text};
+  --bs-link-color: #{$primary};
+  --bs-link-hover-color: #{$purple-600};
+  
+  // Ensure body uses light background
+  body {
+    background-color: #{$light-bg} !important;
+    color: #{$light-text} !important;
+  }
+}

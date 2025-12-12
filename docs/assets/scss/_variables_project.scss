@@ -1,0 +1,43 @@
+// Custom color variables for flux9s purple theme
+// Primary purple colors
+$primary: #7c3aed; // Vibrant purple
+$secondary: #a78bfa; // Light purple
+$info: #8b5cf6; // Purple-blue
+$success: #10b981; // Green for success states
+$warning: #f59e0b; // Amber for warnings
+$danger: #ef4444; // Red for errors
+
+// Dark mode colors
+$dark: #0f172a; // Very dark blue-black
+$dark-bg: #1e293b; // Dark slate background
+$dark-text: #f1f5f9; // Light text for dark mode
+
+// Light mode colors
+$light: #f8fafc; // Very light gray
+$light-bg: #ffffff; // White background
+$light-text: #1e293b; // Dark text for light mode
+
+// Custom purple shades
+$purple-50: #faf5ff;
+$purple-100: #f3e8ff;
+$purple-200: #e9d5ff;
+$purple-300: #d8b4fe;
+$purple-400: #c084fc;
+$purple-500: #a855f7;
+$purple-600: #9333ea;
+$purple-700: #7e22ce;
+$purple-800: #6b21a8;
+$purple-900: #581c87;
+
+// Override Bootstrap defaults
+$body-bg: $light-bg;
+$body-color: $light-text;
+
+// Link colors
+$link-color: $primary;
+$link-hover-color: $purple-600;
+
+// Border radius
+$border-radius: 0.5rem;
+$border-radius-sm: 0.25rem;
+$border-radius-lg: 0.75rem;

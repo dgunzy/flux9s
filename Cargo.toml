@@ -12,6 +12,10 @@ documentation = "https://docs.rs/flux9s"
 keywords = ["kubernetes", "flux", "gitops", "tui", "k9s"]
 categories = ["command-line-utilities", "development-tools"]
 
+[features]
+# Vendor OpenSSL for static linking (needed for musl targets)
+vendored-openssl = ["openssl/vendored"]
+
 [dependencies]
 # Kubernetes client with HTTP proxy support - use openssl-tls for better cert support
 kube = { version = "2.0.1", default-features=false, features =  ["client", "runtime", "derive", "http-proxy", "socks5", "openssl-tls"] }
@@ -47,6 +51,9 @@ csscolorparser = "0.8"
 
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive"] }
+
+# OpenSSL - explicit dependency for vendored feature support
+openssl = { version = "0.10", optional = true }
 
 # Logging (tracing is already a transitive dependency via kube-rs, but we need it explicitly for macros)
 tracing = "0.1"

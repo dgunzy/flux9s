@@ -1,0 +1,25 @@
+# Hugo build output
+public/
+resources/
+
+# Hugo cache
+.hugo_build.lock
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Metadata cache
+metadata.json
+
+# Node.js dependencies (for PostCSS)
+node_modules/
+# Note: package.json and package-lock.json should be committed for reproducible builds
+# Only node_modules should be ignored
