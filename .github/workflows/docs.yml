@@ -61,6 +61,8 @@ jobs:
         working-directory: docs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # CRATES_IO_TOKEN not needed for public API access, but kept for future use
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |
           mkdir -p scripts
           chmod +x scripts/fetch-metadata.sh || true
