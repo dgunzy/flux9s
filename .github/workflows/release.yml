@@ -50,7 +50,13 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: flux9s
-            asset_name: flux9s-linux-x86_64.tar.gz
+            asset_name: flux9s-linux-x86_64-gnu.tar.gz
+            use_tar: true
+
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: flux9s
+            asset_name: flux9s-linux-x86_64-musl.tar.gz
             use_tar: true
 
           - os: macos-latest
@@ -81,6 +87,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
 
       - name: Install OpenSSL (Windows)
         if: runner.os == 'Windows'
@@ -203,11 +215,11 @@ jobs:
         run: |
           MACOS_INTEL_SHA=$(shasum -a 256 artifacts/flux9s-macos-x86_64.tar.gz/flux9s-macos-x86_64.tar.gz | cut -d' ' -f1)
           MACOS_ARM_SHA=$(shasum -a 256 artifacts/flux9s-macos-aarch64.tar.gz/flux9s-macos-aarch64.tar.gz | cut -d' ' -f1)
-          LINUX_SHA=$(shasum -a 256 artifacts/flux9s-linux-x86_64.tar.gz/flux9s-linux-x86_64.tar.gz | cut -d' ' -f1)
+          LINUX_MUSL_SHA=$(shasum -a 256 artifacts/flux9s-linux-x86_64-musl.tar.gz/flux9s-linux-x86_64-musl.tar.gz | cut -d' ' -f1)
 
           echo "macos_intel_sha=$MACOS_INTEL_SHA" >> $GITHUB_OUTPUT
           echo "macos_arm_sha=$MACOS_ARM_SHA" >> $GITHUB_OUTPUT
-          echo "linux_sha=$LINUX_SHA" >> $GITHUB_OUTPUT
+          echo "linux_musl_sha=$LINUX_MUSL_SHA" >> $GITHUB_OUTPUT
 
       - name: Checkout homebrew-tap
         uses: actions/checkout@v4
@@ -240,8 +252,8 @@ jobs:
 
             on_linux do
               if Hardware::CPU.intel?
-                url "https://github.com/dgunzy/flux9s/releases/download/v${{ steps.version.outputs.version }}/flux9s-linux-x86_64.tar.gz"
-                sha256 "${{ steps.checksums.outputs.linux_sha }}"
+                url "https://github.com/dgunzy/flux9s/releases/download/v${{ steps.version.outputs.version }}/flux9s-linux-x86_64-musl.tar.gz"
+                sha256 "${{ steps.checksums.outputs.linux_musl_sha }}"
               end
             end
 

@@ -63,7 +63,10 @@ bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 
 [package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
-pkg-url = "{ repo }/releases/download/v{ version }/{ name }-linux-x86_64.{ archive-format }"
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-linux-x86_64-gnu.{ archive-format }"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-linux-x86_64-musl.{ archive-format }"
 
 [package.metadata.binstall.overrides.x86_64-apple-darwin]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-macos-x86_64.{ archive-format }"
