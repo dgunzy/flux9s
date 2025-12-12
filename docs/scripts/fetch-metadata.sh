@@ -14,6 +14,7 @@ echo "Fetching metadata for ${REPO}..."
 cat > "${METADATA_FILE}" <<EOF
 {
   "crates_downloads": 0,
+  "homebrew_downloads": 0,
   "github_stars": 0,
   "github_releases": 0,
   "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -22,12 +23,20 @@ EOF
 
 # Fetch crates.io download count
 echo "Fetching crates.io download count..."
-CRATES_DOWNLOADS=$(curl -s "https://crates.io/api/v1/crates/${CRATE}" | jq -r '.crate.downloads // 0' 2>/dev/null || echo "0")
-if [ -n "${CRATES_DOWNLOADS}" ] && [ "${CRATES_DOWNLOADS}" != "null" ]; then
+# Crates.io API doesn't require auth for public data, but we can add User-Agent header
+CRATES_RESPONSE=$(curl -s -H "User-Agent: flux9s-docs/1.0" "https://crates.io/api/v1/crates/${CRATE}" 2>/dev/null || echo "{}")
+CRATES_DOWNLOADS=$(echo "${CRATES_RESPONSE}" | jq -r '.crate.downloads // 0' 2>/dev/null || echo "0")
+
+# Verify we got valid data
+if [ "${CRATES_DOWNLOADS}" = "null" ] || [ -z "${CRATES_DOWNLOADS}" ]; then
+  CRATES_DOWNLOADS="0"
+fi
+
+if [ "${CRATES_DOWNLOADS}" != "0" ]; then
   jq ".crates_downloads = ${CRATES_DOWNLOADS}" "${METADATA_FILE}" > "${METADATA_FILE}.tmp" && mv "${METADATA_FILE}.tmp" "${METADATA_FILE}"
   echo "  Crates.io downloads: ${CRATES_DOWNLOADS}"
 else
-  echo "  Failed to fetch crates.io downloads"
+  echo "  Crates.io downloads: 0"
 fi
 
 # Fetch GitHub stars and releases (requires GITHUB_TOKEN if rate limited)
@@ -52,15 +61,21 @@ else
   echo "  Failed to fetch GitHub stars"
 fi
 
-# Fetch GitHub releases count
-echo "Fetching GitHub releases..."
+# Fetch GitHub releases count and Homebrew downloads (sum of all release asset downloads)
+echo "Fetching GitHub releases and Homebrew download counts..."
 # Fetch releases with pagination - get first 100 releases (should be enough)
 RELEASES_RESPONSE=$(curl -s "${GITHUB_HEADERS[@]}" "https://api.github.com/repos/${REPO}/releases?per_page=100" || echo "[]")
 GITHUB_RELEASES=$(echo "${RELEASES_RESPONSE}" | jq '. | length' 2>/dev/null || echo "0")
-# If we got 100, there might be more, but we'll just show 100+
+
+# Calculate total Homebrew downloads by summing all release asset download counts
+# Homebrew typically downloads tar.gz/zip files from releases
+HOMEBREW_DOWNLOADS=$(echo "${RELEASES_RESPONSE}" | jq '[.[]?.assets[]?.download_count // 0] | add // 0' 2>/dev/null || echo "0")
+
+# If we got 100 releases, there might be more, but we'll just show 100+
 if [ "${GITHUB_RELEASES}" = "100" ]; then
   GITHUB_RELEASES="100+"
 fi
+
 if [ -n "${GITHUB_RELEASES}" ] && [ "${GITHUB_RELEASES}" != "null" ] && [ "${GITHUB_RELEASES}" != "0" ]; then
   # For numeric values, update JSON; for "100+", we'll handle it differently
   if [[ "${GITHUB_RELEASES}" =~ ^[0-9]+$ ]]; then
@@ -72,6 +87,14 @@ if [ -n "${GITHUB_RELEASES}" ] && [ "${GITHUB_RELEASES}" != "null" ] && [ "${GIT
   echo "  GitHub releases: ${GITHUB_RELEASES}"
 else
   echo "  Failed to fetch GitHub releases"
+fi
+
+# Update Homebrew downloads
+if [ -n "${HOMEBREW_DOWNLOADS}" ] && [ "${HOMEBREW_DOWNLOADS}" != "null" ]; then
+  jq ".homebrew_downloads = ${HOMEBREW_DOWNLOADS}" "${METADATA_FILE}" > "${METADATA_FILE}.tmp" && mv "${METADATA_FILE}.tmp" "${METADATA_FILE}"
+  echo "  Homebrew downloads (from GitHub releases): ${HOMEBREW_DOWNLOADS}"
+else
+  echo "  Homebrew downloads: 0"
 fi
 
 echo "Metadata saved to ${METADATA_FILE}"
