@@ -110,8 +110,9 @@ pub struct App {
     status_message: Option<(String, bool)>, // (message, is_error)
     status_message_time: Option<std::time::Instant>, // When status message was set
     theme: Theme,
-    config: crate::config::Config,  // Application configuration
+    config: crate::config::Config,          // Application configuration
     namespace_hotkeys: Vec<String>, // Namespace hotkeys (0-9), where 0=all, 1=flux-system, etc.
+    pending_context_switch: Option<String>, // Context name to switch to (handled in main loop)
     // Cached layout dimensions to prevent bouncing/flickering
     cached_terminal_size: Option<(u16, u16)>, // (width, height)
     cached_header_height: u16,
@@ -177,6 +178,7 @@ impl App {
             theme,
             config: config.clone(),
             namespace_hotkeys: Self::build_namespace_hotkeys(&config, Vec::new()), // Will be updated with discovered namespaces
+            pending_context_switch: None, // No pending context switch on init
             // Initialize layout cache - will be populated on first render
             cached_terminal_size: None,
             cached_header_height: 7, // Default minimum
@@ -312,6 +314,27 @@ impl App {
 
     pub fn set_watcher(&mut self, watcher: crate::watcher::ResourceWatcher) {
         self.watcher = Some(watcher);
+    }
+
+    /// Check if there's a pending context switch and return the context name
+    pub fn take_pending_context_switch(&mut self) -> Option<String> {
+        self.pending_context_switch.take()
+    }
+
+    /// Update the app with a new context after successful switch
+    pub fn complete_context_switch(&mut self, context: String) {
+        self.context = context;
+        // Clear state when switching contexts
+        self.state.clear();
+        // Clear resource objects
+        {
+            let mut objects = self.resource_objects.write().unwrap();
+            objects.clear();
+        }
+        // Reset selection
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+        self.selected_resource_type = None;
     }
 
     pub fn state(&mut self) -> &mut ResourceState {
@@ -1173,6 +1196,40 @@ impl App {
                         "Usage: :trace <resource-type>/<name> or :trace (for selected)".to_string(),
                         true,
                     ));
+                }
+            }
+            return None;
+        }
+
+        // Handle context switching - reconnect to different cluster
+        if cmd_lower.starts_with("ctx ") || cmd_lower.starts_with("context ") {
+            let context_name = cmd.split_whitespace().nth(1);
+
+            match context_name {
+                Some(ctx) => {
+                    // Mark context switch as pending - will be handled in main loop
+                    self.pending_context_switch = Some(ctx.to_string());
+                    self.set_status_message((format!("Switching to context '{}'...", ctx), false));
+                }
+                None => {
+                    // List available contexts
+                    match crate::kube::list_contexts() {
+                        Ok(contexts) => {
+                            let current = self.context.clone();
+                            let msg = format!(
+                                "Available contexts: {}. Current: {}. Usage: :ctx <context-name>",
+                                contexts.join(", "),
+                                current
+                            );
+                            self.set_status_message((msg, false));
+                        }
+                        Err(e) => {
+                            self.set_status_message((
+                                format!("Failed to list contexts: {}", e),
+                                true,
+                            ));
+                        }
+                    }
                 }
             }
             return None;

@@ -1,4 +1,4 @@
-baseURL = 'https://dgunzy.github.io/flux9s/'
+baseURL = 'https://flux9s.ca/'
 title = 'flux9s Documentation'
 description = 'A K9s-inspired terminal UI for monitoring Flux GitOps resources in real-time'
 
@@ -88,7 +88,7 @@ buildFuture = false
     desc = "View on crates.io"
   [[params.links.user]]
     name = "Homebrew"
-    url = "https://formulae.brew.sh/formula/flux9s"
+    url = "https://github.com/dgunzy/homebrew-tap"
     icon = "fas fa-beer"
     desc = "Install via Homebrew"
 
