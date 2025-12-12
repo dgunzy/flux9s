@@ -23,6 +23,12 @@
       starsEl.textContent = formatNumber(metadata.github_stars);
     }
 
+    // Update GitHub binary downloads
+    const downloadsEl = document.getElementById("github-downloads");
+    if (downloadsEl && metadata.github_binary_downloads) {
+      downloadsEl.textContent = formatNumber(metadata.github_binary_downloads);
+    }
+
     // Update GitHub releases
     const releasesEl = document.getElementById("github-releases");
     if (releasesEl && metadata.github_releases) {
@@ -33,6 +39,7 @@
     // Set default values on error
     document.getElementById("crates-downloads").textContent = "-";
     document.getElementById("github-stars").textContent = "-";
+    document.getElementById("github-downloads").textContent = "-";
     document.getElementById("github-releases").textContent = "-";
   }
 })();
