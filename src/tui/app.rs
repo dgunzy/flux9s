@@ -163,10 +163,16 @@ impl App {
             trace_result_rx: None,
             trace_scroll_offset: 0,
             show_splash: !config.ui.splashless, // Skip splash if splashless is true
+            // Don't set splash_start_time here - set it when TUI actually starts rendering
+            // This ensures the timer starts at the right time, not during async initialization
             splash_start_time: if config.ui.splashless {
                 None
             } else {
-                Some(std::time::Instant::now())
+                tracing::debug!(
+                    "Splash screen will be shown (splashless={})",
+                    config.ui.splashless
+                );
+                None // Will be set when TUI starts rendering
             },
             operation_registry: OperationRegistry::new(),
             pending_operation: None,
@@ -316,6 +322,18 @@ impl App {
         self.watcher = Some(watcher);
     }
 
+    pub fn set_context(&mut self, context: String) {
+        self.context = context;
+    }
+
+    pub fn set_namespace(&mut self, namespace: Option<String>) {
+        self.namespace = namespace;
+    }
+
+    pub fn namespace(&self) -> &Option<String> {
+        &self.namespace
+    }
+
     /// Check if there's a pending context switch and return the context name
     pub fn take_pending_context_switch(&mut self) -> Option<String> {
         self.pending_context_switch.take()
@@ -444,6 +462,30 @@ impl App {
             }
         }
         None
+    }
+
+    /// Initialize the splash screen timer - call this when TUI actually starts rendering
+    /// This ensures the timer starts when rendering begins, not during async initialization
+    pub fn init_splash_timer(&mut self) {
+        tracing::debug!(
+            "init_splash_timer: show_splash={}, splash_start_time.is_none()={}",
+            self.show_splash,
+            self.splash_start_time.is_none()
+        );
+        if self.show_splash && self.splash_start_time.is_none() {
+            let start_time = std::time::Instant::now();
+            tracing::debug!(
+                "Initializing splash_start_time for first render: {:?}",
+                start_time
+            );
+            self.splash_start_time = Some(start_time);
+        } else {
+            tracing::warn!(
+                "Splash timer NOT initialized: show_splash={}, splash_start_time.is_none()={}",
+                self.show_splash,
+                self.splash_start_time.is_none()
+            );
+        }
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<bool> {
@@ -1374,10 +1416,24 @@ impl App {
         // Show splash screen for 1.5 seconds, then auto-dismiss
         if self.show_splash {
             if let Some(start_time) = self.splash_start_time {
-                if start_time.elapsed() >= std::time::Duration::from_millis(1500) {
+                let elapsed = start_time.elapsed();
+                tracing::debug!(
+                    "Splash render check: elapsed={:?}ms, show_splash={}",
+                    elapsed.as_millis(),
+                    self.show_splash
+                );
+                if elapsed >= std::time::Duration::from_millis(1500) {
+                    tracing::debug!(
+                        "Splash screen auto-dismissing after {:?}ms",
+                        elapsed.as_millis()
+                    );
                     self.show_splash = false;
                     self.splash_start_time = None;
                 } else {
+                    tracing::debug!(
+                        "Rendering splash screen (elapsed: {:?}ms)",
+                        elapsed.as_millis()
+                    );
                     let chunks = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([Constraint::Min(0)])
@@ -1387,6 +1443,9 @@ impl App {
                 }
             } else {
                 // Fallback: if start_time is None but show_splash is true, hide it
+                tracing::warn!(
+                    "Splash screen should show but splash_start_time is None - hiding splash"
+                );
                 self.show_splash = false;
             }
         }
