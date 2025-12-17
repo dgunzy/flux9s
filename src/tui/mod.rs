@@ -84,20 +84,16 @@ async fn fetch_resource_yaml(
     }
 }
 
-/// Run the TUI application
-pub async fn run_tui(
-    state: crate::watcher::ResourceState,
-    mut event_rx: tokio::sync::mpsc::UnboundedReceiver<crate::watcher::WatchEvent>,
-    context: String,
-    namespace: Option<String>,
-    watcher: crate::watcher::ResourceWatcher,
-    client: kube::Client,
+/// Run the TUI application with async Kubernetes initialization
+/// This shows the splash screen immediately, then initializes Kubernetes in the background
+pub async fn run_tui_with_async_init(
     config: crate::config::Config,
     theme: crate::tui::Theme,
+    debug: bool,
 ) -> Result<()> {
-    tracing::debug!("Initializing TUI");
+    tracing::debug!("Initializing TUI with async Kubernetes setup");
 
-    // Setup terminal
+    // Setup terminal IMMEDIATELY - this is the first thing we do
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -108,122 +104,244 @@ pub async fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app state with config and theme
-    let mut app = App::new(state, context, namespace.clone(), config.clone(), theme);
-    app.set_watcher(watcher);
-    app.set_kube_client(client.clone());
+    // Create app state with empty state - will be populated by async initialization
+    let state = crate::watcher::ResourceState::new();
 
-    // Discover namespaces with Flux resources for hotkeys (if not configured)
-    if config.namespace_hotkeys.is_empty() {
-        if let Ok(discovered) = crate::kube::discover_namespaces_with_flux_resources(&client).await
+    // Debug: Log splashless config value
+    tracing::debug!(
+        "Creating app with splashless={}, show_splash will be {}",
+        config.ui.splashless,
+        !config.ui.splashless
+    );
+
+    let mut app = App::new(
+        state,
+        "Connecting...".to_string(), // Placeholder context
+        None,                        // Placeholder namespace
+        config.clone(),
+        theme,
+    );
+
+    // Initialize splash timer right before first render
+    // This ensures the timer starts when TUI actually renders, not during async initialization
+    app.init_splash_timer();
+
+    // Spawn async task to initialize Kubernetes and start watchers
+    // This happens in the background while splash is showing
+    let (kube_init_tx, mut kube_init_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        tracing::debug!("Starting async Kubernetes initialization");
+
+        // Initialize Kubernetes client
+        let client = match crate::kube::create_client().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("Failed to create Kubernetes client: {}", e);
+                let _ = kube_init_tx.send(Err(e));
+                return;
+            }
+        };
+
+        let context = match crate::kube::get_context().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("Failed to get Kubernetes context: {}", e);
+                let _ = kube_init_tx.send(Err(e));
+                return;
+            }
+        };
+
+        // Use config.default_namespace if set, otherwise fall back to environment/default
+        let default_namespace = if config.default_namespace.is_empty()
+            || config.default_namespace == "all"
+            || config.default_namespace == "-A"
         {
-            app.update_namespace_hotkeys(discovered);
-            tracing::debug!(
-                "Discovered {} namespaces for hotkeys",
-                app.namespace_hotkeys().len()
-            );
+            crate::kube::get_default_namespace().await
         } else {
-            tracing::warn!("Failed to discover namespaces, using defaults");
+            Some(config.default_namespace.clone())
+        };
+
+        if debug {
+            tracing::info!("Connected to Kubernetes cluster: {}", context);
+            if let Some(ref ns) = default_namespace {
+                tracing::info!("Default namespace: {}", ns);
+            } else {
+                tracing::info!("Watching all namespaces");
+            }
         }
-    }
 
-    tracing::debug!("TUI initialized, entering main loop");
+        // Create resource state and watcher
+        tracing::debug!("Creating resource state and watcher");
+        let (mut watcher, event_rx) =
+            crate::watcher::ResourceWatcher::new(client.clone(), default_namespace.clone());
 
-    // Main event loop
+        // Start watching all Flux resources
+        if let Err(e) = watcher.watch_all() {
+            tracing::error!("Failed to start watchers: {}", e);
+            let _ = kube_init_tx.send(Err(anyhow::anyhow!("Failed to start watchers: {}", e)));
+            return;
+        }
+
+        // Discover namespaces with Flux resources for hotkeys (if not configured)
+        let namespace_hotkeys = if config.namespace_hotkeys.is_empty() {
+            crate::kube::discover_namespaces_with_flux_resources(&client)
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let _ = kube_init_tx.send(Ok((
+            client,
+            context,
+            default_namespace,
+            watcher,
+            event_rx,
+            namespace_hotkeys,
+        )));
+    });
+
+    // Main event loop - start rendering immediately with splash
+    let mut event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::watcher::WatchEvent>> =
+        None;
+    let mut kube_client: Option<kube::Client> = None;
+    let mut kube_initialized = false;
+
     loop {
+        // Check if Kubernetes initialization is complete
+        if !kube_initialized {
+            if let Ok(result) = kube_init_rx.try_recv() {
+                match result {
+                    Ok((client, context, namespace, w, rx, namespace_hotkeys)) => {
+                        tracing::debug!("Kubernetes initialization complete");
+                        kube_client = Some(client.clone());
+                        event_rx = Some(rx);
+                        app.set_kube_client(client.clone());
+                        app.set_watcher(w);
+                        app.set_context(context);
+                        app.set_namespace(namespace.clone());
+
+                        if !namespace_hotkeys.is_empty() {
+                            app.update_namespace_hotkeys(namespace_hotkeys);
+                            tracing::debug!(
+                                "Discovered {} namespaces for hotkeys",
+                                app.namespace_hotkeys().len()
+                            );
+                        }
+
+                        kube_initialized = true;
+                    }
+                    Err(e) => {
+                        tracing::error!("Kubernetes initialization failed: {}", e);
+                        app.set_status_message((
+                            format!("Failed to connect to Kubernetes: {}", e),
+                            true,
+                        ));
+                        kube_initialized = true; // Mark as initialized to stop retrying
+                    }
+                }
+            }
+        }
+
         terminal.draw(|f| app.render(f))?;
 
         // Check if we need to fetch YAML asynchronously
-        if let Some((key, client, tx)) = app.trigger_yaml_fetch() {
-            // Parse key using type-safe ResourceKey
-            if let Some(rk) = ResourceKey::parse(&key) {
-                tracing::debug!(
-                    "Fetching YAML for {}/{} in namespace {}",
-                    rk.resource_type,
-                    rk.name,
-                    rk.namespace
-                );
+        // Only if Kubernetes is initialized
+        if kube_initialized {
+            if let Some((key, client, tx)) = app.trigger_yaml_fetch() {
+                // Parse key using type-safe ResourceKey
+                if let Some(rk) = ResourceKey::parse(&key) {
+                    tracing::debug!(
+                        "Fetching YAML for {}/{} in namespace {}",
+                        rk.resource_type,
+                        rk.name,
+                        rk.namespace
+                    );
 
-                // Spawn async task to fetch resource
-                let client_clone = client.clone();
-                tokio::spawn(async move {
-                    let result = fetch_resource_yaml(
-                        &client_clone,
-                        &rk.resource_type,
-                        &rk.namespace,
-                        &rk.name,
-                    )
-                    .await;
-                    if let Err(ref e) = result {
-                        tracing::warn!(
-                            "Failed to fetch YAML for {}/{} in namespace {}: {}",
-                            rk.resource_type,
-                            rk.name,
-                            rk.namespace,
-                            e
-                        );
-                    } else {
-                        tracing::debug!(
-                            "Successfully fetched YAML for {}/{}",
-                            rk.resource_type,
-                            rk.name
-                        );
-                    }
-                    let _ = tx.send(result);
-                });
-            } else {
-                tracing::error!("Failed to parse resource key for YAML fetch: {}", key);
-                let _ = tx.send(Err(anyhow::anyhow!("Invalid resource key format: {}", key)));
+                    // Spawn async task to fetch resource
+                    let client_clone = client.clone();
+                    tokio::spawn(async move {
+                        let result = fetch_resource_yaml(
+                            &client_clone,
+                            &rk.resource_type,
+                            &rk.namespace,
+                            &rk.name,
+                        )
+                        .await;
+                        if let Err(ref e) = result {
+                            tracing::warn!(
+                                "Failed to fetch YAML for {}/{} in namespace {}: {}",
+                                rk.resource_type,
+                                rk.name,
+                                rk.namespace,
+                                e
+                            );
+                        } else {
+                            tracing::debug!(
+                                "Successfully fetched YAML for {}/{}",
+                                rk.resource_type,
+                                rk.name
+                            );
+                        }
+                        let _ = tx.send(result);
+                    });
+                } else {
+                    tracing::error!("Failed to parse resource key for YAML fetch: {}", key);
+                    let _ = tx.send(Err(anyhow::anyhow!("Invalid resource key format: {}", key)));
+                }
             }
         }
 
         // Check if we need to trace a resource asynchronously
-        if let Some(req) = app.trigger_trace() {
-            tracing::debug!(
-                "Tracing {}/{} in namespace {}",
-                req.resource_type,
-                req.name,
-                req.namespace
-            );
+        // Only if Kubernetes is initialized
+        if kube_initialized {
+            if let Some(req) = app.trigger_trace() {
+                tracing::debug!(
+                    "Tracing {}/{} in namespace {}",
+                    req.resource_type,
+                    req.name,
+                    req.namespace
+                );
 
-            // Spawn async task to trace resource
-            let client_clone = req.client.clone();
-            let resource_type = req.resource_type;
-            let namespace = req.namespace;
-            let name = req.name;
-            let tx = req.tx;
-            tokio::spawn(async move {
-                use crate::tui::trace;
-                let result =
-                    trace::trace_object(&client_clone, &resource_type, &namespace, &name).await;
-                match result {
-                    Ok(trace_result) => {
-                        tracing::debug!(
-                            "Successfully traced {}/{} in namespace {}",
-                            resource_type,
-                            name,
-                            namespace
-                        );
-                        let _ = tx.send(Ok(trace_result));
+                // Spawn async task to trace resource
+                let client_clone = req.client.clone();
+                let resource_type = req.resource_type;
+                let namespace = req.namespace;
+                let name = req.name;
+                let tx = req.tx;
+                tokio::spawn(async move {
+                    use crate::tui::trace;
+                    let result =
+                        trace::trace_object(&client_clone, &resource_type, &namespace, &name).await;
+                    match result {
+                        Ok(trace_result) => {
+                            tracing::debug!(
+                                "Successfully traced {}/{} in namespace {}",
+                                resource_type,
+                                name,
+                                namespace
+                            );
+                            let _ = tx.send(Ok(trace_result));
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to trace {}/{} in namespace {}: {}",
+                                resource_type,
+                                name,
+                                namespace,
+                                e
+                            );
+                            let _ = tx.send(Err(anyhow::anyhow!(
+                                "Trace failed for {}/{} in {}: {}",
+                                resource_type,
+                                name,
+                                namespace,
+                                e
+                            )));
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to trace {}/{} in namespace {}: {}",
-                            resource_type,
-                            name,
-                            namespace,
-                            e
-                        );
-                        let _ = tx.send(Err(anyhow::anyhow!(
-                            "Trace failed for {}/{} in {}: {}",
-                            resource_type,
-                            name,
-                            namespace,
-                            e
-                        )));
-                    }
-                }
-            });
+                });
+            }
         }
 
         // Check for trace results
@@ -313,41 +431,47 @@ pub async fn run_tui(
         if let Some(new_context) = app.take_pending_context_switch() {
             tracing::info!("Switching to context: {}", new_context);
 
-            match crate::kube::create_client_for_context(&new_context).await {
-                Ok(new_client) => {
-                    // Create new watcher with new client
-                    // ResourceWatcher::new returns a tuple (watcher, receiver), not a Result
-                    let (mut new_watcher, new_event_rx) =
-                        crate::watcher::ResourceWatcher::new(new_client.clone(), namespace.clone());
+            if kube_client.is_some() {
+                match crate::kube::create_client_for_context(&new_context).await {
+                    Ok(new_client) => {
+                        // Create new watcher with new client
+                        // ResourceWatcher::new returns a tuple (watcher, receiver), not a Result
+                        let namespace = app.namespace().clone();
+                        let (mut new_watcher, new_event_rx) =
+                            crate::watcher::ResourceWatcher::new(new_client.clone(), namespace);
 
-                    // Start watching all resources with the new watcher
-                    if let Err(e) = new_watcher.watch_all() {
-                        tracing::error!("Failed to start watchers after context switch: {}", e);
-                        app.set_status_message((format!("Failed to start watchers: {}", e), true));
-                        return Ok(());
+                        // Start watching all resources with the new watcher
+                        if let Err(e) = new_watcher.watch_all() {
+                            tracing::error!("Failed to start watchers after context switch: {}", e);
+                            app.set_status_message((
+                                format!("Failed to start watchers: {}", e),
+                                true,
+                            ));
+                            return Ok(());
+                        }
+
+                        // Update app with new context and watcher
+                        app.complete_context_switch(new_context.clone());
+                        app.set_kube_client(new_client.clone());
+                        app.set_watcher(new_watcher);
+
+                        // Replace event receiver
+                        event_rx = Some(new_event_rx);
+
+                        app.set_status_message((
+                            format!("Successfully switched to context: {}", new_context),
+                            false,
+                        ));
+
+                        // Reload skin for new context
+                        app.reload_skin_for_readonly_mode(Some(&new_context));
+
+                        tracing::info!("Context switch completed: {}", new_context);
                     }
-
-                    // Update app with new context and watcher
-                    app.complete_context_switch(new_context.clone());
-                    app.set_kube_client(new_client.clone());
-                    app.set_watcher(new_watcher);
-
-                    // Replace event receiver
-                    event_rx = new_event_rx;
-
-                    app.set_status_message((
-                        format!("Successfully switched to context: {}", new_context),
-                        false,
-                    ));
-
-                    // Reload skin for new context
-                    app.reload_skin_for_readonly_mode(Some(&new_context));
-
-                    tracing::info!("Context switch completed: {}", new_context);
-                }
-                Err(e) => {
-                    app.set_status_message((format!("Failed to switch context: {}", e), true));
-                    tracing::error!("Context switch failed: {}", e);
+                    Err(e) => {
+                        app.set_status_message((format!("Failed to switch context: {}", e), true));
+                        tracing::error!("Context switch failed: {}", e);
+                    }
                 }
             }
         }
@@ -374,44 +498,46 @@ pub async fn run_tui(
         // Track resource type count to detect when header layout needs recalculation
         let resource_type_count_before = app.state().count_by_type().len();
 
-        while let Ok(event) = event_rx.try_recv() {
-            events_processed += 1;
-            match event {
-                crate::watcher::WatchEvent::Applied(resource_type, ns, name, obj_json) => {
-                    let key = crate::watcher::resource_key(&ns, &name, &resource_type);
-                    let (suspended, ready, message, revision) =
-                        crate::watcher::extract_status_fields(&obj_json);
-                    let labels = crate::watcher::extract_labels(&obj_json);
-                    let annotations = crate::watcher::extract_annotations(&obj_json);
-                    app.state().upsert(
-                        key.clone(),
-                        crate::watcher::ResourceInfo {
-                            name,
-                            namespace: ns,
-                            resource_type,
-                            age: Some(chrono::Utc::now()),
-                            suspended,
-                            ready,
-                            message,
-                            revision,
-                            labels,
-                            annotations,
-                        },
-                    );
-                    // Store full object for detail view
-                    {
-                        let mut objects = app.resource_objects().write().unwrap();
-                        objects.insert(key.clone(), obj_json);
+        if let Some(ref mut rx) = event_rx {
+            while let Ok(event) = rx.try_recv() {
+                events_processed += 1;
+                match event {
+                    crate::watcher::WatchEvent::Applied(resource_type, ns, name, obj_json) => {
+                        let key = crate::watcher::resource_key(&ns, &name, &resource_type);
+                        let (suspended, ready, message, revision) =
+                            crate::watcher::extract_status_fields(&obj_json);
+                        let labels = crate::watcher::extract_labels(&obj_json);
+                        let annotations = crate::watcher::extract_annotations(&obj_json);
+                        app.state().upsert(
+                            key.clone(),
+                            crate::watcher::ResourceInfo {
+                                name,
+                                namespace: ns,
+                                resource_type,
+                                age: Some(chrono::Utc::now()),
+                                suspended,
+                                ready,
+                                message,
+                                revision,
+                                labels,
+                                annotations,
+                            },
+                        );
+                        // Store full object for detail view
+                        {
+                            let mut objects = app.resource_objects().write().unwrap();
+                            objects.insert(key.clone(), obj_json);
+                        }
                     }
-                }
-                crate::watcher::WatchEvent::Deleted(resource_type, ns, name) => {
-                    let key = crate::watcher::resource_key(&ns, &name, &resource_type);
-                    app.state().remove(&key);
-                }
-                crate::watcher::WatchEvent::Error(msg) => {
-                    // Log errors but don't spam - only show first few
-                    // Errors are also shown in the TUI if needed
-                    tracing::warn!("Watch event error: {}", msg);
+                    crate::watcher::WatchEvent::Deleted(resource_type, ns, name) => {
+                        let key = crate::watcher::resource_key(&ns, &name, &resource_type);
+                        app.state().remove(&key);
+                    }
+                    crate::watcher::WatchEvent::Error(msg) => {
+                        // Log errors but don't spam - only show first few
+                        // Errors are also shown in the TUI if needed
+                        tracing::warn!("Watch event error: {}", msg);
+                    }
                 }
             }
         }
