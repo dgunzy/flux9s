@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.9] - 2025-12-17
+
+Here's a concise changelog summary for version 0.5.9:
+
+### Fixed
+- Resolved a bug that caused issues during application startup.
+
 ## [0.5.8] - 2025-12-12
 
 ## Version 0.5.8
