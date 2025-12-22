@@ -30,6 +30,12 @@ Choose your preferred installation method from the [Installation Guide](/getting
 flux9s
 ```
 
+Or use a specific kubeconfig file:
+
+```bash
+flux9s --kubeconfig /path/to/kubeconfig
+```
+
 By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view all namespaces or `:ns <namespace>` to switch to a specific namespace.
 
 {{% alert title="Note" color="info" %}}

@@ -90,6 +90,7 @@ pub async fn run_tui_with_async_init(
     config: crate::config::Config,
     theme: crate::tui::Theme,
     debug: bool,
+    kubeconfig_path: Option<&std::path::Path>,
 ) -> Result<()> {
     tracing::debug!("Initializing TUI with async Kubernetes setup");
 
@@ -128,27 +129,60 @@ pub async fn run_tui_with_async_init(
 
     // Spawn async task to initialize Kubernetes and start watchers
     // This happens in the background while splash is showing
+    let kubeconfig_path_clone = kubeconfig_path.map(|p| p.to_path_buf());
     let (kube_init_tx, mut kube_init_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         tracing::debug!("Starting async Kubernetes initialization");
 
-        // Initialize Kubernetes client
-        let client = match crate::kube::create_client().await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to create Kubernetes client: {}", e);
-                let _ = kube_init_tx.send(Err(e));
-                return;
+        // Initialize Kubernetes client - use kubeconfig path if provided
+        let client = match kubeconfig_path_clone {
+            Some(ref path) => {
+                tracing::debug!("Using kubeconfig from: {}", path.display());
+                match crate::kube::create_client_from_kubeconfig_path(path).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to create Kubernetes client from {}: {}",
+                            path.display(),
+                            e
+                        );
+                        let _ = kube_init_tx.send(Err(e));
+                        return;
+                    }
+                }
             }
+            None => match crate::kube::create_client().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Failed to create Kubernetes client: {}", e);
+                    let _ = kube_init_tx.send(Err(e));
+                    return;
+                }
+            },
         };
 
-        let context = match crate::kube::get_context().await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to get Kubernetes context: {}", e);
-                let _ = kube_init_tx.send(Err(e));
-                return;
-            }
+        // Get context - use kubeconfig path if provided
+        let context = match kubeconfig_path_clone {
+            Some(ref path) => match crate::kube::get_context_from_kubeconfig_path(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to get Kubernetes context from {}: {}",
+                        path.display(),
+                        e
+                    );
+                    let _ = kube_init_tx.send(Err(e));
+                    return;
+                }
+            },
+            None => match crate::kube::get_context().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Failed to get Kubernetes context: {}", e);
+                    let _ = kube_init_tx.send(Err(e));
+                    return;
+                }
+            },
         };
 
         // Use config.default_namespace if set, otherwise fall back to environment/default
@@ -233,11 +267,20 @@ pub async fn run_tui_with_async_init(
                     }
                     Err(e) => {
                         tracing::error!("Kubernetes initialization failed: {}", e);
-                        app.set_status_message((
-                            format!("Failed to connect to Kubernetes: {}", e),
-                            true,
-                        ));
-                        kube_initialized = true; // Mark as initialized to stop retrying
+
+                        // Clean up terminal before exiting
+                        disable_raw_mode()?;
+                        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                        if config.ui.enable_mouse {
+                            execute!(terminal.backend_mut(), DisableMouseCapture)?;
+                        }
+
+                        // Print error to stderr and exit
+                        eprintln!("Error: Failed to connect to Kubernetes: {}", e);
+                        if let Some(kubeconfig_path) = kubeconfig_path {
+                            eprintln!("Kubeconfig file: {}", kubeconfig_path.display());
+                        }
+                        std::process::exit(1);
                     }
                 }
             }
