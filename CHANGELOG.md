@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.11] - 2025-12-22
+
+## Version 0.5.11
+
+### Added
+- Added "unhealthy" and "health" filters to display percentage status on top
+
+### Changed
+- Updated 2024 edition with status tweak
+
 ## [0.5.10] - 2025-12-22
 
 Here is a concise changelog summary for version 0.5.10:
