@@ -11,12 +11,12 @@ pub mod tui;
 pub mod watcher;
 
 // Re-export trace types for testing
-pub use trace::{trace_object, SourceRef, TraceNode, TraceResult, TraceSpec, TraceStatus};
+pub use trace::{SourceRef, TraceNode, TraceResult, TraceSpec, TraceStatus, trace_object};
 
 // Re-export commonly used types for convenience
 pub use watcher::{
-    extract_status_fields, get_all_commands, resource_key, ResourceInfo, ResourceKey,
-    ResourceState, ResourceWatcher, WatchEvent, WatchableResource,
+    ResourceInfo, ResourceKey, ResourceState, ResourceWatcher, WatchEvent, WatchableResource,
+    extract_status_fields, get_all_commands, resource_key,
 };
 
 // Re-export TUI functions for testing

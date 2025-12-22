@@ -4,11 +4,11 @@ use crate::tui::theme::Theme;
 use crate::tui::trace::{TraceNode, TraceResult};
 use crate::watcher::ResourceKey;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 
 /// Render the trace view

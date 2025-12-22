@@ -4,7 +4,7 @@
 //! The core trace logic is in the `crate::trace` module.
 
 // Re-export from the trace module
-pub use crate::trace::{trace_object, TraceNode, TraceResult};
+pub use crate::trace::{TraceNode, TraceResult, trace_object};
 
 /// Format trace result as a string (similar to flux trace output)
 #[allow(dead_code)] // May be used for debugging or future CLI output

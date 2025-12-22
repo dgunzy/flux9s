@@ -154,10 +154,12 @@ fn test_trace_kustomization_managed_by_kustomization_structure() {
 
     // Verify cabot-book is NOT in chain (only flux-system should be)
     assert!(!result.chain.iter().any(|n| n.name == "cabot-book"));
-    assert!(result
-        .chain
-        .iter()
-        .any(|n| n.name == "flux-system" && n.kind == "Kustomization"));
+    assert!(
+        result
+            .chain
+            .iter()
+            .any(|n| n.name == "flux-system" && n.kind == "Kustomization")
+    );
 
     // Verify source is GitRepository
     assert!(result.source.is_some());
@@ -239,10 +241,12 @@ fn test_trace_helmrelease_managed_by_kustomization_structure() {
 
     // Verify podinfo is NOT in chain (only infrastructure should be)
     assert!(!result.chain.iter().any(|n| n.name == "podinfo"));
-    assert!(result
-        .chain
-        .iter()
-        .any(|n| n.name == "infrastructure" && n.kind == "Kustomization"));
+    assert!(
+        result
+            .chain
+            .iter()
+            .any(|n| n.name == "infrastructure" && n.kind == "Kustomization")
+    );
 
     // Verify source is GitRepository
     assert!(result.source.is_some());
@@ -331,14 +335,18 @@ fn test_trace_deployment_managed_by_helmrelease_structure() {
     assert_eq!(result.object.kind, "Deployment");
 
     // Verify chain contains HelmRelease and HelmChart
-    assert!(result
-        .chain
-        .iter()
-        .any(|n| n.name == "podinfo" && n.kind == "HelmRelease"));
-    assert!(result
-        .chain
-        .iter()
-        .any(|n| n.name == "podinfo-podinfo" && n.kind == "HelmChart"));
+    assert!(
+        result
+            .chain
+            .iter()
+            .any(|n| n.name == "podinfo" && n.kind == "HelmRelease")
+    );
+    assert!(
+        result
+            .chain
+            .iter()
+            .any(|n| n.name == "podinfo-podinfo" && n.kind == "HelmChart")
+    );
 
     // Verify source is HelmRepository
     assert!(result.source.is_some());

@@ -3,11 +3,11 @@
 use crate::tui::theme::Theme;
 use crate::watcher::ResourceState;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 /// Render the main header with context, namespace, totals, and resource counts
@@ -51,7 +51,7 @@ pub fn render_header(
         filter_parts.push(format!("name='{}'", filter));
     }
 
-    if let Some(ref resource_type) = selected_resource_type {
+    if let Some(resource_type) = selected_resource_type {
         filter_parts.push(format!("type={}", resource_type));
     }
 
@@ -59,7 +59,7 @@ pub fn render_header(
     let available_width = left_area.width.saturating_sub(12); // "Resources: " = 11 chars + 1 padding
 
     // When filtering by type, show only that type's count; otherwise show all types
-    let type_summary_parts: Vec<String> = if let Some(ref resource_type) = selected_resource_type {
+    let type_summary_parts: Vec<String> = if let Some(resource_type) = selected_resource_type {
         // Show only the filtered resource type with its filtered count
         vec![format!("{}:{}", resource_type, filtered_count)]
     } else {
