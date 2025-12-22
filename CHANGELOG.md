@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.10] - 2025-12-22
+
+Here is a concise changelog summary for version 0.5.10:
+
+Added:
+- Support for specifying a Kubernetes configuration file via the `--kubeconfig` option
+
 ## [0.5.9] - 2025-12-17
 
 Here's a concise changelog summary for version 0.5.9:
