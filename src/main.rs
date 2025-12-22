@@ -23,6 +23,10 @@ struct Args {
     #[arg(long, short = 'd')]
     debug: bool,
 
+    /// Path to kubeconfig file
+    #[arg(long)]
+    kubeconfig: Option<std::path::PathBuf>,
+
     /// Configuration subcommand
     #[command(subcommand)]
     command: Option<Command>,
@@ -71,8 +75,8 @@ async fn main() -> Result<()> {
     }
 
     // Load configuration
-    let cluster: Option<&str> = None; // TODO: Get from kubeconfig
-    let context_name: Option<&str> = None; // TODO: Get from kubeconfig
+    let cluster: Option<&str> = None;
+    let context_name: Option<&str> = None;
     let config = config::ConfigLoader::load(cluster, context_name)
         .unwrap_or_else(|_| config::ConfigLoader::load_defaults());
 
@@ -137,7 +141,7 @@ async fn main() -> Result<()> {
 
     // Start TUI immediately with splash screen, then initialize Kubernetes in background
     // This ensures splash appears instantly, not after Kubernetes API calls
-    tui::run_tui_with_async_init(config, theme, args.debug).await?;
+    tui::run_tui_with_async_init(config, theme, args.debug, args.kubeconfig.as_deref()).await?;
 
     Ok(())
 }

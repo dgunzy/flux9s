@@ -56,6 +56,9 @@ Perform actions on selected resources:
 Configure flux9s from the command line:
 
 ```bash
+# Use a specific kubeconfig file
+flux9s --kubeconfig /path/to/kubeconfig
+
 # Show all config options
 flux9s config --help
 

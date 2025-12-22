@@ -1,4 +1,4 @@
-//! CLI command handlers
+//! Configuration command handlers
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -6,15 +6,6 @@ use std::path::PathBuf;
 
 use crate::config::schema::Config;
 use crate::config::{paths, ConfigLoader, ThemeLoader};
-
-/// Display version information
-pub fn display_version() {
-    println!("flux9s {}", env!("CARGO_PKG_VERSION"));
-    println!("  {}", env!("CARGO_PKG_DESCRIPTION"));
-    println!("  {}", env!("CARGO_PKG_AUTHORS"));
-    println!("  License: {}", env!("CARGO_PKG_LICENSE"));
-    println!("  Repository: {}", env!("CARGO_PKG_REPOSITORY"));
-}
 
 /// Skins management subcommands
 #[derive(Subcommand, Debug)]

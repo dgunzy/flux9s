@@ -14,6 +14,7 @@
 use anyhow::Result;
 use kube::config::Kubeconfig;
 use kube::{Client, Config};
+use std::path::Path;
 use url::Url;
 
 /// Initialize and return a Kubernetes client with automatic proxy support
@@ -241,6 +242,78 @@ pub async fn get_context() -> Result<String> {
     }
 }
 
+/// Get the current Kubernetes context name from a specific kubeconfig file
+///
+/// Returns an error if:
+/// - The kubeconfig file cannot be read or does not exist
+/// - The kubeconfig file is invalid or malformed
+/// - No current context is set in the kubeconfig
+pub fn get_context_from_kubeconfig_path(kubeconfig_path: &Path) -> Result<String> {
+    // Check if file exists and is readable
+    if !kubeconfig_path.exists() {
+        anyhow::bail!(
+            "Kubeconfig file does not exist: {}",
+            kubeconfig_path.display()
+        );
+    }
+
+    if !kubeconfig_path.is_file() {
+        anyhow::bail!(
+            "Kubeconfig path is not a file: {}",
+            kubeconfig_path.display()
+        );
+    }
+
+    // Load and parse kubeconfig
+    let kubeconfig = Kubeconfig::read_from(kubeconfig_path)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to load or parse kubeconfig from {}: {}. Please ensure the file is a valid kubeconfig.",
+                kubeconfig_path.display(),
+                e
+            )
+        })?;
+
+    // Validate that contexts exist in the kubeconfig
+    if kubeconfig.contexts.is_empty() {
+        anyhow::bail!(
+            "Kubeconfig file {} contains no contexts. Please ensure the kubeconfig is valid.",
+            kubeconfig_path.display()
+        );
+    }
+
+    // Get current context from kubeconfig - this is required
+    match kubeconfig.current_context {
+        Some(ref current_context) if !current_context.is_empty() => {
+            // Validate that the current context actually exists in the contexts list
+            if !kubeconfig
+                .contexts
+                .iter()
+                .any(|ctx| ctx.name == *current_context)
+            {
+                let available_contexts: Vec<String> =
+                    kubeconfig.contexts.iter().map(|c| c.name.clone()).collect();
+                anyhow::bail!(
+                    "Current context '{}' specified in kubeconfig {} does not exist in the contexts list. Available contexts: {}",
+                    current_context,
+                    kubeconfig_path.display(),
+                    available_contexts.join(", ")
+                );
+            }
+            Ok(current_context.clone())
+        }
+        _ => {
+            let available_contexts: Vec<String> =
+                kubeconfig.contexts.iter().map(|c| c.name.clone()).collect();
+            anyhow::bail!(
+                "No current context is set in kubeconfig {}. Please set a current context or specify one using 'kubectl config use-context <context-name>'. Available contexts: {}",
+                kubeconfig_path.display(),
+                available_contexts.join(", ")
+            )
+        }
+    }
+}
+
 /// List all available Kubernetes contexts from kubeconfig
 pub fn list_contexts() -> Result<Vec<String>> {
     let kubeconfig = load_kubeconfig()?;
@@ -256,6 +329,75 @@ pub fn list_contexts() -> Result<Vec<String>> {
     }
 
     Ok(context_names)
+}
+
+/// Create a Kubernetes client from a specific kubeconfig file path
+///
+/// Uses the specified kubeconfig file instead of the default loading strategy.
+/// Automatically configures proxy bypass for internal cluster hosts.
+///
+/// Returns an error if:
+/// - The kubeconfig file cannot be read or does not exist
+/// - The kubeconfig file is invalid or malformed
+/// - The kubeconfig cannot be used to create a valid Kubernetes client
+pub async fn create_client_from_kubeconfig_path(kubeconfig_path: &Path) -> Result<Client> {
+    // Check if file exists and is readable
+    if !kubeconfig_path.exists() {
+        anyhow::bail!(
+            "Kubeconfig file does not exist: {}",
+            kubeconfig_path.display()
+        );
+    }
+
+    if !kubeconfig_path.is_file() {
+        anyhow::bail!(
+            "Kubeconfig path is not a file: {}",
+            kubeconfig_path.display()
+        );
+    }
+
+    // Load kubeconfig from the specified path
+    let kubeconfig = Kubeconfig::read_from(kubeconfig_path)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to load or parse kubeconfig from {}: {}. Please ensure the file is a valid kubeconfig.",
+                kubeconfig_path.display(),
+                e
+            )
+        })?;
+
+    // Create config from the kubeconfig
+    let config = Config::from_custom_kubeconfig(kubeconfig, &kube::config::KubeConfigOptions::default())
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to create Kubernetes config from kubeconfig {}: {}. Please ensure the kubeconfig is valid and contains valid cluster, user, and context information.",
+                kubeconfig_path.display(),
+                e
+            )
+        })?;
+
+    // Extract cluster host for NO_PROXY auto-detection
+    let cluster_url_str = config.cluster_url.to_string();
+    tracing::debug!(
+        "Cluster URL from kubeconfig {}: {}",
+        kubeconfig_path.display(),
+        cluster_url_str
+    );
+
+    if let Ok(url) = Url::parse(&cluster_url_str) {
+        if let Some(host) = url.host_str() {
+            tracing::debug!("Detected cluster host: {}", host);
+            ensure_no_proxy_bypass(host);
+        }
+    }
+
+    let client = Client::try_from(config)?;
+    tracing::info!(
+        "Kubernetes client created from kubeconfig: {}",
+        kubeconfig_path.display()
+    );
+    Ok(client)
 }
 
 /// Create a Kubernetes client for a specific context
@@ -576,5 +718,228 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_get_context_from_kubeconfig_path_file_not_exists() {
+        use std::path::PathBuf;
+        let non_existent_path = PathBuf::from("/nonexistent/path/to/kubeconfig");
+        let _ = non_existent_path; // Used in error message check below
+        let result = get_context_from_kubeconfig_path(&non_existent_path);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("does not exist"),
+            "Error should mention file does not exist: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains(non_existent_path.to_string_lossy().as_ref()),
+            "Error should include the path: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_get_context_from_kubeconfig_path_is_directory() {
+        // Use a temp directory that definitely exists
+        let temp_dir = std::env::temp_dir();
+        let result = get_context_from_kubeconfig_path(&temp_dir);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("not a file"),
+            "Error should mention path is not a file: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_get_context_from_kubeconfig_path_invalid_format() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a temporary file with invalid YAML/kubeconfig content
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "this is not valid yaml: [").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = get_context_from_kubeconfig_path(temp_file.path());
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Failed to load") || error_msg.contains("parse"),
+            "Error should mention parsing/loading failure: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("valid kubeconfig"),
+            "Error should mention valid kubeconfig: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_get_context_from_kubeconfig_path_no_contexts() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a valid kubeconfig structure but with no contexts
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "apiVersion: v1").unwrap();
+        writeln!(temp_file, "kind: Config").unwrap();
+        writeln!(temp_file, "contexts: []").unwrap();
+        writeln!(temp_file, "current-context: \"\"").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = get_context_from_kubeconfig_path(temp_file.path());
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("no contexts"),
+            "Error should mention no contexts: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_get_context_from_kubeconfig_path_no_current_context() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a valid kubeconfig with contexts but no current context
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "apiVersion: v1").unwrap();
+        writeln!(temp_file, "kind: Config").unwrap();
+        writeln!(temp_file, "contexts:").unwrap();
+        writeln!(temp_file, "  - name: test-context").unwrap();
+        writeln!(temp_file, "    context:").unwrap();
+        writeln!(temp_file, "      cluster: test-cluster").unwrap();
+        writeln!(temp_file, "      user: test-user").unwrap();
+        writeln!(temp_file, "clusters:").unwrap();
+        writeln!(temp_file, "  - name: test-cluster").unwrap();
+        writeln!(temp_file, "    cluster:").unwrap();
+        writeln!(temp_file, "      server: https://test.example.com").unwrap();
+        writeln!(temp_file, "users:").unwrap();
+        writeln!(temp_file, "  - name: test-user").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = get_context_from_kubeconfig_path(temp_file.path());
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("No current context"),
+            "Error should mention no current context: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("test-context"),
+            "Error should list available contexts: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_get_context_from_kubeconfig_path_current_context_not_exists() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a valid kubeconfig with current context that doesn't exist in contexts list
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "apiVersion: v1").unwrap();
+        writeln!(temp_file, "kind: Config").unwrap();
+        writeln!(temp_file, "current-context: nonexistent-context").unwrap();
+        writeln!(temp_file, "contexts:").unwrap();
+        writeln!(temp_file, "  - name: test-context").unwrap();
+        writeln!(temp_file, "    context:").unwrap();
+        writeln!(temp_file, "      cluster: test-cluster").unwrap();
+        writeln!(temp_file, "      user: test-user").unwrap();
+        writeln!(temp_file, "clusters:").unwrap();
+        writeln!(temp_file, "  - name: test-cluster").unwrap();
+        writeln!(temp_file, "    cluster:").unwrap();
+        writeln!(temp_file, "      server: https://test.example.com").unwrap();
+        writeln!(temp_file, "users:").unwrap();
+        writeln!(temp_file, "  - name: test-user").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = get_context_from_kubeconfig_path(temp_file.path());
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("does not exist") || error_msg.contains("not exist"),
+            "Error should mention context does not exist: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("nonexistent-context"),
+            "Error should mention the invalid context name: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("test-context"),
+            "Error should list available contexts: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_get_context_from_kubeconfig_path_valid() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a valid kubeconfig with valid current context
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "apiVersion: v1").unwrap();
+        writeln!(temp_file, "kind: Config").unwrap();
+        writeln!(temp_file, "current-context: test-context").unwrap();
+        writeln!(temp_file, "contexts:").unwrap();
+        writeln!(temp_file, "  - name: test-context").unwrap();
+        writeln!(temp_file, "    context:").unwrap();
+        writeln!(temp_file, "      cluster: test-cluster").unwrap();
+        writeln!(temp_file, "      user: test-user").unwrap();
+        writeln!(temp_file, "clusters:").unwrap();
+        writeln!(temp_file, "  - name: test-cluster").unwrap();
+        writeln!(temp_file, "    cluster:").unwrap();
+        writeln!(temp_file, "      server: https://test.example.com").unwrap();
+        writeln!(temp_file, "users:").unwrap();
+        writeln!(temp_file, "  - name: test-user").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = get_context_from_kubeconfig_path(temp_file.path());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "test-context");
+    }
+
+    #[test]
+    fn test_get_context_from_kubeconfig_path_empty_current_context() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a valid kubeconfig with empty current context string
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "apiVersion: v1").unwrap();
+        writeln!(temp_file, "kind: Config").unwrap();
+        writeln!(temp_file, "current-context: \"\"").unwrap();
+        writeln!(temp_file, "contexts:").unwrap();
+        writeln!(temp_file, "  - name: test-context").unwrap();
+        writeln!(temp_file, "    context:").unwrap();
+        writeln!(temp_file, "      cluster: test-cluster").unwrap();
+        writeln!(temp_file, "      user: test-user").unwrap();
+        writeln!(temp_file, "clusters:").unwrap();
+        writeln!(temp_file, "  - name: test-cluster").unwrap();
+        writeln!(temp_file, "    cluster:").unwrap();
+        writeln!(temp_file, "      server: https://test.example.com").unwrap();
+        writeln!(temp_file, "users:").unwrap();
+        writeln!(temp_file, "  - name: test-user").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = get_context_from_kubeconfig_path(temp_file.path());
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("No current context"),
+            "Error should mention no current context: {}",
+            error_msg
+        );
     }
 }
