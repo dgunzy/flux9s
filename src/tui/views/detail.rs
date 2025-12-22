@@ -3,11 +3,11 @@
 use crate::tui::theme::Theme;
 use crate::watcher::ResourceState;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

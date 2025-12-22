@@ -3,11 +3,11 @@
 use crate::tui::theme::Theme;
 use crate::watcher::ResourceState;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -60,7 +60,7 @@ pub fn render_resource_yaml(
     };
 
     // Check if we have fetched YAML or need to use stored object
-    let obj_json = if let Some(ref fetched) = yaml_fetched {
+    let obj_json = if let Some(fetched) = yaml_fetched {
         // Use fetched YAML (complete)
         fetched.clone()
     } else if yaml_fetch_pending.is_some() {

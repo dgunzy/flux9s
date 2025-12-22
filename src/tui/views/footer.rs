@@ -3,13 +3,13 @@
 use crate::tui::app::PendingOperation;
 use crate::tui::operations::OperationRegistry;
 use crate::tui::theme::Theme;
-use crate::watcher::{get_all_commands, ResourceState};
+use crate::watcher::{ResourceState, get_all_commands};
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 
 /// Render the footer based on current application state
@@ -50,7 +50,7 @@ pub fn render_footer(
             Span::styled("?", theme.footer_key_style()),
             Span::raw(" to hide help"),
         ]
-    } else if let Some(ref pending) = confirmation_pending {
+    } else if let Some(pending) = confirmation_pending {
         render_confirmation_footer_text(
             operation_registry,
             state,
@@ -60,7 +60,7 @@ pub fn render_footer(
             pending.operation_key,
             theme,
         )
-    } else if let Some((ref msg, is_error)) = status_message {
+    } else if let Some((msg, is_error)) = status_message {
         vec![Span::styled(
             msg.clone(),
             if *is_error {

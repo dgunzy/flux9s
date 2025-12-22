@@ -5,9 +5,9 @@
 
 use crate::watcher::ResourceInfo;
 use anyhow::{Context, Result};
+use kube::Api;
 use kube::api::{Patch, PatchParams};
 use kube::core::DynamicObject;
-use kube::Api;
 use serde_json::json;
 #[cfg(test)]
 use std::collections::HashMap;

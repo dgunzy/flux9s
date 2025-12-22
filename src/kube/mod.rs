@@ -94,8 +94,15 @@ fn ensure_no_proxy_bypass(host: &str) {
     };
 
     // Set both uppercase and lowercase variants for compatibility
-    std::env::set_var("NO_PROXY", &updated_no_proxy);
-    std::env::set_var("no_proxy", &updated_no_proxy);
+    // SAFETY: set_var is unsafe in Rust 2024 due to potential data races in multi-threaded contexts.
+    // This is safe here because:
+    // 1. This function is called during client initialization, before any async tasks spawn
+    // 2. We're setting proxy bypass configuration early in the program lifecycle
+    // 3. The environment variable is set once per client creation, not in a hot loop
+    unsafe {
+        std::env::set_var("NO_PROXY", &updated_no_proxy);
+        std::env::set_var("no_proxy", &updated_no_proxy);
+    }
     tracing::info!("Added {} to NO_PROXY: {}", host, updated_no_proxy);
 }
 

@@ -5,7 +5,7 @@ use clap::Subcommand;
 use std::path::PathBuf;
 
 use crate::config::schema::Config;
-use crate::config::{paths, ConfigLoader, ThemeLoader};
+use crate::config::{ConfigLoader, ThemeLoader, paths};
 
 /// Skins management subcommands
 #[derive(Subcommand, Debug)]
@@ -287,7 +287,9 @@ fn display_config_with_defaults(config: &Config) {
     println!("#   logger.buffer - Max log lines in view (default: 5000)");
     println!("#   logger.sinceSeconds - Historical log timeframe in seconds (default: 300)");
     println!("#   logger.textWrap - Enable line wrapping (default: false)");
-    println!("#   namespaceHotkeys - Array of namespace names for 0-9 hotkeys (max 10, default: auto-discover)");
+    println!(
+        "#   namespaceHotkeys - Array of namespace names for 0-9 hotkeys (max 10, default: auto-discover)"
+    );
     println!("#   contextSkins - Map of context name to skin name (default: empty)");
     println!("#");
     println!("# Environment Variables (override config):");

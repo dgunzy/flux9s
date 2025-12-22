@@ -2,11 +2,11 @@
 
 use crate::tui::theme::Theme;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::Modifier,
     text::Line,
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 /// Render the splash screen with ASCII art

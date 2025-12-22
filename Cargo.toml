@@ -2,7 +2,7 @@
 name = "flux9s"
 
 version = "0.5.10"
-edition = "2021"
+edition = "2024"
 authors = ["Dan Guns <danbguns@gmail.com>"]
 description = "A K9s-inspired terminal UI for monitoring Flux GitOps resources"
 license = "Apache-2.0"

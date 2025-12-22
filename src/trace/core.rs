@@ -14,8 +14,8 @@ pub async fn trace_object(
     namespace: &str,
     name: &str,
 ) -> Result<TraceResult> {
-    use kube::core::DynamicObject;
     use kube::Api;
+    use kube::core::DynamicObject;
 
     // Get ApiResource with version fallback (version-agnostic)
     let api_resource =
@@ -604,8 +604,8 @@ async fn fetch_object(
     namespace: &str,
     name: &str,
 ) -> Result<kube::core::DynamicObject> {
-    use kube::core::DynamicObject;
     use kube::Api;
+    use kube::core::DynamicObject;
 
     // Get ApiResource with version fallback (version-agnostic)
     let api_resource = get_api_resource_with_fallback(client, kind, namespace, name).await?;

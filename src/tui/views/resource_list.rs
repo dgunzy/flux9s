@@ -4,11 +4,11 @@ use crate::tui::theme::Theme;
 use crate::tui::views::{extract_resource_specific_fields, get_resource_type_columns};
 use crate::watcher::ResourceInfo;
 use ratatui::{
+    Frame,
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
     text::Span,
     widgets::{Block, Borders, Cell, Paragraph, Row, Table},
-    Frame,
 };
 use std::cmp;
 use std::collections::HashMap;
@@ -139,7 +139,8 @@ pub fn render_resource_list(
             })
             .collect();
 
-        let status_width = if no_icons { 6 } else { 3 }; // "PAUSED" vs "●"
+        // Status column width: "STATUS" header needs 6 chars (icon is only 1 char, so fits fine)
+        let status_width = 6;
         let constraints: Vec<Constraint> = vec![
             Constraint::Length(status_width), // STATUS
             Constraint::Min(15),              // NAMESPACE
@@ -264,7 +265,7 @@ pub fn render_resource_list(
         (rows, header, constraints)
     };
 
-    let title = if let Some(ref rt) = selected_resource_type {
+    let title = if let Some(rt) = selected_resource_type {
         format!("{} ({})", rt, resources.len())
     } else {
         format!("All Resources ({})", resources.len())

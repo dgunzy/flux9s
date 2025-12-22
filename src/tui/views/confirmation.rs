@@ -3,13 +3,13 @@
 use crate::tui::app::PendingOperation;
 use crate::tui::operations::OperationRegistry;
 use crate::tui::theme::Theme;
-use crate::watcher::{resource_key, ResourceState};
+use crate::watcher::{ResourceState, resource_key};
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 /// Render the confirmation dialog

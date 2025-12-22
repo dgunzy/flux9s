@@ -211,8 +211,15 @@ mod tests {
 
     #[test]
     fn test_env_overrides() {
-        std::env::set_var("FLUX9S_SKIN", "test-skin");
-        std::env::set_var("FLUX9S_READ_ONLY", "true");
+        // SAFETY: set_var is unsafe in Rust 2024 due to potential data races.
+        // This is safe in tests because:
+        // 1. Tests run sequentially by default (unless explicitly parallelized)
+        // 2. Each test sets its own isolated environment variables
+        // 3. We clean up after the test completes
+        unsafe {
+            std::env::set_var("FLUX9S_SKIN", "test-skin");
+            std::env::set_var("FLUX9S_READ_ONLY", "true");
+        }
 
         let config = Config::default();
         let config = ConfigLoader::apply_env_overrides(config);
@@ -221,7 +228,11 @@ mod tests {
         assert!(config.read_only);
 
         // Cleanup
-        std::env::remove_var("FLUX9S_SKIN");
-        std::env::remove_var("FLUX9S_READ_ONLY");
+        // SAFETY: remove_var is unsafe in Rust 2024 due to potential data races.
+        // Safe in tests for the same reasons as set_var above.
+        unsafe {
+            std::env::remove_var("FLUX9S_SKIN");
+            std::env::remove_var("FLUX9S_READ_ONLY");
+        }
     }
 }

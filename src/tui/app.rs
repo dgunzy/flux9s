@@ -6,10 +6,10 @@ use crate::watcher::{ResourceKey, ResourceState};
 use anyhow::Result;
 use crossterm::event::KeyEvent;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     text::Line,
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -1174,7 +1174,10 @@ impl App {
                         self.set_status_message((msg, false));
                     }
                     Err(e) => {
-                        let msg = format!("Failed to load theme '{}': {}. Use `default` to return to default theme", name, e);
+                        let msg = format!(
+                            "Failed to load theme '{}': {}. Use `default` to return to default theme",
+                            name, e
+                        );
                         self.set_status_message((msg, true));
                     }
                 }

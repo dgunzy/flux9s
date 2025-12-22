@@ -6,6 +6,6 @@ mod config;
 mod logging;
 mod version;
 
-pub use config::{handle_config_command, ConfigSubcommand};
+pub use config::{ConfigSubcommand, handle_config_command};
 pub use logging::*;
 pub use version::display_version;

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use kube::core::{ApiResource, DynamicObject};
 use kube::Api;
+use kube::core::{ApiResource, DynamicObject};
 
 use crate::models::FluxResourceKind;
 use crate::watcher::WatchableResource;
