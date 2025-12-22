@@ -19,8 +19,10 @@ pub fn render_header(
     namespace: &Option<String>,
     filter: &str,
     selected_resource_type: &Option<String>,
-    filtered_count: usize, // Count of resources after filtering
-    read_only: bool,       // Readonly mode status
+    filtered_count: usize,       // Count of resources after filtering
+    health_percentage: f64,      // Health percentage (0-100)
+    health_filter: Option<&str>, // Health filter status ("healthy", "unhealthy", or None)
+    read_only: bool,             // Readonly mode status
     theme: &Theme,
     no_icons: bool,
     namespace_hotkeys: &[String],
@@ -53,6 +55,10 @@ pub fn render_header(
 
     if let Some(resource_type) = selected_resource_type {
         filter_parts.push(format!("type={}", resource_type));
+    }
+
+    if let Some(health_filter) = health_filter {
+        filter_parts.push(format!("health={}", health_filter));
     }
 
     // Calculate available width for resource types (accounting for "Resources: " prefix and borders)
@@ -127,6 +133,31 @@ pub fn render_header(
         ),
     ];
 
+    // Add health percentage indicator
+    let health_color = if health_percentage >= 90.0 {
+        theme.status_ready
+    } else if health_percentage >= 70.0 {
+        theme.status_unknown // Yellow for warning state
+    } else {
+        theme.status_error
+    };
+    let health_icon = if no_icons {
+        "[HEALTH]"
+    } else if health_percentage >= 90.0 {
+        "●"
+    } else if health_percentage >= 70.0 {
+        "⚠"
+    } else {
+        "✗"
+    };
+    context_line_spans.push(Span::raw("  "));
+    context_line_spans.push(Span::styled(
+        format!("{} {:.1}%", health_icon, health_percentage),
+        Style::default()
+            .fg(health_color)
+            .add_modifier(Modifier::BOLD),
+    ));
+
     // Add readonly indicator if enabled
     if read_only {
         context_line_spans.push(Span::raw("  "));
@@ -187,7 +218,7 @@ pub fn render_header(
         let filter_display = filter_parts.join(" + ");
         let clear_hint = if !filter.is_empty() {
             "Clear: /"
-        } else if selected_resource_type.is_some() {
+        } else if selected_resource_type.is_some() || health_filter.is_some() {
             "Clear: :all"
         } else {
             ""

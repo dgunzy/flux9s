@@ -59,6 +59,8 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         (":ns <n>", "Switch namespace"),
         (":ns all", "Show all namespaces"),
         (":all", "Show all resources"),
+        (":healthy", "Show healthy resources"),
+        (":unhealthy", "Show unhealthy resources"),
         (":q", "Quit application"),
     ];
     render_help_column(f, column_chunks[1], "GENERAL", &general_items, theme);
