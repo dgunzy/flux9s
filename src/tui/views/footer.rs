@@ -3,7 +3,7 @@
 use crate::tui::app::PendingOperation;
 use crate::tui::operations::OperationRegistry;
 use crate::tui::theme::Theme;
-use crate::watcher::{ResourceState, get_all_commands};
+use crate::watcher::ResourceState;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -89,22 +89,36 @@ fn render_command_footer(f: &mut Frame, area: Rect, command_buffer: &str, theme:
 
     // Add autocomplete hint
     if !cmd.is_empty() {
-        let commands = get_all_commands();
-        let matches: Vec<&str> = commands
-            .iter()
-            .flat_map(|(_, aliases)| aliases.iter())
-            .filter(|alias| alias.starts_with(&cmd))
-            .copied()
-            .take(1)
-            .collect();
-
+        let matches = crate::tui::commands::find_matching_commands(&cmd);
         if !matches.is_empty() {
-            command_line.push(Span::raw("  ["));
-            command_line.push(Span::styled(
-                format!("Tab: {}", matches[0]),
-                Style::default().fg(theme.command_autocomplete),
-            ));
-            command_line.push(Span::raw("]"));
+            // Show first match, or multiple if there are conflicts
+            if matches.len() == 1 {
+                command_line.push(Span::raw("  ["));
+                command_line.push(Span::styled(
+                    format!("Tab: {}", matches[0]),
+                    Style::default().fg(theme.command_autocomplete),
+                ));
+                command_line.push(Span::raw("]"));
+            } else {
+                // Show multiple options (up to 3) when there are conflicts
+                let display_matches: Vec<&str> =
+                    matches.iter().take(3).map(|s| s.as_str()).collect();
+                let hint = if matches.len() > 3 {
+                    format!(
+                        "Tab: {} (+{} more)",
+                        display_matches.join(", "),
+                        matches.len() - 3
+                    )
+                } else {
+                    format!("Tab: {}", display_matches.join(", "))
+                };
+                command_line.push(Span::raw("  ["));
+                command_line.push(Span::styled(
+                    hint,
+                    Style::default().fg(theme.command_autocomplete),
+                ));
+                command_line.push(Span::raw("]"));
+            }
         }
     } else {
         // Show help hint when command buffer is empty

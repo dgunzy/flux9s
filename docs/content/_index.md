@@ -23,11 +23,11 @@ notoc: true
     <p class="lead mb-5">A K9s-inspired terminal UI for monitoring Flux GitOps resources</p>
     
     <!-- Action Buttons -->
-    <div class="mb-5">
-      <a class="btn btn-lg btn-primary me-3 mb-3" href="{{< relref \"getting-started/\" >}}">
+    <div class="d-flex flex-wrap justify-content-center gap-3 mb-5">
+      <a class="btn btn-lg btn-primary" href="{{< relref \"getting-started/\" >}}">
         Get Started <i class="fas fa-arrow-alt-circle-right ms-2"></i>
       </a>
-      <a class="btn btn-lg btn-outline-primary mb-3" href="https://github.com/dgunzy/flux9s">
+      <a class="btn btn-lg btn-outline-primary" href="https://github.com/dgunzy/flux9s">
         <i class="fab fa-github me-2"></i>View on GitHub
       </a>
     </div>

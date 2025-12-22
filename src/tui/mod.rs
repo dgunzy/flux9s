@@ -5,6 +5,7 @@
 
 mod api;
 mod app;
+mod commands;
 mod operations;
 mod theme;
 mod trace;

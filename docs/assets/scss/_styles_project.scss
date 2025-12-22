@@ -33,6 +33,17 @@
     text-align: center !important;
   }
   
+  // Button container - proper flexbox alignment
+  .d-flex {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    
+    &.gap-3 {
+      gap: 1rem !important;
+    }
+  }
+  
   // Make content wider - less squashed
   .row {
     max-width: 1200px;
@@ -456,9 +467,43 @@ code:not(pre code) {
   }
 }
 
-// Main wrapper - let Docsy handle layout naturally
+// Main wrapper - ensure proper width constraints
 .td-main {
   background-color: var(--bs-body-bg);
+  
+  // Ensure main content area uses more width on larger screens
+  // Docsy uses Bootstrap grid: col-xl-8 (66.7%), we'll make it wider
+  main[role="main"] {
+    // On xl screens and above, use more width for better readability
+    @media (min-width: 1200px) {
+      // Override Docsy's col-xl-8 to use more space
+      flex: 0 0 auto;
+      width: 70% !important; // Use 70% instead of 66.7%
+      max-width: 70% !important;
+    }
+    
+    @media (min-width: 1400px) {
+      width: 72% !important;
+      max-width: 72% !important;
+    }
+  }
+  
+  // Adjust sidebar widths to accommodate wider content
+  .td-sidebar {
+    @media (min-width: 1200px) {
+      flex: 0 0 auto;
+      width: 15% !important; // Reduce from 16.67% to 15%
+      max-width: 15% !important;
+    }
+  }
+  
+  .td-sidebar-toc {
+    @media (min-width: 1200px) {
+      flex: 0 0 auto;
+      width: 15% !important; // Reduce from 16.67% to 15%
+      max-width: 15% !important;
+    }
+  }
   
   [data-bs-theme="dark"] & {
     background-color: #{$dark-bg};
@@ -480,12 +525,34 @@ code:not(pre code) {
   display: block !important;
 }
 
-// Content area - wider, less squashed (Docsy handles layout)
+// Content area - proper width constraints following Hugo/Docsy best practices
 .td-content {
   background-color: var(--bs-body-bg);
   padding: 3rem 2rem;
-  // Wider content - less squashed
-  max-width: 100%;
+  
+  // Docsy wraps content in td-content__inner - ensure it uses available space
+  // but doesn't get too wide (readability: ~80-100 chars = ~800-1000px)
+  .td-content__inner {
+    max-width: 100%;
+    
+    // On larger screens, allow content to use more width
+    @media (min-width: 1200px) {
+      max-width: 100%;
+    }
+  }
+  
+  // Ensure container-fluid doesn't constrain content unnecessarily
+  .container-fluid {
+    max-width: 100%;
+    padding-left: 2rem;
+    padding-right: 2rem;
+    
+    // On larger screens, use more horizontal space
+    @media (min-width: 1400px) {
+      padding-left: 3rem;
+      padding-right: 3rem;
+    }
+  }
   
   [data-bs-theme="dark"] & {
     background-color: #{$dark-bg};
@@ -658,12 +725,40 @@ code:not(pre code) {
     opacity: 0.9;
   }
   
-  // Feature blocks
+  // Feature blocks - make screenshots larger
   .feature {
     text-align: left;
     
     .highlight {
       text-align: left;
+    }
+  }
+  
+  // Make screenshots in feature blocks larger
+  // Feature blocks use col-lg-4 (3 columns), so we override to make screenshots bigger
+  // Target screenshots section specifically
+  section.td-box {
+    .col-lg-4 {
+      // Make feature blocks wider for screenshots
+      @media (min-width: 992px) {
+        flex: 0 0 auto;
+        width: 50% !important; // Change from 33.33% (col-lg-4) to 50% (2 columns)
+        max-width: 50% !important;
+      }
+      
+      img {
+        max-width: 100% !important;
+        width: 100% !important;
+        height: auto;
+        margin: 1.5rem auto;
+        display: block;
+        border-radius: $border-radius;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        
+        [data-bs-theme="dark"] & {
+          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+      }
     }
   }
   

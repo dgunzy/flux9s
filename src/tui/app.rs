@@ -80,6 +80,7 @@ pub struct App {
     selected_resource_type: Option<String>,
     filter: String,
     filter_mode: bool,
+    health_filter: HealthFilter,
     selected_index: usize,
     scroll_offset: usize,
     yaml_scroll_offset: usize, // Separate scroll offset for YAML view
@@ -129,6 +130,17 @@ pub enum View {
     Help,
 }
 
+/// Health filter for resources
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum HealthFilter {
+    /// Show only healthy resources (ready=true, not suspended, or null status)
+    Healthy,
+    /// Show only unhealthy resources (ready=false or suspended=true)
+    Unhealthy,
+    /// Show all resources (no health filter)
+    All,
+}
+
 impl App {
     pub fn new(
         state: ResourceState,
@@ -143,6 +155,7 @@ impl App {
             selected_resource_type: None,
             filter: String::new(),
             filter_mode: false,
+            health_filter: HealthFilter::All,
             selected_index: 0,
             scroll_offset: 0,
             yaml_scroll_offset: 0,
@@ -1098,36 +1111,24 @@ impl App {
         // So we match against the buffer directly
         let cmd_lower = cmd.to_lowercase();
 
-        // Try to find matching command
-        let commands = crate::watcher::get_all_commands();
-        let mut matches: Vec<&str> = commands
-            .iter()
-            .flat_map(|(_, aliases)| aliases.iter())
-            .filter(|alias| alias.starts_with(&cmd_lower))
-            .copied()
-            .collect();
-
-        // Also check namespace commands
-        if cmd_lower.starts_with("ns ") || cmd_lower.starts_with("namespace ") {
-            // Don't autocomplete namespace names
+        // Don't autocomplete namespace names
+        if crate::tui::commands::is_namespace_command(&cmd_lower) && cmd_lower.contains(' ') {
             return;
         }
 
-        // Check for special commands
-        if "all".starts_with(&cmd_lower) {
-            matches.push("all");
-        }
-        if "clear".starts_with(&cmd_lower) {
-            matches.push("clear");
-        }
+        // Use centralized command registry to find matches
+        // This prioritizes CRD commands over app commands
+        let matches = crate::tui::commands::find_matching_commands(&cmd_lower);
 
         if matches.is_empty() {
             return;
         }
 
-        // Use first match - replace buffer with matched command (no colon, it's shown in UI)
+        // Use first match (prioritized: CRD commands first, then app commands)
+        // Replace buffer with matched command (no colon, it's shown in UI)
+        // Commands with args already include trailing space
         if let Some(first_match) = matches.first() {
-            self.command_buffer = first_match.to_string();
+            self.command_buffer = first_match.clone();
         }
     }
 
@@ -1136,18 +1137,18 @@ impl App {
         let cmd_lower = cmd.to_lowercase();
 
         // Handle help command
-        if cmd_lower == "help" || cmd_lower == "h" || cmd_lower == "?" {
+        if crate::tui::commands::is_help_command(&cmd_lower) {
             self.show_help = !self.show_help;
             return None;
         }
 
         // Handle quit commands
-        if cmd_lower == "q" || cmd_lower == "q!" || cmd_lower == "quit" || cmd_lower == "exit" {
+        if crate::tui::commands::is_quit_command(&cmd_lower) {
             return Some(true); // Quit
         }
 
         // Handle readonly toggle command
-        if cmd_lower == "readonly" || cmd_lower == "read-only" {
+        if crate::tui::commands::is_readonly_command(&cmd_lower) {
             self.config.read_only = !self.config.read_only;
             let status = if self.config.read_only {
                 "enabled"
@@ -1165,8 +1166,8 @@ impl App {
         }
 
         // Handle skin/theme change command
-        if cmd_lower.starts_with("skin ") {
-            let theme_name = cmd.split_whitespace().nth(1).map(|s| s.to_string());
+        if crate::tui::commands::is_skin_command(&cmd_lower) {
+            let theme_name = crate::tui::commands::extract_command_arg(cmd, "skin");
             if let Some(name) = theme_name {
                 match self.set_theme(&name) {
                     Ok(_) => {
@@ -1188,9 +1189,9 @@ impl App {
         }
 
         // Handle trace command - trace ownership chain
-        if cmd_lower.starts_with("trace ") {
-            let parts: Vec<&str> = cmd.split_whitespace().skip(1).collect();
-            if parts.is_empty() {
+        if crate::tui::commands::is_trace_command(&cmd_lower) {
+            let trace_arg = crate::tui::commands::extract_command_arg(cmd, "trace");
+            if trace_arg.is_none() {
                 // If no args, trace currently selected resource
                 if let Some(ref key) = self.selected_resource_key {
                     if let Some(rk) = ResourceKey::parse(key) {
@@ -1204,10 +1205,9 @@ impl App {
                 } else {
                     self.set_status_message(("No resource selected".to_string(), true));
                 }
-            } else {
+            } else if let Some(trace_arg) = trace_arg {
                 // Parse resource type/name format (e.g., "kustomization/cabot-book" or "Kustomization/cabot-book")
-                let resource_str = parts.join(" ");
-                let resource_parts: Vec<&str> = resource_str.split('/').collect();
+                let resource_parts: Vec<&str> = trace_arg.split('/').collect();
                 if resource_parts.len() == 2 {
                     let resource_type = resource_parts[0];
                     let name = resource_parts[1];
@@ -1247,8 +1247,10 @@ impl App {
         }
 
         // Handle context switching - reconnect to different cluster
-        if cmd_lower.starts_with("ctx ") || cmd_lower.starts_with("context ") {
-            let context_name = cmd.split_whitespace().nth(1);
+        if crate::tui::commands::is_context_command(&cmd_lower) {
+            // Try "context" first, then "ctx" as fallback
+            let context_name = crate::tui::commands::extract_command_arg(cmd, "context")
+                .or_else(|| crate::tui::commands::extract_command_arg(cmd, "ctx"));
 
             match context_name {
                 Some(ctx) => {
@@ -1281,9 +1283,11 @@ impl App {
         }
 
         // Handle namespace switching - restart watchers with new namespace
-        if cmd_lower.starts_with("namespace ") || cmd_lower.starts_with("ns ") {
-            let ns = cmd.split_whitespace().nth(1);
-            let new_namespace = match ns {
+        if crate::tui::commands::is_namespace_command(&cmd_lower) {
+            // Try "namespace" first, then "ns" as fallback
+            let ns = crate::tui::commands::extract_command_arg(cmd, "namespace")
+                .or_else(|| crate::tui::commands::extract_command_arg(cmd, "ns"));
+            let new_namespace = match ns.as_deref() {
                 Some("all") | Some("-A") => None,
                 Some(ns_name) => Some(ns_name.to_string()),
                 None => {
@@ -1320,11 +1324,33 @@ impl App {
             return None;
         }
 
+        // Handle health filter commands
+        if crate::tui::commands::is_healthy_command(&cmd_lower) {
+            self.health_filter = HealthFilter::Healthy;
+            self.selected_index = 0;
+            self.scroll_offset = 0;
+            self.set_status_message(("Showing healthy resources only".to_string(), false));
+            return None;
+        }
+
+        if crate::tui::commands::is_unhealthy_command(&cmd_lower) {
+            self.health_filter = HealthFilter::Unhealthy;
+            self.selected_index = 0;
+            self.scroll_offset = 0;
+            self.set_status_message(("Showing unhealthy resources only".to_string(), false));
+            return None;
+        }
+
         // Use registry for resource type command mapping
-        if cmd_lower == "all" || cmd_lower == "clear" {
+        if crate::tui::commands::is_all_command(&cmd_lower) {
             if self.selected_resource_type.is_some() {
                 self.selected_resource_type = None;
                 self.invalidate_layout_cache(); // Resource type filter affects header display
+            }
+            // Clear health filter when showing all
+            if self.health_filter != HealthFilter::All {
+                self.health_filter = HealthFilter::All;
+                self.set_status_message(("Showing all resources".to_string(), false));
             }
             return None;
         }
@@ -1404,6 +1430,29 @@ impl App {
             }
         }
 
+        // Apply health filter
+        match self.health_filter {
+            HealthFilter::Healthy => {
+                resources.retain(|r| {
+                    // Healthy: ready=true and not suspended, or null status (treat as healthy)
+                    let is_ready = r.ready.unwrap_or(true); // null status treated as healthy
+                    let is_suspended = r.suspended.unwrap_or(false);
+                    is_ready && !is_suspended
+                });
+            }
+            HealthFilter::Unhealthy => {
+                resources.retain(|r| {
+                    // Unhealthy: ready=false or suspended=true
+                    let is_ready = r.ready.unwrap_or(true);
+                    let is_suspended = r.suspended.unwrap_or(false);
+                    !is_ready || is_suspended
+                });
+            }
+            HealthFilter::All => {
+                // No filtering - show all resources
+            }
+        }
+
         // Sort by namespace, then resource type, then name
         resources.sort_by(|a, b| {
             a.namespace
@@ -1413,6 +1462,75 @@ impl App {
         });
 
         resources
+    }
+
+    /// Calculate health percentage based on filtered resources
+    /// This calculates health for resources matching the current name/resource type filters,
+    /// but before applying the health filter itself.
+    fn calculate_health_percentage(&self) -> f64 {
+        // Get resources filtered by name/resource type (but not health filter)
+        let mut filtered_resources = if let Some(ref resource_type) = self.selected_resource_type {
+            self.state.by_type(resource_type)
+        } else {
+            self.state.all()
+        };
+
+        // Apply namespace filter if set
+        if let Some(ref namespace) = self.namespace {
+            filtered_resources.retain(|r| r.namespace == *namespace);
+        }
+
+        // Apply name/label/annotation filter if set
+        if !self.filter.is_empty() {
+            if let Some(label_filter) = self.filter.strip_prefix("label:") {
+                if label_filter.is_empty() {
+                    filtered_resources.retain(|r| !r.labels.is_empty());
+                } else if let Some((key, value)) = label_filter.split_once('=') {
+                    filtered_resources.retain(|r| {
+                        r.labels
+                            .iter()
+                            .any(|(k, v)| k.starts_with(key) && v.starts_with(value))
+                    });
+                } else {
+                    filtered_resources
+                        .retain(|r| r.labels.keys().any(|k| k.starts_with(label_filter)));
+                }
+            } else if let Some(ann_filter) = self
+                .filter
+                .strip_prefix("ann:")
+                .or_else(|| self.filter.strip_prefix("annotations:"))
+            {
+                if ann_filter.is_empty() {
+                    filtered_resources.retain(|r| !r.annotations.is_empty());
+                } else if let Some((key, value)) = ann_filter.split_once('=') {
+                    filtered_resources.retain(|r| {
+                        r.annotations
+                            .iter()
+                            .any(|(k, v)| k.starts_with(key) && v.starts_with(value))
+                    });
+                } else {
+                    filtered_resources
+                        .retain(|r| r.annotations.keys().any(|k| k.starts_with(ann_filter)));
+                }
+            } else {
+                filtered_resources.retain(|r| r.name.contains(&self.filter));
+            }
+        }
+
+        if filtered_resources.is_empty() {
+            return 100.0; // No resources = 100% healthy (nothing to be unhealthy)
+        }
+
+        let healthy_count = filtered_resources
+            .iter()
+            .filter(|r| {
+                let is_ready = r.ready.unwrap_or(true); // null status treated as healthy
+                let is_suspended = r.suspended.unwrap_or(false);
+                is_ready && !is_suspended
+            })
+            .count();
+
+        (healthy_count as f64 / filtered_resources.len() as f64) * 100.0
     }
 
     pub fn render(&mut self, f: &mut Frame) {
@@ -1607,6 +1725,12 @@ impl App {
         let resources = self.get_filtered_resources();
         // Only render header if not in headless mode
         if !self.config.ui.headless {
+            let health_percentage = self.calculate_health_percentage();
+            let health_filter_status = match self.health_filter {
+                HealthFilter::Healthy => Some("healthy"),
+                HealthFilter::Unhealthy => Some("unhealthy"),
+                HealthFilter::All => None,
+            };
             render_header(
                 f,
                 chunks[0],
@@ -1616,6 +1740,8 @@ impl App {
                 &self.filter,
                 &self.selected_resource_type,
                 resources.len(),
+                health_percentage,
+                health_filter_status,
                 self.config.read_only,
                 &self.theme,
                 self.config.ui.no_icons,

@@ -34,10 +34,25 @@ Type these commands in command mode (press `:`):
 | `:ns <namespace>` | Switch to a specific namespace           |
 | `:ns all`         | View all namespaces                      |
 | `:all`            | Show all resources                       |
+| `:healthy`        | Show only healthy resources              |
+| `:unhealthy`      | Show only unhealthy resources            |
 | `:skin <name>`    | Change theme/skin                        |
 | `:readonly`       | Toggle readonly mode                     |
 | `:help`           | Show/hide help                           |
 | `:q` or `:q!`     | Quit application                         |
+
+## Health Filtering
+
+Filter resources by health status:
+
+- **`:healthy`** - Show only healthy resources (ready=true, not suspended, or null status)
+- **`:unhealthy`** - Show only unhealthy resources (ready=false or suspended=true)
+- **`:all`** - Clear health filter and show all resources
+
+The header displays a health percentage indicator showing the overall health of your resources. The indicator uses color coding:
+- **Green (●)** - 90% or higher health
+- **Yellow (⚠)** - 70-89% health
+- **Red (✗)** - Below 70% health
 
 ## Operations
 
