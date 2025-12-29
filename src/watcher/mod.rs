@@ -194,12 +194,15 @@ impl ResourceWatcher {
                         tracing::debug!("{} watcher initialization complete", display_name);
                     }
                     Err(e) => {
-                        // Check if this is a 404 error (CRD doesn't exist)
+                        // Check if this is a 404 error (CRD doesn't exist) or 403 error (permission denied)
                         // watcher::Error can be converted to kube::Error to check the underlying error
                         let error_string = format!("{}", e);
                         let is_404 = error_string.contains("404")
                             || error_string.contains("Not Found")
                             || error_string.contains("page not found");
+                        let is_403 = error_string.contains("403")
+                            || error_string.contains("Forbidden")
+                            || error_string.contains("forbidden");
 
                         if is_404 {
                             // 404 means the CRD doesn't exist - stop immediately, don't retry
@@ -209,6 +212,20 @@ impl ResourceWatcher {
                             );
                             let _ = event_tx.send(WatchEvent::Error(format!(
                                 "{} CRD not available in cluster",
+                                display_name
+                            )));
+                            break;
+                        }
+
+                        if is_403 {
+                            // 403 means permission denied - likely CRD exists but user can't access it
+                            // Stop immediately, don't retry (similar to 404)
+                            tracing::info!(
+                                "{} watcher access forbidden (403), stopping watcher",
+                                display_name
+                            );
+                            let _ = event_tx.send(WatchEvent::Error(format!(
+                                "{} CRD access forbidden (permission denied)",
                                 display_name
                             )));
                             break;
@@ -366,11 +383,23 @@ impl ResourceWatcher {
                             let is_404 = error_string.contains("404")
                                 || error_string.contains("Not Found")
                                 || error_string.contains("page not found");
+                            let is_403 = error_string.contains("403")
+                                || error_string.contains("Forbidden")
+                                || error_string.contains("forbidden");
 
                             if is_404 && !version_working {
                                 // 404 means this version doesn't exist - try next version
                                 tracing::debug!(
                                     "OCIRepository version {} not found (404), trying next version",
+                                    version
+                                );
+                                break; // Try next version
+                            }
+
+                            if is_403 && !version_working {
+                                // 403 means permission denied - try next version
+                                tracing::debug!(
+                                    "OCIRepository version {} access forbidden (403), trying next version",
                                     version
                                 );
                                 break; // Try next version

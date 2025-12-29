@@ -1018,6 +1018,30 @@ impl App {
                 };
 
                 if let Some(resource) = resource_info {
+                    use crate::models::FluxResourceKind;
+
+                    // First check if resource type supports history
+                    let resource_kind = FluxResourceKind::parse_optional(&resource.resource_type);
+                    let supports_history =
+                        resource_kind.map(|k| k.supports_history()).unwrap_or(false);
+
+                    if !supports_history {
+                        let supported_types: Vec<String> =
+                            FluxResourceKind::history_supported_types()
+                                .iter()
+                                .map(|k| k.as_str().to_string())
+                                .collect();
+                        self.set_status_message((
+                            format!(
+                                "Resource type '{}' does not support reconciliation history. History is only available for: {}",
+                                resource.resource_type,
+                                supported_types.join(", ")
+                            ),
+                            true,
+                        ));
+                        return None;
+                    }
+
                     let key = crate::watcher::resource_key(
                         &resource.namespace,
                         &resource.name,
@@ -1026,13 +1050,14 @@ impl App {
 
                     // Check if resource object exists and has status.history
                     let objects = self.resource_objects.read().unwrap();
-                    let has_history = objects
-                        .get(&key)
+                    let obj = objects.get(&key);
+                    let has_history = obj
                         .and_then(|obj| obj.get("status"))
                         .and_then(|s| s.get("history"))
                         .and_then(|h| h.as_array())
                         .map(|arr| !arr.is_empty())
                         .unwrap_or(false);
+                    let obj_exists = obj.is_some();
 
                     drop(objects); // Release lock before switching view
 
@@ -1044,20 +1069,26 @@ impl App {
                         self.history_scroll_offset = 0;
                     } else {
                         // Show error message immediately
-                        use crate::models::FluxResourceKind;
                         let supported_types: Vec<String> =
                             FluxResourceKind::history_supported_types()
                                 .iter()
                                 .map(|k| k.as_str().to_string())
                                 .collect();
-                        self.set_status_message((
+
+                        let error_msg = if !obj_exists {
                             format!(
-                                "Resource '{}' does not have reconciliation history. History is only available for: {}",
+                                "Resource '{}' object not found. History may not be available yet.",
+                                resource.name
+                            )
+                        } else {
+                            format!(
+                                "Resource '{}' does not have reconciliation history yet. History is only available for: {}",
                                 resource.name,
                                 supported_types.join(", ")
-                            ),
-                            true,
-                        ));
+                            )
+                        };
+
+                        self.set_status_message((error_msg, true));
                     }
                 } else {
                     self.set_status_message(("No resource selected".to_string(), true));

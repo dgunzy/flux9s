@@ -41,6 +41,25 @@ pub fn render_reconciliation_history(
     let obj = match objects.get(&key) {
         Some(obj) => obj,
         None => {
+            let text = vec![
+                Line::from("Resource object not found"),
+                Line::from(""),
+                Line::from(format!(
+                    "Unable to access resource '{}/{}'",
+                    resource.resource_type, resource.name
+                )),
+                Line::from(""),
+                Line::from("This may happen if:"),
+                Line::from("  - The resource was deleted"),
+                Line::from("  - You don't have permission to view it"),
+                Line::from("  - The resource hasn't been loaded yet"),
+                Line::from(""),
+                Line::from("Press Esc to go back"),
+            ];
+            let paragraph = Paragraph::new(text)
+                .style(Style::default().fg(theme.text_secondary))
+                .wrap(ratatui::widgets::Wrap { trim: true });
+            f.render_widget(paragraph, inner_area);
             return Err("Resource object not found".to_string());
         }
     };
@@ -59,11 +78,12 @@ pub fn render_reconciliation_history(
                 Line::from("No reconciliation history available for this resource"),
                 Line::from(""),
                 Line::from(format!(
-                    "Resource type '{}' does not have a status.history field",
-                    resource.resource_type
+                    "Resource '{}/{}' does not have reconciliation history yet",
+                    resource.resource_type, resource.name
                 )),
                 Line::from(""),
-                Line::from("History is only available for:"),
+                Line::from("History will be populated after the resource is reconciled."),
+                Line::from("History is available for:"),
             ];
             for kind in FluxResourceKind::history_supported_types() {
                 text.push(Line::from(format!("  - {}", kind.as_str())));
