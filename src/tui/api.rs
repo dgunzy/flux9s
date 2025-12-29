@@ -5,8 +5,8 @@ use kube::core::{ApiResource, DynamicObject};
 use crate::models::FluxResourceKind;
 use crate::watcher::WatchableResource;
 use crate::watcher::{
-    Alert, Bucket, ExternalArtifact, FluxInstance, FluxReport, GitRepository, HelmChart,
-    HelmRelease, HelmRepository, ImagePolicy, ImageRepository, ImageUpdateAutomation,
+    Alert, ArtifactGenerator, Bucket, ExternalArtifact, FluxInstance, FluxReport, GitRepository,
+    HelmChart, HelmRelease, HelmRepository, ImagePolicy, ImageRepository, ImageUpdateAutomation,
     Kustomization, OCIRepository, Provider, Receiver, ResourceSet, ResourceSetInputProvider,
 };
 
@@ -40,6 +40,11 @@ pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String,
             ExternalArtifact::api_group(),
             ExternalArtifact::api_version(),
             ExternalArtifact::plural(),
+        ),
+        Some(FluxResourceKind::ArtifactGenerator) => (
+            ArtifactGenerator::api_group(),
+            ArtifactGenerator::api_version(),
+            ArtifactGenerator::plural(),
         ),
         Some(FluxResourceKind::Kustomization) => (
             Kustomization::api_group(),
@@ -100,16 +105,42 @@ pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String,
             FluxInstance::plural(),
         ),
         None => {
-            // Handle standard Kubernetes resources
+            // For non-Flux resources, we should use DynamicObject and let the discovery API handle it
+            // However, for common Kubernetes built-in resources, we can provide defaults to avoid discovery overhead
             match resource_type {
-                "Deployment" | "Service" | "ConfigMap" | "Secret" | "Pod" | "Namespace" => {
+                // Workload resources (apps/v1 API group) - Kubernetes built-ins only
+                "Deployment" | "StatefulSet" | "DaemonSet" | "ReplicaSet" => {
+                    return Ok((
+                        "apps".to_string(),
+                        "v1".to_string(),
+                        resource_type.to_lowercase() + "s",
+                    ));
+                }
+                // Core resources (v1 API group - no group prefix) - Kubernetes built-ins only
+                "Service" | "ConfigMap" | "Secret" | "Pod" | "Namespace" | "ServiceAccount" => {
                     return Ok((
                         "".to_string(),
                         "v1".to_string(),
                         resource_type.to_lowercase() + "s",
                     ));
                 }
-                _ => return Err(anyhow::anyhow!("Unknown resource type: {}", resource_type)),
+                // Networking resources - Kubernetes built-ins only
+                "Ingress" | "NetworkPolicy" => {
+                    return Ok((
+                        "networking.k8s.io".to_string(),
+                        "v1".to_string(),
+                        resource_type.to_lowercase() + "es",
+                    ));
+                }
+                // For all other resources (including CRDs), return an error
+                // The caller should handle this by using DynamicObject with proper discovery
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Resource type '{}' is not a Flux or Kubernetes built-in resource. \
+                    For CRDs and custom resources, use DynamicObject with API discovery.",
+                        resource_type
+                    ));
+                }
             }
         }
     };

@@ -58,6 +58,14 @@ pub const APP_COMMANDS: &[Command] = &[
         name: "namespace",
         takes_args: true,
     },
+    Command {
+        name: "favorites",
+        takes_args: false,
+    },
+    Command {
+        name: "fav",
+        takes_args: false,
+    },
 ];
 
 /// Find all commands that match the given prefix
@@ -177,6 +185,12 @@ pub fn is_namespace_command(cmd: &str) -> bool {
         || cmd_lower.starts_with("ns ")
         || cmd_lower == "namespace"
         || cmd_lower.starts_with("namespace ")
+}
+
+/// Check if command is favorites command (handles both "favorites" and "fav")
+pub fn is_favorites_command(cmd: &str) -> bool {
+    let cmd_lower = cmd.to_lowercase();
+    cmd_lower == "favorites" || cmd_lower == "fav"
 }
 
 /// Extract argument from a command that takes arguments

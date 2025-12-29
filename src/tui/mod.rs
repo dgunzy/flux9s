@@ -6,6 +6,7 @@
 mod api;
 mod app;
 mod commands;
+pub mod constants;
 mod operations;
 mod theme;
 mod trace;
@@ -40,9 +41,10 @@ async fn fetch_resource_yaml(
     // Import resource types - use the public re-exports from watcher module
     use crate::models::FluxResourceKind;
     use crate::watcher::{
-        Alert, Bucket, ExternalArtifact, FluxInstance, FluxReport, GitRepository, HelmChart,
-        HelmRelease, HelmRepository, ImagePolicy, ImageRepository, ImageUpdateAutomation,
-        Kustomization, OCIRepository, Provider, Receiver, ResourceSet, ResourceSetInputProvider,
+        Alert, ArtifactGenerator, Bucket, ExternalArtifact, FluxInstance, FluxReport,
+        GitRepository, HelmChart, HelmRelease, HelmRepository, ImagePolicy, ImageRepository,
+        ImageUpdateAutomation, Kustomization, OCIRepository, Provider, Receiver, ResourceSet,
+        ResourceSetInputProvider,
     };
 
     // Match resource type and fetch using appropriate API
@@ -67,6 +69,7 @@ async fn fetch_resource_yaml(
         Some(FluxResourceKind::Bucket) => fetch_resource!(Bucket),
         Some(FluxResourceKind::HelmChart) => fetch_resource!(HelmChart),
         Some(FluxResourceKind::ExternalArtifact) => fetch_resource!(ExternalArtifact),
+        Some(FluxResourceKind::ArtifactGenerator) => fetch_resource!(ArtifactGenerator),
         Some(FluxResourceKind::Kustomization) => fetch_resource!(Kustomization),
         Some(FluxResourceKind::HelmRelease) => fetch_resource!(HelmRelease),
         Some(FluxResourceKind::ImageRepository) => fetch_resource!(ImageRepository),
@@ -404,6 +407,41 @@ pub async fn run_tui_with_async_init(
             }
         }
 
+        // Check if we need to build graph asynchronously
+        if kube_initialized {
+            if let Some((rk, client, tx)) = app.trigger_graph() {
+                tracing::debug!(
+                    "Building graph for {}/{} in namespace {}",
+                    rk.resource_type,
+                    rk.name,
+                    rk.namespace
+                );
+                tokio::spawn(async move {
+                    use crate::trace::build_resource_graph;
+                    let result =
+                        build_resource_graph(&client, &rk.resource_type, &rk.namespace, &rk.name)
+                            .await;
+                    let _ = tx.send(result);
+                });
+            }
+        }
+
+        // Check for graph building result
+        if let Some(result) = app.try_get_graph_result() {
+            match result {
+                Ok(graph_result) => {
+                    app.set_graph_result(graph_result);
+                    // Graph view is already set, just update the result
+                }
+                Err(e) => {
+                    app.set_graph_error();
+                    app.set_status_message((format!("Graph building failed: {}", e), true));
+                    // Return to previous view on error - use public method
+                    app.set_view(app.previous_list_view());
+                }
+            }
+        }
+
         // Check for YAML fetch results
         if let Some(result) = app.try_get_yaml_result() {
             match result {
@@ -469,6 +507,21 @@ pub async fn run_tui_with_async_init(
         // Check for operation execution results
         if let Some(result) = app.try_get_operation_result() {
             app.set_operation_result(result);
+        }
+
+        // Check if favorites need to be saved
+        if let Some(updated_config) = app.trigger_favorites_save() {
+            let config_path = crate::config::paths::root_config_path();
+            let config_clone = updated_config.clone();
+            tokio::spawn(async move {
+                if let Err(e) =
+                    crate::config::loader::ConfigLoader::save(&config_clone, &config_path)
+                {
+                    tracing::warn!("Failed to save favorites to config: {}", e);
+                } else {
+                    tracing::debug!("Favorites saved to config");
+                }
+            });
         }
 
         // Handle context switch if pending
@@ -548,10 +601,47 @@ pub async fn run_tui_with_async_init(
                 match event {
                     crate::watcher::WatchEvent::Applied(resource_type, ns, name, obj_json) => {
                         let key = crate::watcher::resource_key(&ns, &name, &resource_type);
+
+                        // Extract reconciliation info
+                        let reconciliation_event =
+                            crate::watcher::extract_reconciliation_info(&obj_json);
+
+                        // Get existing resource info to check if reconciliation occurred
+                        let existing_info = app.state().get(&key);
+
+                        // Check if reconciliation occurred (timestamp changed)
+                        let should_add_history = if let (Some(event), Some(existing)) =
+                            (&reconciliation_event, &existing_info)
+                        {
+                            existing.last_reconciled != Some(event.timestamp)
+                        } else {
+                            reconciliation_event.is_some()
+                        };
+
                         let (suspended, ready, message, revision) =
                             crate::watcher::extract_status_fields(&obj_json);
                         let labels = crate::watcher::extract_labels(&obj_json);
                         let annotations = crate::watcher::extract_annotations(&obj_json);
+
+                        // Build reconciliation history
+                        let mut history = if let Some(existing) = existing_info {
+                            existing.reconciliation_history.clone()
+                        } else {
+                            Vec::new()
+                        };
+
+                        // Add new event if reconciliation occurred
+                        if should_add_history {
+                            if let Some(event) = reconciliation_event.clone() {
+                                history.push(event);
+                                // Limit history size
+                                use crate::tui::constants::MAX_RECONCILIATION_HISTORY;
+                                if history.len() > MAX_RECONCILIATION_HISTORY {
+                                    history.remove(0); // Remove oldest
+                                }
+                            }
+                        }
+
                         app.state().upsert(
                             key.clone(),
                             crate::watcher::ResourceInfo {
@@ -565,6 +655,8 @@ pub async fn run_tui_with_async_init(
                                 revision,
                                 labels,
                                 annotations,
+                                last_reconciled: reconciliation_event.as_ref().map(|e| e.timestamp),
+                                reconciliation_history: history,
                             },
                         );
                         // Store full object for detail view

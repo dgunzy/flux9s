@@ -29,6 +29,9 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 - **Unified and type-specific views** - View all resources together or filter by type
 - **Resource operations** - Suspend, resume, reconcile, and delete Flux resources
 - **YAML viewing** - Inspect full resource manifests
+- **Graph visualization** - Visualize resource relationships and dependencies (Kustomization, HelmRelease, etc.)
+- **Reconciliation history** - View reconciliation history for resources that track it
+- **Favorites** - Mark frequently accessed resources for quick access
 - **Namespace switching** - Monitor resources across namespaces or cluster-wide
 - **Status indicators** - Visual indicators for resource health and suspension state
 
@@ -110,26 +113,36 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 ### Navigation
 
 - `j` / `k` - Navigate up/down
-- `Enter` - View resource details
-- `y` - View resource YAML
-- `Esc` - Go back / Quit
-- `/` - Filter resources by name
 - `:` - Command mode (e.g., `:kustomization`, `:gitrepository`)
+- `Enter` - View resource details
+- `/` - Filter resources by name
+- `s` - Suspend resource
+- `r` - Resume resource
+- `R` - Reconcile resource
+- `y` - View resource YAML
+- `f` - Toggle favorite
+- `g` - View resource graph (Kustomization, HelmRelease, etc.)
+- `h` - View reconciliation history
+- `t` - Trace ownership chain
+- `W` - Reconcile with source (Kustomization, HelmRelease)
+- `d` - Delete resource (with confirmation)
+- `?` - Show/hide help
+- `Esc` - Go back / Quit
 
 ### Commands
 
 - `:ns <namespace>` - Switch namespace
 - `:ns all` - View all namespaces
+- `:favorites` or `:fav` - View favorite resources
 - `:skin {skin-name}` - set skin (Must be in your systems flux9s/skins dir)
 - `:q` or `:q!` - Quit
 - `:help` - Show help
 
-### Operations
+### Resource Views
 
-- `s` - Suspend resource
-- `r` - Resume resource
-- `R` - Reconcile resource
-- `d` - Delete resource (with confirmation)
+- **Graph View (`g`)** - Visualize resource relationships and dependencies. Shows upstream sources and downstream managed resources. Supported for Kustomization, HelmRelease, ArtifactGenerator, FluxInstance, and ResourceSet.
+- **History View (`h`)** - View reconciliation history for FluxInstance, ResourceSet, Kustomization, and HelmRelease resources.
+- **Favorites (`f`)** - Mark resources as favorites for quick access. Use `:favorites` command to view all favorites.
 
 ### Terminal Commands
 

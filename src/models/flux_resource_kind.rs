@@ -17,6 +17,7 @@ pub enum FluxResourceKind {
     Bucket,
     HelmChart,
     ExternalArtifact,
+    ArtifactGenerator,
     // Kustomize Controller resources
     Kustomization,
     // Helm Controller resources
@@ -47,6 +48,7 @@ impl FluxResourceKind {
             FluxResourceKind::Bucket => "Bucket",
             FluxResourceKind::HelmChart => "HelmChart",
             FluxResourceKind::ExternalArtifact => "ExternalArtifact",
+            FluxResourceKind::ArtifactGenerator => "ArtifactGenerator",
             FluxResourceKind::Kustomization => "Kustomization",
             FluxResourceKind::HelmRelease => "HelmRelease",
             FluxResourceKind::ImageRepository => "ImageRepository",
@@ -80,6 +82,7 @@ impl FluxResourceKind {
             FluxResourceKind::Bucket,
             FluxResourceKind::HelmChart,
             FluxResourceKind::ExternalArtifact,
+            FluxResourceKind::ArtifactGenerator,
             FluxResourceKind::Kustomization,
             FluxResourceKind::HelmRelease,
             FluxResourceKind::ImageRepository,
@@ -110,6 +113,9 @@ impl FluxResourceKind {
             "externalartifact" | "externalartifacts" | "ea" => {
                 Some(FluxResourceKind::ExternalArtifact)
             }
+            "artifactgenerator" | "artifactgenerators" | "ag" => {
+                Some(FluxResourceKind::ArtifactGenerator)
+            }
             "kustomization" | "ks" | "kustomizations" => Some(FluxResourceKind::Kustomization),
             "helmrelease" | "hr" | "helmreleases" => Some(FluxResourceKind::HelmRelease),
             "imagerepository" | "imagerepositories" => Some(FluxResourceKind::ImageRepository),
@@ -128,6 +134,63 @@ impl FluxResourceKind {
             "fluxinstance" | "fluxinstances" | "fi" => Some(FluxResourceKind::FluxInstance),
             _ => None,
         }
+    }
+
+    /// Check if this resource type supports the graph view
+    ///
+    /// Only resources with inventory tracking capabilities support graphs:
+    /// - Kustomization
+    /// - HelmRelease
+    /// - ArtifactGenerator
+    /// - FluxInstance
+    /// - ResourceSet
+    pub fn supports_graph(&self) -> bool {
+        matches!(
+            self,
+            FluxResourceKind::Kustomization
+                | FluxResourceKind::HelmRelease
+                | FluxResourceKind::ArtifactGenerator
+                | FluxResourceKind::FluxInstance
+                | FluxResourceKind::ResourceSet
+        )
+    }
+
+    /// Check if this resource type supports reconciliation history
+    ///
+    /// Only resources with status.history field support history:
+    /// - FluxInstance
+    /// - ResourceSet
+    /// - Kustomization
+    /// - HelmRelease
+    pub fn supports_history(&self) -> bool {
+        matches!(
+            self,
+            FluxResourceKind::FluxInstance
+                | FluxResourceKind::ResourceSet
+                | FluxResourceKind::Kustomization
+                | FluxResourceKind::HelmRelease
+        )
+    }
+
+    /// Get all resource types that support graph view
+    pub fn graph_supported_types() -> &'static [Self] {
+        &[
+            FluxResourceKind::Kustomization,
+            FluxResourceKind::HelmRelease,
+            FluxResourceKind::ArtifactGenerator,
+            FluxResourceKind::FluxInstance,
+            FluxResourceKind::ResourceSet,
+        ]
+    }
+
+    /// Get all resource types that support reconciliation history
+    pub fn history_supported_types() -> &'static [Self] {
+        &[
+            FluxResourceKind::FluxInstance,
+            FluxResourceKind::ResourceSet,
+            FluxResourceKind::Kustomization,
+            FluxResourceKind::HelmRelease,
+        ]
     }
 }
 
@@ -154,6 +217,7 @@ impl FromStr for FluxResourceKind {
             "Bucket" => Ok(FluxResourceKind::Bucket),
             "HelmChart" => Ok(FluxResourceKind::HelmChart),
             "ExternalArtifact" => Ok(FluxResourceKind::ExternalArtifact),
+            "ArtifactGenerator" => Ok(FluxResourceKind::ArtifactGenerator),
             "Kustomization" => Ok(FluxResourceKind::Kustomization),
             "HelmRelease" => Ok(FluxResourceKind::HelmRelease),
             "ImageRepository" => Ok(FluxResourceKind::ImageRepository),

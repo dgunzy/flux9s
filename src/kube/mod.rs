@@ -11,6 +11,8 @@
 //! Automatically detects internal cluster hosts and adds them to NO_PROXY
 //! to prevent proxy issues with corporate environments.
 
+pub mod inventory;
+
 use anyhow::Result;
 use kube::config::Kubeconfig;
 use kube::{Client, Config};

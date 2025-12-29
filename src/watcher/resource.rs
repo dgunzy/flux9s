@@ -68,6 +68,7 @@ pub use notification_controller::{Alert, Provider, Receiver};
 pub use source_controller::{
     Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRepository, OCIRepository,
 };
+pub use source_watcher::ArtifactGenerator;
 // Flux Operator resources
 pub use flux_operator_fluxinstances::FluxInstance;
 pub use flux_operator_fluxreports::FluxReport;
@@ -140,6 +141,13 @@ impl_watchable!(
     "v1",
     "externalartifacts",
     "ExternalArtifact"
+);
+impl_watchable!(
+    ArtifactGenerator,
+    "source.extensions.fluxcd.io",
+    "v1beta1",
+    "artifactgenerators",
+    "ArtifactGenerator"
 );
 
 // Kustomize Controller resources

@@ -740,6 +740,18 @@ pub struct OperationRegistry {
     operations: Vec<Box<dyn FluxOperation>>,
 }
 
+#[cfg(test)]
+impl std::fmt::Debug for OperationRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OperationRegistry")
+            .field(
+                "operations",
+                &format!("<{} operations>", self.operations.len()),
+            )
+            .finish()
+    }
+}
+
 impl OperationRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
@@ -806,6 +818,8 @@ mod tests {
             revision: None,
             labels: HashMap::new(),
             annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: Vec::new(),
         };
 
         let msg = op.confirmation_message(&resource);
@@ -843,6 +857,8 @@ mod tests {
             revision: None,
             labels: HashMap::new(),
             annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: Vec::new(),
         };
 
         let msg = op.confirmation_message(&resource);
@@ -925,6 +941,8 @@ mod tests {
             revision: None,
             labels: HashMap::new(),
             annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: Vec::new(),
         };
 
         let msg = op.confirmation_message(&resource);

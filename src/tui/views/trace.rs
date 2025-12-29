@@ -21,37 +21,30 @@ pub fn render_resource_trace(
     scroll_offset: &mut usize,
     theme: &Theme,
 ) {
-    let outer_block = Block::default()
-        .title("Trace")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.text_label));
+    let outer_block = crate::tui::views::helpers::create_themed_block("Trace", theme);
 
     if trace_pending.is_some() {
-        // Show loading message
-        let text = vec![
-            Line::from("Tracing resource..."),
-            Line::from(""),
-            Line::from("Walking ownership chain..."),
-        ];
-        let paragraph = Paragraph::new(text)
-            .block(outer_block)
-            .wrap(Wrap { trim: true });
-        f.render_widget(paragraph, area);
+        crate::tui::views::helpers::render_loading_state(
+            f,
+            area,
+            "Trace",
+            "Tracing resource... Walking ownership chain...",
+            theme,
+        );
         return;
     }
 
     let trace_result = match trace_result {
         Some(result) => result,
         None => {
-            let text = vec![
-                Line::from("No trace data available"),
-                Line::from(""),
-                Line::from("Select a resource and press 't' to trace"),
-            ];
-            let paragraph = Paragraph::new(text)
-                .block(outer_block)
-                .wrap(Wrap { trim: true });
-            f.render_widget(paragraph, area);
+            crate::tui::views::helpers::render_empty_state(
+                f,
+                area,
+                "Trace",
+                "No trace data available",
+                "Select a resource and press 't' to trace",
+                theme,
+            );
             return;
         }
     };

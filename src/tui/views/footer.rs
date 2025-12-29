@@ -163,37 +163,45 @@ fn render_navigation_footer(
         ("j/k ".to_string(), "Navigate".to_string(), theme.footer_key),
         (":".to_string(), "Command".to_string(), theme.footer_key),
         ("Enter".to_string(), "Details".to_string(), theme.footer_key),
-        ("y".to_string(), "YAML".to_string(), theme.footer_key),
-        ("t".to_string(), "Trace".to_string(), theme.footer_key),
+        (
+            "/".to_string(),
+            "Filter(Name)".to_string(),
+            theme.footer_key,
+        ),
         ("s".to_string(), "Suspend".to_string(), theme.footer_key),
         ("r".to_string(), "Resume".to_string(), theme.footer_key),
         ("R".to_string(), "Reconcile".to_string(), theme.footer_key),
+        ("y".to_string(), "YAML".to_string(), theme.footer_key),
+        ("f".to_string(), "Favorite".to_string(), theme.footer_key),
+        ("g".to_string(), "Graph".to_string(), theme.footer_key),
+        ("h".to_string(), "History".to_string(), theme.footer_key),
+        ("t".to_string(), "Trace".to_string(), theme.footer_key),
         (
             "W".to_string(),
             "Reconcile+Source".to_string(),
             theme.footer_key,
         ),
         ("d".to_string(), "Delete".to_string(), theme.footer_key),
-        (
-            "/".to_string(),
-            "Filter(Name)".to_string(),
-            theme.footer_key,
-        ),
         ("?".to_string(), "Help".to_string(), theme.footer_key),
         ("Esc".to_string(), "Back/Quit".to_string(), theme.footer_key),
     ];
 
     // Add namespace hotkeys (show first few that fit)
+    use crate::tui::constants::{MAX_FOOTER_NAMESPACE_HOTKEYS, MAX_FOOTER_NAMESPACE_LENGTH};
     if !namespace_hotkeys.is_empty() {
-        // Show up to 3 namespace hotkeys in footer (0, 1, 2)
-        for (idx, ns) in namespace_hotkeys.iter().take(3).enumerate() {
+        // Show up to MAX_FOOTER_NAMESPACE_HOTKEYS namespace hotkeys in footer
+        for (idx, ns) in namespace_hotkeys
+            .iter()
+            .take(MAX_FOOTER_NAMESPACE_HOTKEYS)
+            .enumerate()
+        {
             let key = idx.to_string();
             let display_ns = if ns == "all" {
                 "all".to_string()
             } else {
                 // Truncate long namespace names
-                if ns.len() > 8 {
-                    ns[..8].to_string()
+                if ns.len() > MAX_FOOTER_NAMESPACE_LENGTH {
+                    ns[..MAX_FOOTER_NAMESPACE_LENGTH].to_string()
                 } else {
                     ns.clone()
                 }
@@ -213,41 +221,12 @@ fn render_navigation_footer(
         }
     }
 
-    // Build a single line with all segments and separators
-    // Let ratatui's Paragraph widget handle the wrapping
-    let mut spans = Vec::new();
+    // Build wrapped lines similar to header logic
+    // Wrap footer content into 2 lines to prevent overflow
+    let available_width = area.width.saturating_sub(2); // Account for borders
 
-    for (idx, (key, label, color)) in nav_segments.iter().enumerate() {
-        // Add separator before segment (except first)
-        if idx > 0 {
-            spans.push(Span::raw(" | "));
-        }
-
-        // Add segment spans
-        if key == "j/k " {
-            spans.push(Span::raw(key.clone()));
-            spans.push(Span::styled(label.clone(), Style::default().fg(*color)));
-        } else {
-            spans.push(Span::styled(key.clone(), Style::default().fg(*color)));
-            spans.push(Span::raw(format!(" {}", label)));
-        }
-    }
-
-    let line = Line::from(spans);
-
-    // Use ratatui's built-in wrapping with trim to handle line breaks properly
-    let footer = Paragraph::new(line)
-        .block(Block::default().borders(Borders::ALL))
-        .wrap(Wrap { trim: true });
-
-    f.render_widget(footer, area);
-
-    // Calculate number of lines that will be used after wrapping
-    // This is an estimate for the dynamic height calculation
-    let available_width = area.width.saturating_sub(2);
-
-    // Calculate total content length
-    let mut total_length = 0;
+    // Calculate segment lengths
+    let mut segment_lengths: Vec<usize> = Vec::new();
     for (idx, (key, label, _)) in nav_segments.iter().enumerate() {
         let separator_len = if idx > 0 { 3 } else { 0 }; // " | "
         let segment_len = if *key == "j/k " {
@@ -255,17 +234,85 @@ fn render_navigation_footer(
         } else {
             key.len() + 1 + label.len() // key + space + label
         };
-        total_length += separator_len + segment_len;
+        segment_lengths.push(separator_len + segment_len);
     }
 
-    // Estimate number of lines needed
-    let lines_needed = if available_width > 0 {
-        ((total_length as f32) / (available_width as f32)).ceil() as usize
-    } else {
-        1
-    };
+    // Split segments into two lines
+    let mut line1_segments = Vec::new();
+    let mut line2_segments = Vec::new();
+    let mut current_line_length = 0;
+    let mut use_line2 = false;
 
-    lines_needed.max(1)
+    for (idx, segment) in nav_segments.iter().enumerate() {
+        let segment_len = segment_lengths[idx];
+
+        // If adding this segment would exceed width and we're on line 1, start line 2
+        if current_line_length + segment_len > available_width as usize
+            && !use_line2
+            && current_line_length > 0
+        {
+            use_line2 = true;
+            current_line_length = 0;
+        }
+
+        if use_line2 {
+            line2_segments.push((idx, segment));
+            current_line_length += segment_len;
+        } else {
+            line1_segments.push((idx, segment));
+            current_line_length += segment_len;
+        }
+    }
+
+    // Build lines with spans
+    let mut footer_lines = Vec::new();
+
+    // Line 1
+    if !line1_segments.is_empty() {
+        let mut line1_spans = Vec::new();
+        for (idx, (key, label, color)) in line1_segments.iter() {
+            if *idx > 0 {
+                line1_spans.push(Span::raw(" | "));
+            }
+            if *key == "j/k " {
+                line1_spans.push(Span::raw(key.clone()));
+                line1_spans.push(Span::styled(label.clone(), Style::default().fg(*color)));
+            } else {
+                line1_spans.push(Span::styled(key.clone(), Style::default().fg(*color)));
+                line1_spans.push(Span::raw(format!(" {}", label)));
+            }
+        }
+        footer_lines.push(Line::from(line1_spans));
+    }
+
+    // Line 2
+    if !line2_segments.is_empty() {
+        let mut line2_spans = Vec::new();
+        for (idx, (key, label, color)) in line2_segments.iter() {
+            if *idx > 0 {
+                line2_spans.push(Span::raw(" | "));
+            }
+            if *key == "j/k " {
+                line2_spans.push(Span::raw(key.clone()));
+                line2_spans.push(Span::styled(label.clone(), Style::default().fg(*color)));
+            } else {
+                line2_spans.push(Span::styled(key.clone(), Style::default().fg(*color)));
+                line2_spans.push(Span::raw(format!(" {}", label)));
+            }
+        }
+        footer_lines.push(Line::from(line2_spans));
+    }
+
+    // Render footer with wrapped lines
+    let num_lines = footer_lines.len().min(2);
+    let footer = Paragraph::new(footer_lines)
+        .block(Block::default().borders(Borders::ALL))
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(footer, area);
+
+    // Return number of lines used (max 2)
+    num_lines
 }
 
 fn render_confirmation_footer_text<'a>(

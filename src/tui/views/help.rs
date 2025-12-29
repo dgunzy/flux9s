@@ -30,14 +30,17 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         ])
         .split(inner_area);
 
-    // RESOURCE column
+    // RESOURCE column - ordered to match footer
     let resource_items = vec![
         ("<Enter>", "View resource details"),
-        ("<y>", "View YAML manifest"),
-        ("<t>", "Trace ownership chain"),
         ("<s>", "Suspend reconciliation"),
         ("<r>", "Resume reconciliation"),
         ("<R>", "Reconcile resource"),
+        ("<y>", "View YAML manifest"),
+        ("<f>", "Toggle favorite"),
+        ("<g>", "View resource graph"),
+        ("<h>", "View reconciliation history"),
+        ("<t>", "Trace ownership chain"),
         ("<W>", "Reconcile with source"),
         ("<d>", "Delete resource"),
     ];
@@ -61,6 +64,8 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         (":all", "Show all resources"),
         (":healthy", "Show healthy resources"),
         (":unhealthy", "Show unhealthy resources"),
+        (":favorites", "View favorites"),
+        (":fav", "View favorites"),
         (":q", "Quit application"),
     ];
     render_help_column(f, column_chunks[1], "GENERAL", &general_items, theme);

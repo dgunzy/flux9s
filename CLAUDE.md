@@ -12,6 +12,7 @@
 1. Run `make ci` after all changes (formats, lints, tests)
 2. Large changes require accompanying tests
 3. Command/keybinding changes must update help text (`src/tui/views/help.rs` and footer)
+4. **Git operations**: User manages their own git workflow. Only use git to restore a single file when explicitly requested (e.g., `git restore path/to/file`). Never commit, push, create branches, or perform any other git operations
 
 ## Code Standards
 
