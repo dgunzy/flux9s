@@ -10,6 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 ///
 /// This struct holds all color and style definitions. In the future, this can
 /// be loaded from a plugin file or configuration.
+#[derive(Debug)]
 pub struct Theme {
     // Header colors
     pub header_context: Color,

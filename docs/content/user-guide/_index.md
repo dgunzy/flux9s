@@ -14,14 +14,22 @@ Use these keyboard shortcuts to navigate flux9s:
 | Key       | Action                                                  |
 | --------- | ------------------------------------------------------- |
 | `j` / `k` | Navigate up/down                                        |
-| `Enter`   | View resource details                                   |
-| `y`       | View resource YAML                                      |
-| `t`       | Trace ownership chain                                   |
-| `Esc`     | Go back / Quit                                          |
-| `/`       | Filter resources by name                                |
 | `:`       | Command mode (e.g., `:kustomization`, `:gitrepository`) |
-| `Tab`     | Autocomplete command                                    |
+| `Enter`   | View resource details                                   |
+| `/`       | Filter resources by name                                |
+| `s`       | Suspend reconciliation                                 |
+| `r`       | Resume reconciliation                                  |
+| `R`       | Reconcile resource                                     |
+| `y`       | View resource YAML                                      |
+| `f`       | Toggle favorite                                         |
+| `g`       | View resource graph (Kustomization, HelmRelease, etc.)  |
+| `h`       | View reconciliation history                             |
+| `t`       | Trace ownership chain                                   |
+| `W`       | Reconcile with source                                  |
+| `d`       | Delete resource                                         |
 | `?`       | Show/hide help                                          |
+| `Esc`     | Go back / Quit                                          |
+| `Tab`     | Autocomplete command                                    |
 
 ## Commands
 
@@ -36,6 +44,8 @@ Type these commands in command mode (press `:`):
 | `:all`            | Show all resources                       |
 | `:healthy`        | Show only healthy resources              |
 | `:unhealthy`      | Show only unhealthy resources            |
+| `:favorites`      | View favorite resources                  |
+| `:fav`            | Alias for `:favorites`                   |
 | `:skin <name>`    | Change theme/skin                        |
 | `:readonly`       | Toggle readonly mode                     |
 | `:help`           | Show/hide help                           |
@@ -53,6 +63,50 @@ The header displays a health percentage indicator showing the overall health of 
 - **Green (●)** - 90% or higher health
 - **Yellow (⚠)** - 70-89% health
 - **Red (✗)** - Below 70% health
+
+## Resource Views
+
+### Graph View (`g`)
+
+Visualize resource relationships and dependencies. Shows upstream sources and downstream managed resources.
+
+**Supported resource types:**
+- Kustomization
+- HelmRelease
+- ArtifactGenerator
+- FluxInstance
+- ResourceSet
+
+The graph view displays:
+- **Upstream sources** (GitRepository, HelmRepository, etc.)
+- **Managed resources** (workloads, ConfigMaps, Services, etc.)
+- **Resource groups** (aggregated by type)
+- **Workload groups** (aggregated workloads with status)
+
+### Reconciliation History (`h`)
+
+View reconciliation history for resources that track it.
+
+**Supported resource types:**
+- FluxInstance
+- ResourceSet
+- Kustomization
+- HelmRelease
+
+The history view shows:
+- Timestamp of each reconciliation
+- Revision information
+- Status (Success/Failed/Unknown)
+- Messages from reconciliation events
+
+### Favorites (`f`)
+
+Mark frequently accessed resources as favorites for quick access.
+
+- Press `f` on a resource to toggle favorite status
+- Use `:favorites` or `:fav` command to view all favorites
+- Favorites are saved to your configuration file
+- Favorites appear first in resource lists
 
 ## Operations
 
@@ -110,5 +164,13 @@ Visualize resource relationships and ownership chains.
 ![flux9s filter](/images/filter-screenshot.png)
 
 Quickly find resources by name using the filter feature.
+{{% /blocks/feature %}}
+
+{{% blocks/feature icon="fa-project-diagram" title="Graph View" %}}
+![flux9s graph](/images/graph-screenshot.png)
+
+Visualize resource relationships and dependencies in a graph format.
+
+Shows upstream sources and downstream managed resources for Kustomization, HelmRelease, and other resources with inventory tracking.
 {{% /blocks/feature %}}
 {{< /blocks/section >}}

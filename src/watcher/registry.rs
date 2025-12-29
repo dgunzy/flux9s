@@ -49,6 +49,10 @@ pub const RESOURCE_REGISTRY: &[ResourceEntry] = &[
         display_name: "ExternalArtifact",
         command_aliases: &["externalartifact", "externalartifacts", "ea"],
     },
+    ResourceEntry {
+        display_name: "ArtifactGenerator",
+        command_aliases: &["artifactgenerator", "artifactgenerators", "ag"],
+    },
     // Kustomize Controller resources
     ResourceEntry {
         display_name: "Kustomization",

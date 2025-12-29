@@ -19,7 +19,7 @@ test: ## Run library and unit tests
 	cargo test --lib --tests
 
 test-integration: ## Run integration tests
-	cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests
+	cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests --test graph_tests
 
 audit: ## Run cargo-audit to check for CVEs (ignores unmaintained warnings)
 	cargo audit --ignore RUSTSEC-2024-0436

@@ -51,10 +51,14 @@ pub fn render_resource_yaml(
     let key = match selected_resource_key {
         Some(k) => k,
         None => {
-            let text = vec![Line::from("No resource selected")];
-            let block = Block::default().title("YAML").borders(Borders::ALL);
-            let paragraph = Paragraph::new(text).block(block);
-            f.render_widget(paragraph, area);
+            crate::tui::views::helpers::render_empty_state(
+                f,
+                area,
+                "YAML",
+                "No resource selected",
+                "Select a resource to view YAML",
+                theme,
+            );
             return;
         }
     };
@@ -64,15 +68,13 @@ pub fn render_resource_yaml(
         // Use fetched YAML (complete)
         fetched.clone()
     } else if yaml_fetch_pending.is_some() {
-        // Show loading message
-        let text = vec![
-            Line::from("Loading YAML from API..."),
-            Line::from(""),
-            Line::from("Fetching complete resource..."),
-        ];
-        let block = Block::default().title("YAML").borders(Borders::ALL);
-        let paragraph = Paragraph::new(text).block(block);
-        f.render_widget(paragraph, area);
+        crate::tui::views::helpers::render_loading_state(
+            f,
+            area,
+            "YAML",
+            "Loading YAML from API... Fetching complete resource...",
+            theme,
+        );
         return;
     } else {
         // Fall back to stored object
@@ -80,10 +82,14 @@ pub fn render_resource_yaml(
         match objects.get(key).cloned() {
             Some(obj) => obj,
             None => {
-                let text = vec![Line::from("Resource YAML not available")];
-                let block = Block::default().title("YAML").borders(Borders::ALL);
-                let paragraph = Paragraph::new(text).block(block);
-                f.render_widget(paragraph, area);
+                crate::tui::views::helpers::render_empty_state(
+                    f,
+                    area,
+                    "YAML",
+                    "Resource YAML not available",
+                    "Resource may have been deleted",
+                    theme,
+                );
                 return;
             }
         }

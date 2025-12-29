@@ -436,6 +436,7 @@ impl ResourceWatcher {
         self.watch::<resource::Bucket>()?;
         self.watch::<resource::HelmChart>()?;
         self.watch::<resource::ExternalArtifact>()?;
+        self.watch::<resource::ArtifactGenerator>()?;
 
         // Kustomize Controller resources
         self.watch::<resource::Kustomization>()?;
@@ -473,6 +474,66 @@ impl ResourceWatcher {
         }
         self.handles.clear();
     }
+}
+
+/// Extract reconciliation information from resource status
+pub fn extract_reconciliation_info(
+    obj: &serde_json::Value,
+) -> Option<crate::watcher::state::ReconciliationEvent> {
+    let status = obj.get("status")?;
+
+    // Extract lastReconciledAt or lastReconciled timestamp
+    let last_reconciled_str = status
+        .get("lastReconciledAt")
+        .or_else(|| status.get("lastReconciled"))
+        .and_then(|v| v.as_str())?;
+
+    let timestamp = chrono::DateTime::parse_from_rfc3339(last_reconciled_str)
+        .ok()?
+        .with_timezone(&chrono::Utc);
+
+    // Extract revision
+    let revision = status
+        .get("lastAppliedRevision")
+        .or_else(|| status.get("observedRevision"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Extract status from conditions
+    let ready_condition = status
+        .get("conditions")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| {
+            arr.iter().find(|c| {
+                c.get("type")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s == "Ready")
+                    .unwrap_or(false)
+            })
+        });
+
+    let status_str = ready_condition
+        .and_then(|c| c.get("status").and_then(|s| s.as_str()))
+        .map(|s| if s == "True" { "Success" } else { "Failed" })
+        .unwrap_or_else(|| "Unknown");
+
+    // Extract message
+    let message = status
+        .get("message")
+        .and_then(|m| m.as_str())
+        .or_else(|| {
+            ready_condition
+                .and_then(|c| c.get("message"))
+                .and_then(|m| m.as_str())
+        })
+        .map(|s| s.to_string());
+
+    Some(crate::watcher::state::ReconciliationEvent {
+        timestamp,
+        revision,
+        status: status_str.to_string(),
+        message,
+    })
 }
 
 /// Extract common status fields from a Flux CRD object JSON
@@ -528,4 +589,16 @@ pub fn extract_status_fields(
     }
 
     (suspended, ready, message, revision)
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for ResourceWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResourceWatcher")
+            .field("current_namespace", &self.current_namespace)
+            .field("handles", &format!("<{} handles>", self.handles.len()))
+            .field("client", &"<kube::Client>")
+            .field("event_tx", &"<mpsc::UnboundedSender>")
+            .finish()
+    }
 }

@@ -39,6 +39,10 @@ pub struct Config {
     /// Cluster-specific settings (merged with cluster configs)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cluster: HashMap<String, serde_yaml::Value>,
+
+    /// Favorite resources (resource keys: "resource_type:namespace:name")
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub favorites: Vec<String>,
 }
 
 /// UI configuration
@@ -134,6 +138,7 @@ impl Default for Config {
             namespace_hotkeys: Vec::new(), // Empty means use auto-discovered defaults
             context_skins: HashMap::new(),
             cluster: HashMap::new(),
+            favorites: Vec::new(), // Empty by default
         }
     }
 }

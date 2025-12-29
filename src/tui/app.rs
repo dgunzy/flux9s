@@ -8,10 +8,11 @@ use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
+    style::Style,
     text::Line,
     widgets::{Block, Borders, Paragraph},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 /// Request to trace a resource's ownership chain
@@ -45,7 +46,7 @@ pub struct OperationRequest {
 }
 
 /// Pending operation awaiting confirmation
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PendingOperation {
     /// The type of resource to operate on
     pub resource_type: String,
@@ -118,14 +119,28 @@ pub struct App {
     cached_terminal_size: Option<(u16, u16)>, // (width, height)
     cached_header_height: u16,
     cached_footer_height: u16,
+    // Favorites management
+    favorites: HashSet<String>, // Resource keys: "resource_type:namespace:name"
+    favorites_pending_save: bool, // Flag to trigger async save
+    history_scroll_offset: usize, // Scroll offset for history view
+    graph_scroll_offset: usize, // Scroll offset for graph view (line-based, like YAML)
+    graph_pending: Option<ResourceKey>, // Resource to build graph for
+    graph_result: Option<crate::trace::ResourceGraph>, // Graph result data
+    graph_result_rx:
+        Option<tokio::sync::oneshot::Receiver<anyhow::Result<crate::trace::ResourceGraph>>>, // Channel to receive graph result
+    // Track previous list view to return to correct view (ResourceList or ResourceFavorites)
+    previous_list_view: View, // The list view we came from (ResourceList or ResourceFavorites)
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum View {
     ResourceList,
     ResourceDetail,
     ResourceYAML,
     ResourceTrace,
+    ResourceGraph,
+    ResourceFavorites,
+    ResourceHistory,
     #[allow(dead_code)] // Reserved for future alternative help view implementation
     Help,
 }
@@ -200,8 +215,17 @@ impl App {
             pending_context_switch: None, // No pending context switch on init
             // Initialize layout cache - will be populated on first render
             cached_terminal_size: None,
-            cached_header_height: 7, // Default minimum
-            cached_footer_height: 3, // Default minimum
+            cached_header_height: crate::tui::constants::MIN_HEADER_HEIGHT,
+            cached_footer_height: crate::tui::constants::MIN_FOOTER_HEIGHT,
+            // Load favorites from config
+            favorites: config.favorites.iter().cloned().collect(),
+            favorites_pending_save: false,
+            history_scroll_offset: 0,
+            graph_scroll_offset: 0,
+            graph_pending: None,
+            graph_result: None,
+            graph_result_rx: None,
+            previous_list_view: View::ResourceList, // Track previous list view for navigation
         }
     }
 
@@ -214,13 +238,16 @@ impl App {
         discovered_namespaces: Vec<String>,
     ) -> Vec<String> {
         // If config has hotkeys, use them (but validate length)
+        use crate::tui::constants::MAX_NAMESPACE_HOTKEYS;
         if !config.namespace_hotkeys.is_empty() {
-            if config.namespace_hotkeys.len() > 10 {
+            if config.namespace_hotkeys.len() > MAX_NAMESPACE_HOTKEYS {
                 tracing::warn!(
-                    "namespace_hotkeys has {} items, maximum is 10. Truncating to first 10.",
-                    config.namespace_hotkeys.len()
+                    "namespace_hotkeys has {} items, maximum is {}. Truncating to first {}.",
+                    config.namespace_hotkeys.len(),
+                    MAX_NAMESPACE_HOTKEYS,
+                    MAX_NAMESPACE_HOTKEYS
                 );
-                return config.namespace_hotkeys[..10].to_vec();
+                return config.namespace_hotkeys[..MAX_NAMESPACE_HOTKEYS].to_vec();
             }
             return config.namespace_hotkeys.clone();
         }
@@ -230,7 +257,7 @@ impl App {
 
         // Add discovered namespaces (skip flux-system if already in list)
         for ns in discovered_namespaces {
-            if ns != "flux-system" && hotkeys.len() < 10 {
+            if ns != "flux-system" && hotkeys.len() < MAX_NAMESPACE_HOTKEYS {
                 hotkeys.push(ns);
             }
         }
@@ -455,6 +482,76 @@ impl App {
         None
     }
 
+    pub fn trigger_graph(
+        &mut self,
+    ) -> Option<(
+        ResourceKey,
+        kube::Client,
+        tokio::sync::oneshot::Sender<anyhow::Result<crate::trace::ResourceGraph>>,
+    )> {
+        if let Some(ref rk) = self.graph_pending {
+            if let Some(ref client) = self.kube_client {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let request = (rk.clone(), client.clone(), tx);
+                self.graph_pending = None;
+                self.graph_result_rx = Some(rx);
+                return Some(request);
+            }
+        }
+        None
+    }
+
+    pub fn try_get_graph_result(&mut self) -> Option<anyhow::Result<crate::trace::ResourceGraph>> {
+        if let Some(ref mut rx) = self.graph_result_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.graph_result_rx = None;
+                    return Some(result);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    return None;
+                }
+                Err(_) => {
+                    self.graph_result_rx = None;
+                    return Some(Err(anyhow::anyhow!("Graph building failed")));
+                }
+            }
+        }
+        None
+    }
+
+    pub fn set_graph_result(&mut self, result: crate::trace::ResourceGraph) {
+        self.graph_result = Some(result);
+    }
+
+    pub fn set_graph_error(&mut self) {
+        self.graph_result = None;
+        self.graph_pending = None;
+    }
+
+    #[allow(dead_code)] // Used in tests
+    pub fn set_view_graph(&mut self) {
+        self.current_view = View::ResourceGraph;
+    }
+
+    pub fn set_view(&mut self, view: View) {
+        self.current_view = view;
+    }
+
+    pub fn previous_list_view(&self) -> View {
+        self.previous_list_view
+    }
+
+    #[cfg(test)]
+    pub fn set_previous_list_view(&mut self, view: View) {
+        self.previous_list_view = view;
+    }
+
+    #[allow(dead_code)] // Used in tests
+    pub fn current_view(&self) -> View {
+        self.current_view
+    }
+
     pub fn try_get_yaml_result(&mut self) -> Option<anyhow::Result<serde_json::Value>> {
         // Check for async YAML fetch result
         if let Some(ref mut rx) = self.yaml_fetch_rx {
@@ -629,10 +726,19 @@ impl App {
                         // At main menu - exit program
                         return Some(true);
                     }
-                    View::ResourceDetail | View::ResourceYAML | View::ResourceTrace => {
+                    View::ResourceDetail
+                    | View::ResourceYAML
+                    | View::ResourceTrace
+                    | View::ResourceHistory
+                    | View::ResourceGraph => {
+                        // Go back to previous list view (favorites if we came from there, otherwise list)
+                        self.current_view = self.previous_list_view;
+                        self.selected_resource_key = None;
+                        return None;
+                    }
+                    View::ResourceFavorites => {
                         // Go back to resource list
                         self.current_view = View::ResourceList;
-                        self.selected_resource_key = None;
                         return None;
                     }
                     View::Help => {
@@ -649,8 +755,10 @@ impl App {
             | crossterm::event::KeyCode::Char('d')
             | crossterm::event::KeyCode::Char('R')
             | crossterm::event::KeyCode::Char('W') => {
-                // Handle Flux operations - works from both list and detail view
-                let resource_info = if self.current_view == View::ResourceList {
+                // Handle Flux operations - works from list, favorites, and detail view
+                let resource_info = if self.current_view == View::ResourceList
+                    || self.current_view == View::ResourceFavorites
+                {
                     let resources = self.get_filtered_resources();
                     resources.get(self.selected_index).cloned()
                 } else if self.current_view == View::ResourceDetail {
@@ -735,8 +843,10 @@ impl App {
                 }
             }
             crossterm::event::KeyCode::Char('t') => {
-                // Trace command - works from both list and detail view
-                let resource_info = if self.current_view == View::ResourceList {
+                // Trace command - works from list, favorites, and detail view
+                let resource_info = if self.current_view == View::ResourceList
+                    || self.current_view == View::ResourceFavorites
+                {
                     let resources = self.get_filtered_resources();
                     resources.get(self.selected_index).cloned()
                 } else if self.current_view == View::ResourceDetail {
@@ -773,6 +883,12 @@ impl App {
                 } else if self.current_view == View::ResourceTrace {
                     // Scroll up in trace view
                     self.trace_scroll_offset = self.trace_scroll_offset.saturating_sub(1);
+                } else if self.current_view == View::ResourceHistory {
+                    // Scroll up in history view
+                    self.history_scroll_offset = self.history_scroll_offset.saturating_sub(1);
+                } else if self.current_view == View::ResourceGraph {
+                    // Scroll up in graph view (line-based, like YAML)
+                    self.graph_scroll_offset = self.graph_scroll_offset.saturating_sub(1);
                 } else {
                     // Normal navigation
                     if self.selected_index > 0 {
@@ -790,6 +906,12 @@ impl App {
                 } else if self.current_view == View::ResourceTrace {
                     // Scroll down in trace view
                     self.trace_scroll_offset += 1;
+                } else if self.current_view == View::ResourceHistory {
+                    // Scroll down in history view
+                    self.history_scroll_offset += 1;
+                } else if self.current_view == View::ResourceGraph {
+                    // Scroll down in graph view (line-based, like YAML)
+                    self.graph_scroll_offset += 1;
                 } else {
                     // Normal navigation
                     let resources = self.get_filtered_resources();
@@ -806,7 +928,11 @@ impl App {
             }
             crossterm::event::KeyCode::Char('y') => {
                 // View YAML - trigger async fetch
-                if self.current_view == View::ResourceList {
+                if self.current_view == View::ResourceList
+                    || self.current_view == View::ResourceFavorites
+                {
+                    // Save current view as previous list view before navigating
+                    self.previous_list_view = self.current_view;
                     let resources = self.get_filtered_resources();
                     if let Some(resource) = resources.get(self.selected_index) {
                         let key = crate::watcher::resource_key(
@@ -821,7 +947,7 @@ impl App {
                         self.current_view = View::ResourceYAML;
                     }
                 } else if self.current_view == View::ResourceDetail {
-                    // Switch from detail to YAML view
+                    // From detail view, preserve the previous_list_view (don't overwrite it)
                     if let Some(ref key) = self.selected_resource_key {
                         self.yaml_fetch_pending = Some(key.clone());
                         self.yaml_fetched = None;
@@ -831,7 +957,11 @@ impl App {
                 }
             }
             crossterm::event::KeyCode::Enter => {
-                if self.current_view == View::ResourceList {
+                if self.current_view == View::ResourceList
+                    || self.current_view == View::ResourceFavorites
+                {
+                    // Save current view as previous list view before navigating
+                    self.previous_list_view = self.current_view;
                     // Get selected resource
                     let resources = self.get_filtered_resources();
                     if let Some(resource) = resources.get(self.selected_index) {
@@ -845,12 +975,164 @@ impl App {
                     }
                 }
             }
+            crossterm::event::KeyCode::Char('f') => {
+                // Toggle favorite - works from list view
+                if self.current_view == View::ResourceList
+                    || self.current_view == View::ResourceFavorites
+                {
+                    let resources = self.get_filtered_resources();
+                    if let Some(resource) = resources.get(self.selected_index) {
+                        let key = crate::watcher::resource_key(
+                            &resource.namespace,
+                            &resource.name,
+                            &resource.resource_type,
+                        );
+                        self.toggle_favorite(&key);
+                        self.set_status_message((
+                            if self.is_favorite(&key) {
+                                format!("Added {} to favorites", resource.name)
+                            } else {
+                                format!("Removed {} from favorites", resource.name)
+                            },
+                            false,
+                        ));
+                    }
+                }
+            }
+            crossterm::event::KeyCode::Char('h') => {
+                // View reconciliation history - works from list, favorites, and detail view
+                let resource_info = if self.current_view == View::ResourceList
+                    || self.current_view == View::ResourceFavorites
+                {
+                    let resources = self.get_filtered_resources();
+                    resources.get(self.selected_index).cloned()
+                } else if self.current_view == View::ResourceDetail {
+                    // Get resource from selected_resource_key
+                    if let Some(ref key) = self.selected_resource_key {
+                        self.state.get(key)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(resource) = resource_info {
+                    let key = crate::watcher::resource_key(
+                        &resource.namespace,
+                        &resource.name,
+                        &resource.resource_type,
+                    );
+
+                    // Check if resource object exists and has status.history
+                    let objects = self.resource_objects.read().unwrap();
+                    let has_history = objects
+                        .get(&key)
+                        .and_then(|obj| obj.get("status"))
+                        .and_then(|s| s.get("history"))
+                        .and_then(|h| h.as_array())
+                        .map(|arr| !arr.is_empty())
+                        .unwrap_or(false);
+
+                    drop(objects); // Release lock before switching view
+
+                    if has_history {
+                        // Save current view as previous list view before navigating
+                        self.previous_list_view = self.current_view;
+                        self.selected_resource_key = Some(key);
+                        self.current_view = View::ResourceHistory;
+                        self.history_scroll_offset = 0;
+                    } else {
+                        // Show error message immediately
+                        use crate::models::FluxResourceKind;
+                        let supported_types: Vec<String> =
+                            FluxResourceKind::history_supported_types()
+                                .iter()
+                                .map(|k| k.as_str().to_string())
+                                .collect();
+                        self.set_status_message((
+                            format!(
+                                "Resource '{}' does not have reconciliation history. History is only available for: {}",
+                                resource.name,
+                                supported_types.join(", ")
+                            ),
+                            true,
+                        ));
+                    }
+                } else {
+                    self.set_status_message(("No resource selected".to_string(), true));
+                }
+            }
+            crossterm::event::KeyCode::Char('g') => {
+                // View resource graph - works from list, favorites, and detail view
+                let resource_info = if self.current_view == View::ResourceList
+                    || self.current_view == View::ResourceFavorites
+                {
+                    let resources = self.get_filtered_resources();
+                    resources.get(self.selected_index).cloned()
+                } else if self.current_view == View::ResourceDetail {
+                    // Get resource from selected_resource_key
+                    if let Some(ref key) = self.selected_resource_key {
+                        self.state.get(key)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(resource) = resource_info {
+                    // Check if resource type supports graph view
+                    if !crate::trace::is_resource_type_with_graph(&resource.resource_type) {
+                        self.set_status_message((
+                            format!(
+                                "Graph view not supported for {} resources",
+                                resource.resource_type
+                            ),
+                            true,
+                        ));
+                        return None;
+                    }
+
+                    // Save current view as previous list view before navigating
+                    if self.current_view == View::ResourceList
+                        || self.current_view == View::ResourceFavorites
+                    {
+                        self.previous_list_view = self.current_view;
+                    }
+
+                    // Trigger graph building
+                    let key = crate::watcher::resource_key(
+                        &resource.namespace,
+                        &resource.name,
+                        &resource.resource_type,
+                    );
+
+                    self.selected_resource_key = Some(key.clone());
+                    self.graph_pending = Some(ResourceKey {
+                        resource_type: resource.resource_type.clone(),
+                        namespace: resource.namespace.clone(),
+                        name: resource.name.clone(),
+                    });
+                    self.graph_result = None; // Clear previous graph
+                    self.graph_scroll_offset = 0; // Reset scroll
+                    self.current_view = View::ResourceGraph;
+                } else {
+                    self.set_status_message(("No resource selected".to_string(), true));
+                }
+            }
             crossterm::event::KeyCode::Backspace => {
                 // Backspace goes back (same as Escape for detail view)
                 if self.current_view == View::ResourceDetail
                     || self.current_view == View::ResourceYAML
                     || self.current_view == View::ResourceTrace
+                    || self.current_view == View::ResourceHistory
+                    || self.current_view == View::ResourceGraph
                 {
+                    // Return to previous list view (favorites if we came from there, otherwise list)
+                    self.current_view = self.previous_list_view;
+                    self.selected_resource_key = None;
+                } else if self.current_view == View::ResourceFavorites {
                     self.current_view = View::ResourceList;
                     self.selected_resource_key = None;
                 }
@@ -1027,7 +1309,7 @@ impl App {
 
     /// Check and clear status message if timeout exceeded
     pub fn check_status_message_timeout(&mut self) {
-        const STATUS_MESSAGE_TIMEOUT_SECS: u64 = 4;
+        use crate::tui::constants::STATUS_MESSAGE_TIMEOUT_SECS;
         if let (Some(_), Some(time)) = (&self.status_message, &self.status_message_time) {
             if time.elapsed().as_secs() >= STATUS_MESSAGE_TIMEOUT_SECS {
                 self.status_message = None;
@@ -1039,6 +1321,40 @@ impl App {
     pub fn set_view_trace(&mut self) {
         self.current_view = View::ResourceTrace;
         self.trace_scroll_offset = 0;
+    }
+
+    /// Toggle favorite status for a resource
+    pub fn toggle_favorite(&mut self, resource_key: &str) {
+        if self.favorites.contains(resource_key) {
+            self.favorites.remove(resource_key);
+        } else {
+            self.favorites.insert(resource_key.to_string());
+        }
+        self.favorites_pending_save = true;
+    }
+
+    /// Check if a resource is favorited
+    pub fn is_favorite(&self, resource_key: &str) -> bool {
+        self.favorites.contains(resource_key)
+    }
+
+    /// Get all favorite resource keys
+    #[allow(dead_code)] // Public API method
+    pub fn favorites(&self) -> &HashSet<String> {
+        &self.favorites
+    }
+
+    /// Trigger async save of favorites to config file
+    pub fn trigger_favorites_save(&mut self) -> Option<crate::config::Config> {
+        if self.favorites_pending_save {
+            self.favorites_pending_save = false;
+            // Create updated config with favorites
+            let mut updated_config = self.config.clone();
+            updated_config.favorites = self.favorites.iter().cloned().collect();
+            Some(updated_config)
+        } else {
+            None
+        }
     }
 
     pub fn set_operation_result(&mut self, result: anyhow::Result<()>) {
@@ -1341,8 +1657,20 @@ impl App {
             return None;
         }
 
+        // Handle favorites command
+        if crate::tui::commands::is_favorites_command(&cmd_lower) {
+            self.current_view = View::ResourceFavorites;
+            self.selected_index = 0;
+            self.scroll_offset = 0;
+            return None;
+        }
+
         // Use registry for resource type command mapping
         if crate::tui::commands::is_all_command(&cmd_lower) {
+            // Clear favorites view if active
+            if self.current_view == View::ResourceFavorites {
+                self.current_view = View::ResourceList;
+            }
             if self.selected_resource_type.is_some() {
                 self.selected_resource_type = None;
                 self.invalidate_layout_cache(); // Resource type filter affects header display
@@ -1352,6 +1680,8 @@ impl App {
                 self.health_filter = HealthFilter::All;
                 self.set_status_message(("Showing all resources".to_string(), false));
             }
+            self.selected_index = 0;
+            self.scroll_offset = 0;
             return None;
         }
 
@@ -1375,6 +1705,14 @@ impl App {
         // Apply namespace filter if set (safety check - watcher should already filter, but ensure consistency)
         if let Some(ref namespace) = self.namespace {
             resources.retain(|r| r.namespace == *namespace);
+        }
+
+        // Apply favorites filter if in favorites view
+        if self.current_view == View::ResourceFavorites {
+            resources.retain(|r| {
+                let key = crate::watcher::resource_key(&r.namespace, &r.name, &r.resource_type);
+                self.favorites.contains(&key)
+            });
         }
 
         // Apply filter if set
@@ -1453,12 +1791,25 @@ impl App {
             }
         }
 
-        // Sort by namespace, then resource type, then name
+        // Sort: favorites first, then by namespace, resource type, and name
         resources.sort_by(|a, b| {
-            a.namespace
-                .cmp(&b.namespace)
-                .then_with(|| a.resource_type.cmp(&b.resource_type))
-                .then_with(|| a.name.cmp(&b.name))
+            let a_key = crate::watcher::resource_key(&a.namespace, &a.name, &a.resource_type);
+            let b_key = crate::watcher::resource_key(&b.namespace, &b.name, &b.resource_type);
+            let a_is_favorite = self.favorites.contains(&a_key);
+            let b_is_favorite = self.favorites.contains(&b_key);
+
+            // Favorites first
+            match (a_is_favorite, b_is_favorite) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    // Both favorites or both not favorites - sort normally
+                    a.namespace
+                        .cmp(&b.namespace)
+                        .then_with(|| a.resource_type.cmp(&b.resource_type))
+                        .then_with(|| a.name.cmp(&b.name))
+                }
+            }
         });
 
         resources
@@ -1543,7 +1894,8 @@ impl App {
                     elapsed.as_millis(),
                     self.show_splash
                 );
-                if elapsed >= std::time::Duration::from_millis(1500) {
+                use crate::tui::constants::SPLASH_DISPLAY_MS;
+                if elapsed >= std::time::Duration::from_millis(SPLASH_DISPLAY_MS) {
                     tracing::debug!(
                         "Splash screen auto-dismissing after {:?}ms",
                         elapsed.as_millis()
@@ -1639,58 +1991,108 @@ impl App {
 
             // Total content lines + 2 for borders
             let content_lines = base_content_lines + filter_line + resource_type_lines;
-            // Minimum height for ASCII art (5 lines) + 2 borders = 7
-            let min_header_height: u16 = 7;
-            self.cached_header_height = (content_lines + 2).max(min_header_height);
+            // Minimum height for ASCII art + borders
+            use crate::tui::constants::MIN_HEADER_HEIGHT;
+            self.cached_header_height = (content_lines + 2).max(MIN_HEADER_HEIGHT);
 
             // Calculate footer height using EXACT same logic as footer.rs
-            // footer.rs nav_segments match these entries exactly
-            let nav_segments: &[(&str, &str)] = &[
-                ("j/k ", "Navigate"),
-                (":", "Command"),
-                ("Enter", "Details"),
-                ("y", "YAML"),
-                ("t", "Trace"),
-                ("s", "Suspend"),
-                ("r", "Resume"),
-                ("R", "Reconcile"),
-                ("W", "Reconcile+Source"),
-                ("d", "Delete"),
-                ("/", "Filter"),
-                ("?", "Help"),
-                ("Esc", "Back/Quit"),
+            // Match the wrapping logic in footer.rs:render_navigation_footer
+            let mut nav_segments: Vec<(String, String)> = vec![
+                ("j/k ".to_string(), "Navigate".to_string()),
+                (":".to_string(), "Command".to_string()),
+                ("Enter".to_string(), "Details".to_string()),
+                ("y".to_string(), "YAML".to_string()),
+                ("t".to_string(), "Trace".to_string()),
+                ("g".to_string(), "Graph".to_string()),
+                ("f".to_string(), "Favorite".to_string()),
+                ("h".to_string(), "History".to_string()),
+                ("s".to_string(), "Suspend".to_string()),
+                ("r".to_string(), "Resume".to_string()),
+                ("R".to_string(), "Reconcile".to_string()),
+                ("W".to_string(), "Reconcile+Source".to_string()),
+                ("d".to_string(), "Delete".to_string()),
+                ("/".to_string(), "Filter(Name)".to_string()),
+                ("?".to_string(), "Help".to_string()),
+                ("Esc".to_string(), "Back/Quit".to_string()),
             ];
+
+            // Add namespace hotkeys (matching footer.rs)
+            use crate::tui::constants::{
+                MAX_FOOTER_NAMESPACE_HOTKEYS, MAX_FOOTER_NAMESPACE_LENGTH,
+            };
+            if !self.namespace_hotkeys.is_empty() {
+                for (idx, ns) in self
+                    .namespace_hotkeys
+                    .iter()
+                    .take(MAX_FOOTER_NAMESPACE_HOTKEYS)
+                    .enumerate()
+                {
+                    let display_ns = if ns == "all" {
+                        "all".to_string()
+                    } else if ns.len() > MAX_FOOTER_NAMESPACE_LENGTH {
+                        ns[..MAX_FOOTER_NAMESPACE_LENGTH].to_string()
+                    } else {
+                        ns.clone()
+                    };
+                    let label = if (ns == "all" && self.namespace.is_none())
+                        || self.namespace.as_ref() == Some(ns)
+                    {
+                        format!("NS:{}*", display_ns)
+                    } else {
+                        format!("NS:{}", display_ns)
+                    };
+                    nav_segments.push((idx.to_string(), label));
+                }
+            }
 
             let footer_available_width = terminal_width.saturating_sub(2); // Account for borders
 
-            // Calculate exact total length (matching footer.rs:190-198)
-            let mut total_length: usize = 0;
+            // Calculate segment lengths (matching footer.rs:223-233)
+            let mut segment_lengths: Vec<usize> = Vec::new();
             for (idx, (key, label)) in nav_segments.iter().enumerate() {
                 let separator_len = if idx > 0 { 3 } else { 0 }; // " | "
-                let segment_len = if *key == "j/k " {
+                let segment_len = if key == "j/k " {
                     key.len() + label.len()
                 } else {
                     key.len() + 1 + label.len() // key + space + label
                 };
-                total_length += separator_len + segment_len;
+                segment_lengths.push(separator_len + segment_len);
             }
 
-            // Calculate lines needed (matching footer.rs:201-205)
-            let footer_content_lines: u16 = if footer_available_width > 0 {
-                ((total_length as f32) / (footer_available_width as f32)).ceil() as u16
-            } else {
-                1
-            };
+            // Split segments into two lines (matching footer.rs:235-260)
+            let mut line1_length = 0;
+            let mut use_line2 = false;
 
-            self.cached_footer_height = footer_content_lines.max(1) + 2; // Content + borders
+            for (idx, _) in nav_segments.iter().enumerate() {
+                let segment_len = segment_lengths[idx];
+
+                // If adding this segment would exceed width and we're on line 1, start line 2
+                if line1_length + segment_len > footer_available_width as usize
+                    && !use_line2
+                    && line1_length > 0
+                {
+                    use_line2 = true;
+                    break; // We've determined we need 2 lines, no need to continue
+                }
+
+                if !use_line2 {
+                    line1_length += segment_len;
+                }
+            }
+
+            // Calculate number of lines needed (1 or 2)
+            let footer_content_lines: u16 = if use_line2 { 2 } else { 1 };
+
+            self.cached_footer_height = footer_content_lines + 2; // Content + borders
         }
 
         let header_height = self.cached_header_height;
         let footer_constraint = self.cached_footer_height;
 
         // Ensure we have minimum terminal size
+        use crate::tui::constants::MIN_TERMINAL_WIDTH;
         let min_height = header_height + footer_constraint + 3; // header + footer + min content
-        let min_width: u16 = 80;
+        let min_width = MIN_TERMINAL_WIDTH;
 
         if terminal_height < min_height || terminal_width < min_width {
             // Terminal too small - show error
@@ -1798,6 +2200,7 @@ impl App {
                         &self.resource_objects,
                         &self.theme,
                         self.config.ui.no_icons,
+                        &self.favorites,
                     );
                 }
                 View::ResourceDetail => {
@@ -1834,10 +2237,132 @@ impl App {
                         &self.theme,
                     );
                 }
+                View::ResourceFavorites => {
+                    // Get filtered resources (favorites only)
+                    let resources = self.get_filtered_resources();
+                    render_resource_list(
+                        f,
+                        area,
+                        &resources,
+                        self.selected_index,
+                        &mut self.scroll_offset,
+                        &self.selected_resource_type,
+                        &self.resource_objects,
+                        &self.theme,
+                        self.config.ui.no_icons,
+                        &self.favorites,
+                    );
+                }
+                View::ResourceGraph => {
+                    views::render_resource_graph(
+                        f,
+                        area,
+                        &self.selected_resource_key,
+                        &self.graph_result,
+                        &self.graph_pending,
+                        &mut self.graph_scroll_offset,
+                        &self.theme,
+                    );
+                }
+                View::ResourceHistory => {
+                    if let Some(ref key) = self.selected_resource_key {
+                        if let Some(resource) = self.state.get(key) {
+                            if render_reconciliation_history(
+                                f,
+                                area,
+                                &resource,
+                                &self.resource_objects,
+                                &mut self.history_scroll_offset,
+                                &self.theme,
+                            )
+                            .is_err()
+                            {
+                                // Error already rendered in the function
+                            }
+                        } else {
+                            let text = vec![
+                                ratatui::text::Line::from("Resource not found"),
+                                ratatui::text::Line::from(""),
+                                ratatui::text::Line::from("Press Esc to go back"),
+                            ];
+                            let paragraph = Paragraph::new(text)
+                                .style(Style::default().fg(self.theme.text_secondary));
+                            f.render_widget(paragraph, area);
+                        }
+                    } else {
+                        let text = vec![
+                            ratatui::text::Line::from("No resource selected"),
+                            ratatui::text::Line::from(""),
+                            ratatui::text::Line::from(
+                                "Select a resource and press 'h' to view history",
+                            ),
+                        ];
+                        let paragraph = Paragraph::new(text)
+                            .style(Style::default().fg(self.theme.text_secondary));
+                        f.render_widget(paragraph, area);
+                    }
+                }
                 View::Help => {
                     render_help(f, area, &self.theme, self.namespace_hotkeys());
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for App {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("state", &self.state)
+            .field("current_view", &self.current_view)
+            .field("selected_resource_type", &self.selected_resource_type)
+            .field("filter", &self.filter)
+            .field("filter_mode", &self.filter_mode)
+            .field("health_filter", &self.health_filter)
+            .field("selected_index", &self.selected_index)
+            .field("scroll_offset", &self.scroll_offset)
+            .field("yaml_scroll_offset", &self.yaml_scroll_offset)
+            .field("show_help", &self.show_help)
+            .field("context", &self.context)
+            .field("namespace", &self.namespace)
+            .field("command_mode", &self.command_mode)
+            .field("command_buffer", &self.command_buffer)
+            .field("selected_resource_key", &self.selected_resource_key)
+            .field("resource_objects", &"<Arc<RwLock<HashMap>>>")
+            .field("watcher", &"<Option<ResourceWatcher>>")
+            .field("kube_client", &"<Option<kube::Client>>")
+            .field("yaml_fetch_pending", &self.yaml_fetch_pending)
+            .field("yaml_fetched", &self.yaml_fetched.is_some())
+            .field("yaml_fetch_rx", &self.yaml_fetch_rx.is_some())
+            .field("trace_pending", &self.trace_pending)
+            .field("trace_result", &self.trace_result.is_some())
+            .field("trace_result_rx", &self.trace_result_rx.is_some())
+            .field("trace_scroll_offset", &self.trace_scroll_offset)
+            .field("show_splash", &self.show_splash)
+            .field("splash_start_time", &self.splash_start_time)
+            .field("operation_registry", &"<OperationRegistry>")
+            .field("pending_operation", &self.pending_operation)
+            .field("operation_result_rx", &self.operation_result_rx.is_some())
+            .field("last_operation_key", &self.last_operation_key)
+            .field("confirmation_pending", &self.confirmation_pending)
+            .field("status_message", &self.status_message)
+            .field("status_message_time", &self.status_message_time)
+            .field("theme", &self.theme)
+            .field("config", &self.config)
+            .field("namespace_hotkeys", &self.namespace_hotkeys)
+            .field("pending_context_switch", &self.pending_context_switch)
+            .field("cached_terminal_size", &self.cached_terminal_size)
+            .field("cached_header_height", &self.cached_header_height)
+            .field("cached_footer_height", &self.cached_footer_height)
+            .field("favorites", &self.favorites)
+            .field("favorites_pending_save", &self.favorites_pending_save)
+            .field("history_scroll_offset", &self.history_scroll_offset)
+            .field("graph_scroll_offset", &self.graph_scroll_offset)
+            .field("graph_pending", &self.graph_pending)
+            .field("graph_result", &self.graph_result.is_some())
+            .field("graph_result_rx", &self.graph_result_rx.is_some())
+            .field("previous_list_view", &self.previous_list_view)
+            .finish()
     }
 }

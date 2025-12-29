@@ -37,6 +37,23 @@ Use the `:readonly` command to toggle readonly mode.
 Readonly mode is enabled by default to prevent accidental modifications to your Flux resources. Only disable it if you need to perform operations.
 {{% /alert %}}
 
+### Favorites
+
+flux9s allows you to mark resources as favorites for quick access. Favorites are stored in your configuration file and persist across sessions.
+
+**During a session:**
+- Press `f` on a resource to toggle favorite status
+- Use `:favorites` or `:fav` command to view all favorites
+
+**Configuration file:**
+Favorites are automatically saved to your config file as a list of resource keys in the format `resource_type:namespace:name`:
+
+```yaml
+favorites:
+  - "Kustomization:flux-system:my-app"
+  - "HelmRelease:production:nginx"
+```
+
 ### UI Configuration
 
 #### Skin Configuration

@@ -87,6 +87,7 @@ pub fn render_confirmation(
             let block = Block::default()
                 .title("Confirm Operation")
                 .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.text_label))
                 .border_style(Style::default().fg(theme.operation_warning));
             let paragraph = Paragraph::new(lines)
                 .block(block)

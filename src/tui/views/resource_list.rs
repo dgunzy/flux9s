@@ -8,10 +8,10 @@ use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
     text::Span,
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Row, Table},
 };
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 /// Render the resource list table
@@ -25,20 +25,18 @@ pub fn render_resource_list(
     resource_objects: &Arc<RwLock<HashMap<String, serde_json::Value>>>,
     theme: &Theme,
     no_icons: bool,
+    favorites: &HashSet<String>,
 ) {
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling
 
     // Adjust scroll offset based on selected index with buffer
-    // When selected row is near bottom, scroll to keep buffer
-    if selected_index >= *scroll_offset + visible_height.saturating_sub(SCROLL_BUFFER) {
-        *scroll_offset =
-            selected_index.saturating_sub(visible_height.saturating_sub(SCROLL_BUFFER + 1));
-    }
-    // When selected row is above visible area, scroll to show it with buffer
-    if selected_index < *scroll_offset + SCROLL_BUFFER {
-        *scroll_offset = selected_index.saturating_sub(SCROLL_BUFFER);
-    }
+    crate::tui::views::helpers::update_scroll_offset(
+        selected_index,
+        visible_height,
+        scroll_offset,
+        SCROLL_BUFFER,
+    );
 
     // Ensure selected_index is valid
     let valid_selected = if !resources.is_empty() {
@@ -54,16 +52,14 @@ pub fn render_resource_list(
         .collect();
 
     if visible_resources.is_empty() {
-        let text = vec![
-            ratatui::text::Line::from("No resources found"),
-            ratatui::text::Line::from(""),
-            ratatui::text::Line::from("Waiting for resources to appear..."),
-        ];
-        let block = Block::default()
-            .title(format!("Resources ({})", resources.len()))
-            .borders(Borders::ALL);
-        let paragraph = Paragraph::new(text).block(block);
-        f.render_widget(paragraph, area);
+        crate::tui::views::helpers::render_empty_state(
+            f,
+            area,
+            &format!("Resources ({})", resources.len()),
+            "No resources found",
+            "Waiting for resources to appear...",
+            theme,
+        );
         return;
     }
 
@@ -117,10 +113,26 @@ pub fn render_resource_list(
                     get_status_indicator(r.ready, r.suspended, theme, no_icons);
 
                 let message = r.message.as_deref().unwrap_or("-");
-                let message_display = if message.len() > 40 {
-                    format!("{}...", &message[..37])
+                let message_display = crate::tui::views::helpers::truncate_message(message, 40);
+
+                // Check if resource is favorited
+                let resource_key =
+                    crate::watcher::resource_key(&r.namespace, &r.name, &r.resource_type);
+                let is_favorite = favorites.contains(&resource_key);
+                let name_display = if is_favorite {
+                    format!("★ {}", r.name)
                 } else {
-                    message.to_string()
+                    r.name.clone()
+                };
+                let name_cell = if is_favorite {
+                    Cell::from(Span::styled(
+                        name_display,
+                        Style::default()
+                            .fg(theme.text_primary)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                } else {
+                    Cell::from(name_display)
                 };
 
                 Row::new(vec![
@@ -129,7 +141,7 @@ pub fn render_resource_list(
                         Style::default().fg(status_color),
                     )),
                     Cell::from(r.namespace.clone()),
-                    Cell::from(r.name.clone()),
+                    name_cell,
                     Cell::from(r.resource_type.clone()),
                     Cell::from(suspended_str),
                     Cell::from(ready_str),
@@ -196,7 +208,29 @@ pub fn render_resource_list(
                             Style::default().fg(status_color),
                         )),
                         "NAMESPACE" => Cell::from(r.namespace.clone()),
-                        "NAME" => Cell::from(r.name.clone()),
+                        "NAME" => {
+                            let resource_key = crate::watcher::resource_key(
+                                &r.namespace,
+                                &r.name,
+                                &r.resource_type,
+                            );
+                            let is_favorite = favorites.contains(&resource_key);
+                            let name_display = if is_favorite {
+                                format!("★ {}", r.name)
+                            } else {
+                                r.name.clone()
+                            };
+                            if is_favorite {
+                                Cell::from(Span::styled(
+                                    name_display,
+                                    Style::default()
+                                        .fg(theme.text_primary)
+                                        .add_modifier(Modifier::BOLD),
+                                ))
+                            } else {
+                                Cell::from(name_display)
+                            }
+                        }
                         "TYPE" => Cell::from(r.resource_type.clone()),
                         "SUSPENDED" => Cell::from(
                             r.suspended
@@ -278,7 +312,7 @@ pub fn render_resource_list(
     f.render_widget(table, area);
 }
 
-fn get_status_indicator(
+pub fn get_status_indicator(
     ready: Option<bool>,
     suspended: Option<bool>,
     theme: &Theme,

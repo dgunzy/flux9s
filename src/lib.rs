@@ -11,7 +11,10 @@ pub mod tui;
 pub mod watcher;
 
 // Re-export trace types for testing
-pub use trace::{SourceRef, TraceNode, TraceResult, TraceSpec, TraceStatus, trace_object};
+pub use trace::{
+    GraphEdge, GraphNode, NodeType, RelationshipType, ResourceGraph, SourceRef, TraceNode,
+    TraceResult, TraceSpec, TraceStatus, trace_object,
+};
 
 // Re-export commonly used types for convenience
 pub use watcher::{

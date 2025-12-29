@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ pub fn render_resource_detail(
         Some(k) => k,
         None => {
             let text = vec![Line::from("No resource selected")];
-            let block = Block::default().title("Detail").borders(Borders::ALL);
+            let block = crate::tui::views::helpers::create_themed_block("Detail", theme);
             let paragraph = Paragraph::new(text).block(block);
             f.render_widget(paragraph, area);
             return;
@@ -37,7 +37,7 @@ pub fn render_resource_detail(
         Some(r) => r,
         None => {
             let text = vec![Line::from("Resource not found")];
-            let block = Block::default().title("Detail").borders(Borders::ALL);
+            let block = crate::tui::views::helpers::create_themed_block("Detail", theme);
             let paragraph = Paragraph::new(text).block(block);
             f.render_widget(paragraph, area);
             return;
@@ -182,9 +182,8 @@ pub fn render_resource_detail(
         }
     }
 
-    let block = Block::default()
-        .title(format!("Detail - {}", resource.name))
-        .borders(Borders::ALL);
+    let title = format!("Detail - {}", resource.name);
+    let block = crate::tui::views::helpers::create_themed_block(&title, theme);
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(ratatui::widgets::Wrap { trim: true });

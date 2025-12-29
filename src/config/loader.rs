@@ -129,6 +129,7 @@ impl ConfigLoader {
             namespace_hotkeys: other.namespace_hotkeys.clone(),
             context_skins: other.context_skins.clone(),
             cluster: other.cluster,
+            favorites: other.favorites.clone(),
         }
     }
 

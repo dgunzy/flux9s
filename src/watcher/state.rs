@@ -33,7 +33,7 @@ impl ResourceKey {
         }
     }
 
-    /// Parse a resource key string in the format "resource_type:namespace:name"
+    /// Parse a resource key string in the format defined by RESOURCE_KEY_FORMAT
     ///
     /// Returns None if the string doesn't have exactly 3 colon-separated parts.
     pub fn parse(key: &str) -> Option<Self> {
@@ -46,14 +46,16 @@ impl ResourceKey {
             })
         } else {
             tracing::warn!(
-                "Failed to parse resource key '{}': expected format 'resource_type:namespace:name'",
-                key
+                "Failed to parse resource key '{}': expected format '{}'",
+                key,
+                crate::tui::constants::RESOURCE_KEY_FORMAT
             );
             None
         }
     }
 
     /// Convert the ResourceKey back to its string representation (unused so far)
+    #[allow(dead_code)] // Used in tests
     pub fn to_key_string(&self) -> String {
         format!("{}:{}:{}", self.resource_type, self.namespace, self.name)
     }
@@ -67,6 +69,18 @@ impl fmt::Display for ResourceKey {
             self.namespace, self.name, self.resource_type
         )
     }
+}
+
+/// Reconciliation event tracking
+#[derive(Debug, Clone)]
+pub struct ReconciliationEvent {
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    #[allow(dead_code)] // Reserved for future use
+    pub revision: Option<String>,
+    #[allow(dead_code)] // Reserved for future use
+    pub status: String, // "Success", "Failed", "Unknown"
+    #[allow(dead_code)] // Reserved for future use
+    pub message: Option<String>,
 }
 
 /// Resource metadata for display
@@ -85,6 +99,9 @@ pub struct ResourceInfo {
     // Cached metadata for filtering
     pub labels: HashMap<String, String>,
     pub annotations: HashMap<String, String>,
+    // Reconciliation tracking
+    pub last_reconciled: Option<chrono::DateTime<chrono::Utc>>,
+    pub reconciliation_history: Vec<ReconciliationEvent>, // Limited to last N events
 }
 
 /// Extract labels from a Kubernetes resource JSON object
@@ -116,7 +133,7 @@ pub fn extract_annotations(obj: &serde_json::Value) -> HashMap<String, String> {
 }
 
 /// Thread-safe resource state store
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ResourceState {
     inner: Arc<RwLock<HashMap<String, ResourceInfo>>>,
 }
@@ -276,6 +293,8 @@ mod tests {
             revision: None,
             labels: HashMap::new(),
             annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: Vec::new(),
         };
 
         use crate::models::FluxResourceKind;
@@ -311,6 +330,8 @@ mod tests {
             revision: None,
             labels: HashMap::new(),
             annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: Vec::new(),
         };
         let key = resource_key(
             "default",
@@ -342,6 +363,8 @@ mod tests {
             revision: None,
             labels: HashMap::new(),
             annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: Vec::new(),
         };
 
         let gitrepo = ResourceInfo {
@@ -355,6 +378,8 @@ mod tests {
             revision: None,
             labels: HashMap::new(),
             annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: Vec::new(),
         };
 
         let kustomization2 = ResourceInfo {
@@ -368,6 +393,8 @@ mod tests {
             revision: None,
             labels: HashMap::new(),
             annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: Vec::new(),
         };
 
         state.upsert(
@@ -409,6 +436,8 @@ mod tests {
                 revision: None,
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
+                last_reconciled: None,
+                reconciliation_history: Vec::new(),
             },
         );
 
@@ -425,6 +454,8 @@ mod tests {
                 revision: None,
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
+                last_reconciled: None,
+                reconciliation_history: Vec::new(),
             },
         );
 
@@ -441,6 +472,8 @@ mod tests {
                 revision: None,
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
+                last_reconciled: None,
+                reconciliation_history: Vec::new(),
             },
         );
 
@@ -474,6 +507,8 @@ mod tests {
                 revision: None,
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
+                last_reconciled: None,
+                reconciliation_history: Vec::new(),
             },
         );
 
