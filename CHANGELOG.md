@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2025-12-29
+
+### Version 0.6.0
+
+#### Added
+- Added Flux WebUI features
+
 ## [0.5.11] - 2025-12-22
 
 ## Version 0.5.11
