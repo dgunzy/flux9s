@@ -1018,6 +1018,8 @@ impl App {
                 };
 
                 if let Some(resource) = resource_info {
+                    use crate::models::FluxResourceKind;
+
                     let key = crate::watcher::resource_key(
                         &resource.namespace,
                         &resource.name,
@@ -1026,13 +1028,17 @@ impl App {
 
                     // Check if resource object exists and has status.history
                     let objects = self.resource_objects.read().unwrap();
-                    let has_history = objects
-                        .get(&key)
+                    let obj = objects.get(&key);
+                    let has_history = obj
                         .and_then(|obj| obj.get("status"))
                         .and_then(|s| s.get("history"))
                         .and_then(|h| h.as_array())
                         .map(|arr| !arr.is_empty())
                         .unwrap_or(false);
+                    let is_kustomization = matches!(
+                        FluxResourceKind::parse_optional(&resource.resource_type),
+                        Some(FluxResourceKind::Kustomization)
+                    );
 
                     drop(objects); // Release lock before switching view
 
@@ -1044,20 +1050,24 @@ impl App {
                         self.history_scroll_offset = 0;
                     } else {
                         // Show error message immediately
-                        use crate::models::FluxResourceKind;
-                        let supported_types: Vec<String> =
-                            FluxResourceKind::history_supported_types()
-                                .iter()
-                                .map(|k| k.as_str().to_string())
-                                .collect();
-                        self.set_status_message((
+                        let error_msg = if is_kustomization {
+                            format!(
+                                "Reconciliation history is not supported for Kustomization '{}' in this version of Flux. History requires Flux v2.3.0 or later.",
+                                resource.name
+                            )
+                        } else {
+                            let supported_types: Vec<String> =
+                                FluxResourceKind::history_supported_types()
+                                    .iter()
+                                    .map(|k| k.as_str().to_string())
+                                    .collect();
                             format!(
                                 "Resource '{}' does not have reconciliation history. History is only available for: {}",
                                 resource.name,
                                 supported_types.join(", ")
-                            ),
-                            true,
-                        ));
+                            )
+                        };
+                        self.set_status_message((error_msg, true));
                     }
                 } else {
                     self.set_status_message(("No resource selected".to_string(), true));
