@@ -791,3 +791,71 @@ code:not(pre code) {
 * {
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
+
+// Font Awesome fallbacks - ensure icons degrade gracefully when fonts are blocked
+// Add fallback font stack to prevent invisible icons
+.fab, .fas, .far {
+  // Ensure icons have minimum width to prevent layout shift
+  min-width: 1em;
+  display: inline-block;
+  text-align: center;
+  position: relative;
+}
+
+// Text fallbacks for icons - shown when fonts fail to load (via JavaScript detection)
+.icon-fallback-text {
+  display: none;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.9em;
+  margin-left: 0.25em;
+  
+  // Show fallback text when fonts fail
+  .fonts-failed & {
+    display: inline;
+  }
+  
+  // Hide icon when showing fallback text
+  .fonts-failed + & {
+    display: inline;
+  }
+}
+
+// When fonts fail, hide icon and show text
+.fonts-failed {
+  .fab, .fas, .far {
+    // Make icon invisible but keep space
+    visibility: hidden;
+    width: 0;
+    min-width: 0;
+    margin: 0;
+  }
+  
+  .icon-fallback-text {
+    display: inline;
+  }
+}
+
+// Specific icon text fallbacks
+.fa-github + .icon-fallback-text::before {
+  content: '[GitHub]';
+}
+
+.fa-arrow-alt-circle-right + .icon-fallback-text::before {
+  content: '→';
+}
+
+.fa-box + .icon-fallback-text::before {
+  content: '[Box]';
+}
+
+.fa-beer + .icon-fallback-text::before {
+  content: '[Beer]';
+}
+
+.fa-moon + .icon-fallback-text::before {
+  content: '🌙';
+}
+
+.fa-sun + .icon-fallback-text::before {
+  content: '☀️';
+}

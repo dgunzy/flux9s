@@ -41,3 +41,7 @@ $link-hover-color: $purple-600;
 $border-radius: 0.5rem;
 $border-radius-sm: 0.25rem;
 $border-radius-lg: 0.75rem;
+
+// Font Awesome font path - ensure it points to the correct location
+// This should match where Hugo mounts the webfonts (static/webfonts)
+$fa-font-path: "../webfonts" !default;
