@@ -1,0 +1,18 @@
+<ul class="td-footer__links-list">
+  {{ range . }}
+  <li class="td-footer__links-item" data-bs-toggle="tooltip" title="{{ .name }}" aria-label="{{ .name }}">
+    <a target="_blank" rel="noopener" href="{{ .url }}" aria-label="{{ .name }}">
+      <i class="{{ .icon }}"></i>
+      {{/* Add fallback text for icons */}}
+      {{ if eq .icon "fab fa-github" }}
+        <span class="icon-fallback-text">[GitHub]</span>
+      {{ else if eq .icon "fas fa-box" }}
+        <span class="icon-fallback-text">[Box]</span>
+      {{ else if eq .icon "fas fa-beer" }}
+        <span class="icon-fallback-text">[Beer]</span>
+      {{ end }}
+    </a>
+  </li>
+  {{ end }}
+</ul>
+

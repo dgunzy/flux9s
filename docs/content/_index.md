@@ -25,10 +25,10 @@ notoc: true
     <!-- Action Buttons -->
     <div class="d-flex flex-wrap justify-content-center gap-3 mb-5">
       <a class="btn btn-lg btn-primary" href="{{< relref \"getting-started/\" >}}">
-        Get Started <i class="fas fa-arrow-alt-circle-right ms-2"></i>
+        Get Started <i class="fas fa-arrow-alt-circle-right ms-2" aria-label="Arrow"></i><span class="icon-fallback-text">→</span>
       </a>
       <a class="btn btn-lg btn-outline-primary" href="https://github.com/dgunzy/flux9s">
-        <i class="fab fa-github me-2"></i>View on GitHub
+        <i class="fab fa-github me-2" aria-label="GitHub"></i><span class="icon-fallback-text">[GitHub]</span><span>View on GitHub</span>
       </a>
     </div>
     
