@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-01-06
+
+### Version 0.6.2
+
+#### Added
+- Added backup fonts for documentation
+
+#### Changed
+- Refactored application structure, breaking up app struct (#91)
+
 ## [0.6.1] - 2025-12-30
 
 ### Version 0.6.1
