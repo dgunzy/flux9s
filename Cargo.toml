@@ -62,6 +62,7 @@ openssl = { version = "0.10", optional = true }
 # Logging (tracing is already a transitive dependency via kube-rs, but we need it explicitly for macros)
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
+insta = "1.46.0"
 
 [dev-dependencies]
 # Testing

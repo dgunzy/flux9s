@@ -4,20 +4,19 @@
 //! Built with ratatui for a K9s-inspired experience.
 
 mod api;
-mod app;
+pub mod app;
 mod commands;
 pub mod constants;
-mod operations;
+mod keybindings;
+pub mod operations;
 mod theme;
-mod trace;
+pub mod trace;
 pub mod views;
 
 pub use api::{get_api_resource_with_fallback, get_gvk_for_resource_type};
-
-pub use app::*;
+pub use app::App;
 pub use operations::*;
 pub use theme::*;
-// trace module functions are used internally, not exported
 
 use anyhow::Result;
 use crossterm::{
@@ -32,7 +31,7 @@ use std::io;
 use crate::watcher::ResourceKey;
 
 // Helper function to fetch resource YAML from API
-async fn fetch_resource_yaml(
+pub async fn fetch_resource_yaml(
     client: &kube::Client,
     resource_type: &str,
     namespace: &str,
