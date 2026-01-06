@@ -1,6 +1,7 @@
 //! Footer view rendering
 
 use crate::tui::app::PendingOperation;
+use crate::tui::keybindings::{get_navigation_commands, navigation_commands_to_segments};
 use crate::tui::operations::OperationRegistry;
 use crate::tui::theme::Theme;
 use crate::watcher::ResourceState;
@@ -158,33 +159,9 @@ fn render_navigation_footer(
 ) -> usize {
     // Default navigation hints - wrap for smaller screens
     // Returns the number of lines used
-    // Use owned strings for dynamic content
-    let mut nav_segments: Vec<(String, String, ratatui::style::Color)> = vec![
-        ("j/k ".to_string(), "Navigate".to_string(), theme.footer_key),
-        (":".to_string(), "Command".to_string(), theme.footer_key),
-        ("Enter".to_string(), "Details".to_string(), theme.footer_key),
-        (
-            "/".to_string(),
-            "Filter(Name)".to_string(),
-            theme.footer_key,
-        ),
-        ("s".to_string(), "Suspend".to_string(), theme.footer_key),
-        ("r".to_string(), "Resume".to_string(), theme.footer_key),
-        ("R".to_string(), "Reconcile".to_string(), theme.footer_key),
-        ("y".to_string(), "YAML".to_string(), theme.footer_key),
-        ("f".to_string(), "Favorite".to_string(), theme.footer_key),
-        ("g".to_string(), "Graph".to_string(), theme.footer_key),
-        ("h".to_string(), "History".to_string(), theme.footer_key),
-        ("t".to_string(), "Trace".to_string(), theme.footer_key),
-        (
-            "W".to_string(),
-            "Reconcile+Source".to_string(),
-            theme.footer_key,
-        ),
-        ("d".to_string(), "Delete".to_string(), theme.footer_key),
-        ("?".to_string(), "Help".to_string(), theme.footer_key),
-        ("Esc".to_string(), "Back/Quit".to_string(), theme.footer_key),
-    ];
+    // Use centralized keybindings
+    let commands = get_navigation_commands();
+    let mut nav_segments = navigation_commands_to_segments(&commands, theme.footer_key);
 
     // Add namespace hotkeys (show first few that fit)
     use crate::tui::constants::{MAX_FOOTER_NAMESPACE_HOTKEYS, MAX_FOOTER_NAMESPACE_LENGTH};

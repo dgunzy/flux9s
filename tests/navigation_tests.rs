@@ -3,7 +3,8 @@
 //! Ensures that navigation between views is consistent and users never get stuck.
 //! Tests that Esc always returns to the correct list view, regardless of navigation path.
 
-use flux9s::tui::{App, View};
+use flux9s::tui::App;
+use flux9s::tui::app::state::View;
 use flux9s::watcher::ResourceState;
 
 fn create_test_app() -> App {

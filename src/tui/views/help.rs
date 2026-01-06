@@ -1,5 +1,6 @@
 //! Help view rendering
 
+use crate::tui::keybindings::get_resource_help_commands;
 use crate::tui::theme::Theme;
 use ratatui::{
     Frame,
@@ -30,20 +31,8 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         ])
         .split(inner_area);
 
-    // RESOURCE column - ordered to match footer
-    let resource_items = vec![
-        ("<Enter>", "View resource details"),
-        ("<s>", "Suspend reconciliation"),
-        ("<r>", "Resume reconciliation"),
-        ("<R>", "Reconcile resource"),
-        ("<y>", "View YAML manifest"),
-        ("<f>", "Toggle favorite"),
-        ("<g>", "View resource graph"),
-        ("<h>", "View reconciliation history"),
-        ("<t>", "Trace ownership chain"),
-        ("<W>", "Reconcile with source"),
-        ("<d>", "Delete resource"),
-    ];
+    // RESOURCE column - use centralized keybindings
+    let resource_items = get_resource_help_commands();
     render_help_column(f, column_chunks[0], "RESOURCE", &resource_items, theme);
 
     // GENERAL column
