@@ -29,6 +29,10 @@ pub struct App {
     pub(crate) operation_registry: OperationRegistry,
     pub(crate) namespace_hotkeys: Vec<String>,
     pub(crate) pending_context_switch: Option<String>,
+
+    // Plugins
+    pub(crate) plugin_registry: Option<crate::plugins::PluginRegistry>,
+    pub(crate) plugin_cache: Option<Arc<crate::plugins::PluginCache>>,
 }
 
 impl App {
@@ -72,6 +76,10 @@ impl App {
             operation_registry: OperationRegistry::new(),
             namespace_hotkeys: Self::build_namespace_hotkeys(&config, Vec::new()),
             pending_context_switch: None,
+
+            // Plugins
+            plugin_registry: None,
+            plugin_cache: None,
         }
     }
 
@@ -208,6 +216,14 @@ impl App {
 
     pub fn namespace(&self) -> &Option<String> {
         &self.namespace
+    }
+
+    pub fn set_plugin_registry(&mut self, registry: crate::plugins::PluginRegistry) {
+        self.plugin_registry = Some(registry);
+    }
+
+    pub fn set_plugin_cache(&mut self, cache: Arc<crate::plugins::PluginCache>) {
+        self.plugin_cache = Some(cache);
     }
 
     /// Check if there's a pending context switch and return the context name

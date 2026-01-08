@@ -7,6 +7,7 @@ mod cli;
 mod config;
 mod kube;
 mod models;
+mod plugins;
 mod trace;
 mod tui;
 mod watcher;
@@ -40,6 +41,11 @@ enum Command {
         #[command(subcommand)]
         subcommand: cli::ConfigSubcommand,
     },
+    /// Plugin management
+    Plugin {
+        #[command(subcommand)]
+        subcommand: cli::PluginSubcommand,
+    },
     /// Display version information
     Version,
 }
@@ -57,6 +63,11 @@ async fn main() -> Result<()> {
     // Handle config subcommand
     if let Some(Command::Config { subcommand }) = args.command {
         return cli::handle_config_command(subcommand).await;
+    }
+
+    // Handle plugin subcommand
+    if let Some(Command::Plugin { subcommand }) = args.command {
+        return cli::handle_plugin_command(subcommand).await;
     }
 
     // Initialize logging if debug flag is set

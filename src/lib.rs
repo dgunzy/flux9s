@@ -6,6 +6,7 @@
 pub mod config;
 pub mod kube;
 pub mod models;
+pub mod plugins;
 pub mod services;
 pub mod trace;
 pub mod tui;
