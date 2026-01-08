@@ -104,11 +104,20 @@ Responsible for watching Flux resources via Kubernetes Watch API.
 
 Terminal user interface built with ratatui.
 
-- **`app.rs`** - Main application state and event loop
+- **`app/`** - Application state and logic (refactored from single file):
+  - `core.rs` - Main App struct and core logic
+  - `state.rs` - State structures (ViewState, SelectionState, UIState, AsyncOperationState)
+  - `events.rs` - Event handling and input processing
+  - `rendering.rs` - Rendering orchestration
+  - `async_ops.rs` - Async operation management
 - **`operations.rs`** - Flux operations (suspend, resume, delete, reconcile, reconcile with source)
 - **`theme.rs`** - Theme configuration and loading
 - **`trace.rs`** - Trace operation orchestration
 - **`api.rs`** - API resource fetching with version fallback
+- **`commands.rs`** - Command parsing and execution with submenu support
+- **`submenu.rs`** - Submenu system (SubmenuItem, SubmenuState, CommandSubmenu trait)
+- **`keybindings.rs`** - Keybinding management
+- **`constants.rs`** - Application constants
 - **`views/`** - View components:
   - `header.rs` - Top bar with namespace and status
   - `footer.rs` - Bottom bar with keybindings and command autocomplete
@@ -116,18 +125,24 @@ Terminal user interface built with ratatui.
   - `detail.rs` - Resource detail view
   - `yaml.rs` - YAML manifest viewer
   - `trace.rs` - Trace view showing resource ownership chains
+  - `graph.rs` - Graph visualization view
+  - `history.rs` - Reconciliation history view
   - `confirmation.rs` - Confirmation dialogs
   - `help.rs` - Help screen
   - `splash.rs` - Splash screen
+  - `submenu.rs` - Submenu rendering overlay
+  - `helpers.rs` - Helper functions
   - `resource_fields.rs` - Resource-specific field extraction
 
 **Key Design Decisions:**
 
 - Non-blocking async operations using `tokio::spawn`
+- Modular app structure with separated concerns (state, events, rendering, async)
 - Separate scroll offsets for different views
 - Dynamic footer wrapping for smaller screens
 - Extensible operation system via trait-based design
 - Command mode with autocomplete support
+- Interactive submenu overlays for command selection
 
 #### 3. Models Module (`src/models/`)
 
@@ -246,11 +261,21 @@ flux9s/
 │   │   ├── models.rs
 │   │   └── mod.rs
 │   ├── tui/                   # Terminal UI
-│   │   ├── app.rs             # Main app state
-│   │   ├── operations.rs       # Flux operations
+│   │   ├── app/               # Application state and logic (refactored)
+│   │   │   ├── mod.rs
+│   │   │   ├── core.rs        # App struct and core logic
+│   │   │   ├── state.rs       # State structures
+│   │   │   ├── events.rs      # Event handling
+│   │   │   ├── rendering.rs   # Render orchestration
+│   │   │   └── async_ops.rs   # Async operations
+│   │   ├── operations.rs      # Flux operations
 │   │   ├── theme.rs           # Theme configuration
 │   │   ├── trace.rs           # Trace UI integration
 │   │   ├── api.rs             # API resource fetching
+│   │   ├── commands.rs        # Command parsing with submenu support
+│   │   ├── submenu.rs         # Submenu system
+│   │   ├── keybindings.rs     # Keybinding management
+│   │   ├── constants.rs       # Application constants
 │   │   ├── mod.rs
 │   │   └── views/             # View components
 │   │       ├── mod.rs
@@ -260,9 +285,13 @@ flux9s/
 │   │       ├── detail.rs
 │   │       ├── yaml.rs
 │   │       ├── trace.rs
+│   │       ├── graph.rs
+│   │       ├── history.rs
 │   │       ├── confirmation.rs
 │   │       ├── help.rs
 │   │       ├── splash.rs
+│   │       ├── submenu.rs
+│   │       ├── helpers.rs
 │   │       └── resource_fields.rs
 │   ├── watcher/               # Resource watching
 │   │   ├── mod.rs             # Watcher orchestration
@@ -554,6 +583,45 @@ When adding support for a new Flux resource type:
         "YourNewResource",
     ];
     ```
+
+## Adding Submenu Commands
+
+The submenu system allows commands to present interactive selection menus when executed without arguments. This provides a more user-friendly way to select from available options.
+
+### System Architecture
+
+The submenu system consists of:
+- **`SubmenuItem`** - Represents a single selectable item with display text and value
+- **`SubmenuState`** - Manages submenu state (items, selection, scroll, title, help text)
+- **`CommandSubmenu` trait** - Interface for commands that provide submenus
+- **Submenu view** (`src/tui/views/submenu.rs`) - Renders the submenu overlay as a centered popup
+
+### Implementation Flow
+
+1. **Define a submenu provider** - Implement the `CommandSubmenu` trait for your command
+2. **Register the submenu** - Add to `get_command_submenu()` in `src/tui/commands.rs`
+3. **Handle selection** - When a user selects an item, the command is re-executed with the selected value as an argument
+
+### Submenu Navigation
+
+Users navigate submenus using:
+- `j` / `k` or `↓` / `↑` - Navigate through options
+- `Enter` - Select the highlighted option
+- `Esc` - Cancel and close submenu
+
+### Event Handling Priority
+
+The submenu system follows this priority in event handling (see `src/tui/app/events.rs`):
+1. Confirmation dialogs (highest priority)
+2. Submenu navigation
+3. Filter mode
+4. Normal command/key handling (lowest priority)
+
+This ensures submenus capture navigation keys when active without interfering with other modes.
+
+### Reference Implementation
+
+See `ContextSubmenu` in `src/tui/commands.rs` for a complete working example of the submenu system.
 
 ## Testing
 

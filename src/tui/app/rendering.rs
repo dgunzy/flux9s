@@ -305,6 +305,45 @@ impl App {
 
         if self.ui_state.show_help {
             render_help(f, area, &self.theme, self.namespace_hotkeys());
+        } else if let Some(ref submenu) = self.view_state.submenu_state {
+            // First render the current view in the background
+            match self.view_state.current_view {
+                View::ResourceList => {
+                    let resources = self.get_filtered_resources();
+                    render_resource_list(
+                        f,
+                        area,
+                        &resources,
+                        self.view_state.selected_index,
+                        &mut self.view_state.scroll_offset,
+                        &self.view_state.selected_resource_type,
+                        &self.resource_objects,
+                        &self.theme,
+                        self.config.ui.no_icons,
+                        &self.selection_state.favorites,
+                    );
+                }
+                View::ResourceFavorites => {
+                    let resources = self.get_filtered_resources();
+                    render_resource_list(
+                        f,
+                        area,
+                        &resources,
+                        self.view_state.selected_index,
+                        &mut self.view_state.scroll_offset,
+                        &self.view_state.selected_resource_type,
+                        &self.resource_objects,
+                        &self.theme,
+                        self.config.ui.no_icons,
+                        &self.selection_state.favorites,
+                    );
+                }
+                _ => {
+                    // For other views, just show empty background
+                }
+            }
+            // Then render submenu overlay on top
+            render_submenu(f, area, submenu, &self.theme);
         } else {
             match self.view_state.current_view {
                 View::ResourceList => {

@@ -3,6 +3,7 @@
 //! This module contains state sub-structures that organize the App's fields
 //! into logical groupings for better maintainability and testability.
 
+use crate::tui::submenu::SubmenuState;
 use crate::watcher::ResourceKey;
 use std::collections::HashSet;
 
@@ -58,6 +59,8 @@ pub struct ViewState {
     pub graph_scroll_offset: usize,
     /// Track previous list view for navigation (ResourceList or ResourceFavorites)
     pub previous_list_view: View,
+    /// Active submenu state (if a submenu is currently being displayed)
+    pub submenu_state: Option<SubmenuState>,
 }
 
 impl Default for ViewState {
@@ -75,6 +78,7 @@ impl Default for ViewState {
             history_scroll_offset: 0,
             graph_scroll_offset: 0,
             previous_list_view: View::ResourceList,
+            submenu_state: None,
         }
     }
 }

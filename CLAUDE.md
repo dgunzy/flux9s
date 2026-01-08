@@ -103,6 +103,9 @@ source of truth and prevents inconsistencies when Flux versions change.
 - Extract complex rendering logic into helper functions
 - Use theme colors consistently (never hardcode colors)
 - Handle small terminal sizes gracefully
+- Submenu overlays render as centered popups on top of the current view
+- State management for submenus lives in `ViewState.submenu_state`
+- Event handling priority: confirmation → submenu → filter → normal commands
 
 ## Testing Requirements
 
@@ -156,6 +159,22 @@ let text = Span::styled("Ready", style);
 // ❌ Bad - Hardcode colors
 let text = Span::styled("Ready", Style::default().fg(Color::Green));
 ```
+
+### Submenu Implementation
+
+Commands can provide interactive selection menus using the `CommandSubmenu` trait. The implementation involves:
+
+1. **Create a submenu provider** - Implement `CommandSubmenu` trait with `get_submenu()` method
+2. **Build submenu items** - Create `SubmenuItem` instances with display text and values
+3. **Create submenu state** - Build `SubmenuState` with items, title, and help text
+4. **Register in handler** - Add to `get_command_submenu()` function in `src/tui/commands.rs`
+
+**When to use submenus:**
+- Command has multiple valid options to choose from (contexts, namespaces, etc.)
+- Users may not know exact option names
+- Provides better UX than listing options in status message
+
+**Reference:** See `ContextSubmenu` in `src/tui/commands.rs` for implementation example
 
 ## CI/CD
 

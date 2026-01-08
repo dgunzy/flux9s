@@ -131,6 +131,8 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 
 ### Commands
 
+- `:ctx <name>` - Switch to a different Kubernetes context
+- `:ctx` - Open interactive context selection menu
 - `:ns <namespace>` - Switch namespace
 - `:ns all` - View all namespaces
 - `:favorites` or `:fav` - View favorite resources

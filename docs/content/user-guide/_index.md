@@ -35,12 +35,12 @@ Use these keyboard shortcuts to navigate flux9s:
 
 Type these commands in command mode (press `:`):
 
-| Command           | Description                              |
-| ----------------- | ---------------------------------------- |
-| `:ctx <name>`     | Switch to a different Kubernetes context |
-| `:ctx`            | List all available Kubernetes contexts   |
-| `:ns <namespace>` | Switch to a specific namespace           |
-| `:ns all`         | View all namespaces                      |
+| Command           | Description                                    |
+| ----------------- | ---------------------------------------------- |
+| `:ctx <name>`     | Switch to a different Kubernetes context       |
+| `:ctx`            | Open interactive context selection menu        |
+| `:ns <namespace>` | Switch to a specific namespace                 |
+| `:ns all`         | View all namespaces                            |
 | `:all`            | Show all resources                       |
 | `:healthy`        | Show only healthy resources              |
 | `:unhealthy`      | Show only unhealthy resources            |
@@ -50,6 +50,21 @@ Type these commands in command mode (press `:`):
 | `:readonly`       | Toggle readonly mode                     |
 | `:help`           | Show/hide help                           |
 | `:q` or `:q!`     | Quit application                         |
+
+## Interactive Submenus
+
+Some commands open interactive selection menus when used without arguments, providing an easier way to select from available options.
+
+### Context Submenu (`:ctx`)
+
+When you type `:ctx` and press Enter without specifying a context name, flux9s displays an interactive menu of available Kubernetes contexts. The current context is marked with "(current)".
+
+**Navigation:**
+- `j` / `k` or `↓` / `↑` - Navigate through options
+- `Enter` - Select the highlighted context
+- `Esc` - Cancel and close submenu
+
+The submenu appears as a centered overlay on top of the current view, making it easy to see and select your desired context without needing to remember exact names.
 
 ## Health Filtering
 
