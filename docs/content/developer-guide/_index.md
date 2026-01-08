@@ -40,11 +40,34 @@ flux9s/
 │   ├── models/       # Generated and custom models
 │   ├── trace/        # Resource tracing
 │   ├── tui/          # Terminal UI
+│   │   ├── app/      # Application state and logic (refactored)
+│   │   │   ├── core.rs       # App struct and core logic
+│   │   │   ├── state.rs      # State structures
+│   │   │   ├── events.rs     # Event handling
+│   │   │   ├── rendering.rs  # Render orchestration
+│   │   │   └── async_ops.rs  # Async operations
+│   │   ├── views/    # View components
+│   │   ├── submenu.rs        # Submenu system
+│   │   ├── keybindings.rs    # Keybinding management
+│   │   └── ...      # Other TUI modules
 │   └── watcher/      # Resource watching
 ├── crds/             # Flux CRD files
 ├── tests/            # Integration tests
 └── docs/             # Documentation
 ```
+
+### Recent Architecture Changes
+
+**App Module Refactoring:** The application logic has been refactored from a single `app.rs` file into a modular structure under `src/tui/app/`:
+- **`core.rs`** - Main App struct and core logic
+- **`state.rs`** - Organized state structures (ViewState, SelectionState, UIState, AsyncOperationState)
+- **`events.rs`** - Event handling and input processing
+- **`rendering.rs`** - Rendering orchestration
+- **`async_ops.rs`** - Async operation management
+
+This separation improves code organization, maintainability, and makes the codebase easier to navigate.
+
+**Submenu System:** An interactive submenu system has been added for commands like `:ctx`, providing a user-friendly way to select from available options. The system is built using the `CommandSubmenu` trait and can be extended to other commands. See the main `DEVELOPER_GUIDE.md` for implementation details.
 
 ## Development Setup
 

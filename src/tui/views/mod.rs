@@ -15,6 +15,7 @@ mod history;
 pub mod resource_fields;
 mod resource_list;
 mod splash;
+mod submenu;
 pub mod trace;
 mod yaml;
 
@@ -31,4 +32,5 @@ pub use history::*;
 pub use resource_fields::*;
 pub use resource_list::*;
 pub use splash::*;
+pub use submenu::*;
 pub use yaml::*;

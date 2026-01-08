@@ -3,6 +3,9 @@
 //! Centralizes command definitions, autocomplete, and execution logic
 //! to keep app.rs focused on application state management.
 
+use crate::tui::submenu::{CommandSubmenu, SubmenuItem, SubmenuState};
+use anyhow::Result;
+
 /// Command definition
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -212,5 +215,74 @@ pub fn extract_command_arg(cmd: &str, command_name: &str) -> Option<String> {
         if arg.is_empty() { None } else { Some(arg) }
     } else {
         None // Command doesn't match
+    }
+}
+
+/// Context submenu provider for the :ctx command
+pub struct ContextSubmenu {
+    /// Current context name
+    pub current_context: String,
+}
+
+impl ContextSubmenu {
+    /// Create a new context submenu provider
+    pub fn new(current_context: String) -> Self {
+        Self { current_context }
+    }
+}
+
+impl CommandSubmenu for ContextSubmenu {
+    fn get_submenu(&self) -> Result<Option<SubmenuState>> {
+        // Get available contexts from kubeconfig
+        let contexts = crate::kube::list_contexts()?;
+
+        if contexts.is_empty() {
+            return Ok(None);
+        }
+
+        // Create submenu items, marking current context
+        let items: Vec<SubmenuItem> = contexts
+            .into_iter()
+            .map(|ctx| {
+                let display = if ctx == self.current_context {
+                    format!("{} (current)", ctx)
+                } else {
+                    ctx.clone()
+                };
+                SubmenuItem::with_display(ctx, display)
+            })
+            .collect();
+
+        // Create submenu state with title and help text
+        let state = SubmenuState::new("ctx".to_string(), items)
+            .with_title("Select Context".to_string())
+            .with_help("j/k: Navigate | Enter: Select | Esc: Cancel".to_string());
+
+        Ok(Some(state))
+    }
+}
+
+/// Get submenu for a command if it supports submenus
+///
+/// Returns None if the command doesn't support submenus or if an argument was provided.
+pub fn get_command_submenu(cmd: &str, current_context: &str) -> Option<SubmenuState> {
+    // Only show submenu if command has no arguments
+    if is_context_command(cmd) {
+        let arg = extract_command_arg(cmd, "ctx").or_else(|| extract_command_arg(cmd, "context"));
+
+        // If argument provided, don't show submenu (preserve existing behavior)
+        if arg.is_some() {
+            return None;
+        }
+
+        // Create context submenu
+        let submenu_provider = ContextSubmenu::new(current_context.to_string());
+        match submenu_provider.get_submenu() {
+            Ok(Some(state)) => Some(state),
+            _ => None,
+        }
+    } else {
+        // Other commands don't support submenus yet
+        None
     }
 }
