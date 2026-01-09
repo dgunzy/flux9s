@@ -8,4 +8,4 @@ mod version;
 
 pub use config::{ConfigSubcommand, handle_config_command};
 pub use logging::*;
-pub use version::display_version;
+pub use version::{check_for_updates_blocking, display_version};
