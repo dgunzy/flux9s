@@ -9,6 +9,7 @@ mod commands;
 pub mod constants;
 mod keybindings;
 pub mod operations;
+mod submenu;
 mod theme;
 pub mod trace;
 pub mod views;

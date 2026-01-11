@@ -29,6 +29,11 @@ impl App {
             return self.handle_confirmation_key(key);
         }
 
+        // Handle submenu navigation if a submenu is active
+        if self.view_state.submenu_state.is_some() {
+            return self.handle_submenu_key(key);
+        }
+
         // Handle Esc to dismiss status messages
         if self.ui_state.status_message.is_some()
             && !self.ui_state.command_mode
@@ -610,6 +615,47 @@ impl App {
         }
     }
 
+    fn handle_submenu_key(&mut self, key: KeyEvent) -> Option<bool> {
+        if let Some(ref mut submenu) = self.view_state.submenu_state {
+            match key.code {
+                crossterm::event::KeyCode::Char('j') | crossterm::event::KeyCode::Down => {
+                    submenu.move_down();
+                    // Update scroll if needed (assuming we have enough visible space)
+                    let visible_height = 20; // Rough estimate for submenu height
+                    submenu.update_scroll(visible_height);
+                }
+                crossterm::event::KeyCode::Char('k') | crossterm::event::KeyCode::Up => {
+                    submenu.move_up();
+                    let visible_height = 20;
+                    submenu.update_scroll(visible_height);
+                }
+                crossterm::event::KeyCode::Enter => {
+                    // Select the current item and execute the command
+                    if let Some(value) = submenu.selected_value() {
+                        let command = submenu.command.clone();
+                        // Close submenu
+                        self.view_state.submenu_state = None;
+                        // Execute the command with the selected value
+                        // For context command, trigger context switch
+                        if command == "ctx" {
+                            self.pending_context_switch = Some(value.clone());
+                            self.set_status_message((
+                                format!("Switching to context '{}'...", value),
+                                false,
+                            ));
+                        }
+                    }
+                }
+                crossterm::event::KeyCode::Esc => {
+                    // Cancel submenu
+                    self.view_state.submenu_state = None;
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     fn handle_confirmation_key(&mut self, key: KeyEvent) -> Option<bool> {
         if let Some(ref pending) = self.async_state.confirmation_pending {
             match key.code {
@@ -864,22 +910,30 @@ impl App {
                     self.set_status_message((format!("Switching to context '{}'...", ctx), false));
                 }
                 None => {
-                    // List available contexts
-                    match crate::kube::list_contexts() {
-                        Ok(contexts) => {
-                            let current = self.context.clone();
-                            let msg = format!(
-                                "Available contexts: {}. Current: {}. Usage: :ctx <context-name>",
-                                contexts.join(", "),
-                                current
-                            );
-                            self.set_status_message((msg, false));
-                        }
-                        Err(e) => {
-                            self.set_status_message((
-                                format!("Failed to list contexts: {}", e),
-                                true,
-                            ));
+                    // Check if command supports submenu
+                    if let Some(submenu) =
+                        crate::tui::commands::get_command_submenu(cmd, &self.context)
+                    {
+                        // Open submenu for selection
+                        self.view_state.submenu_state = Some(submenu);
+                    } else {
+                        // Fallback: List available contexts in status message
+                        match crate::kube::list_contexts() {
+                            Ok(contexts) => {
+                                let current = self.context.clone();
+                                let msg = format!(
+                                    "Available contexts: {}. Current: {}. Usage: :ctx <context-name>",
+                                    contexts.join(", "),
+                                    current
+                                );
+                                self.set_status_message((msg, false));
+                            }
+                            Err(e) => {
+                                self.set_status_message((
+                                    format!("Failed to list contexts: {}", e),
+                                    true,
+                                ));
+                            }
                         }
                     }
                 }

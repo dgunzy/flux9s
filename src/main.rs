@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
 
     // Handle version command
     if let Some(Command::Version) = args.command {
-        cli::display_version();
+        cli::display_version(args.debug);
         return Ok(());
     }
 
@@ -153,6 +153,10 @@ async fn main() -> Result<()> {
     // Start TUI immediately with splash screen, then initialize Kubernetes in background
     // This ensures splash appears instantly, not after Kubernetes API calls
     tui::run_tui_with_async_init(config, theme, args.debug, args.kubeconfig.as_deref()).await?;
+
+    // Check for updates after TUI exits (blocking, shows notification)
+    // This ensures the notification doesn't interfere with TUI display
+    cli::check_for_updates_blocking(args.debug);
 
     Ok(())
 }
