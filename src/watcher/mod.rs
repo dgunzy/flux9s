@@ -13,6 +13,7 @@ pub use state::*;
 
 use anyhow::Result;
 use futures::StreamExt;
+use k8s_openapi::api::core::v1::Pod;
 use kube::core::{ApiResource, DynamicObject};
 use kube::runtime::watcher;
 use kube::{Api, Client, ResourceExt};
@@ -28,6 +29,10 @@ pub enum WatchEvent {
     Deleted(String, String, String), // resource_type, namespace, name
     /// Watch error occurred
     Error(String),
+    /// Controller pod was added or updated
+    PodApplied(String, serde_json::Value), // pod_name, pod_json
+    /// Controller pod was deleted
+    PodDeleted(String), // pod_name
 }
 
 /// Trait for watchable Flux resources
@@ -259,6 +264,69 @@ impl ResourceWatcher {
         Ok(())
     }
 
+    /// Watch Flux controller pods for status monitoring
+    pub fn watch_flux_pods(&mut self) -> Result<()> {
+        let client = self.client.clone();
+        let namespace = self
+            .current_namespace
+            .clone()
+            .unwrap_or_else(|| "flux-system".to_string());
+        let event_tx = self.event_tx.clone();
+
+        let handle = tokio::spawn(async move {
+            let api: Api<Pod> = Api::namespaced(client.clone(), &namespace);
+            // Watch all pods in flux-system to catch flux-operator and other controllers
+            // that may use different labels
+            let config = watcher::Config::default();
+
+            let mut w = Box::pin(watcher(api, config));
+            let mut error_count = 0u32;
+            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
+            tracing::debug!(
+                "Starting Flux controller pod watcher for namespace: {}",
+                namespace
+            );
+
+            while let Some(event) = w.next().await {
+                match event {
+                    Ok(watcher::Event::InitApply(pod)) | Ok(watcher::Event::Apply(pod)) => {
+                        error_count = 0;
+                        let name = pod.name_any();
+                        let pod_json = serde_json::to_value(&pod).unwrap_or_default();
+                        let _ = event_tx.send(WatchEvent::PodApplied(name, pod_json));
+                    }
+                    Ok(watcher::Event::Delete(pod)) => {
+                        error_count = 0;
+                        let name = pod.name_any();
+                        let _ = event_tx.send(WatchEvent::PodDeleted(name));
+                    }
+                    Ok(watcher::Event::Init) | Ok(watcher::Event::InitDone) => {
+                        error_count = 0;
+                        tracing::debug!("Flux controller pod watcher initialized");
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        if error_count == 1 || error_count.is_multiple_of(10) {
+                            tracing::warn!("Pod watcher error ({}): {}", error_count, e);
+                        }
+                        if error_count >= MAX_CONSECUTIVE_ERRORS {
+                            tracing::error!(
+                                "Pod watcher stopped after {} consecutive errors",
+                                error_count
+                            );
+                            break;
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        });
+
+        self.handles.push(handle);
+        Ok(())
+    }
+
     /// Watch OCIRepository with version-agnostic support (v1 and v1beta2)
     ///
     /// This uses DynamicObject to watch OCIRepository resources regardless of their API version.
@@ -461,6 +529,9 @@ impl ResourceWatcher {
         self.watch::<resource::ResourceSetInputProvider>()?;
         self.watch::<resource::FluxReport>()?;
         self.watch::<resource::FluxInstance>()?;
+
+        // Flux Controller Pods (for status monitoring)
+        self.watch_flux_pods()?;
 
         tracing::debug!("All watchers started ({} total)", self.handles.len());
         Ok(())

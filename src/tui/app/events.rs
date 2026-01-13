@@ -101,6 +101,10 @@ impl App {
                             let mut objects = self.resource_objects.write().unwrap();
                             objects.clear();
                         }
+                        {
+                            let mut controller_pods = self.controller_pods.write().unwrap();
+                            controller_pods.clear();
+                        }
                         if let Some(ref mut watcher) = self.watcher {
                             if let Err(e) = watcher.set_namespace(new_namespace) {
                                 self.set_status_message((

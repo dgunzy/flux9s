@@ -187,6 +187,7 @@ impl App {
                 f,
                 chunks[0],
                 &self.state,
+                &self.controller_pods,
                 &self.context,
                 &self.namespace,
                 &self.view_state.filter,

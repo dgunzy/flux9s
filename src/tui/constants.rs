@@ -15,8 +15,8 @@ pub const STATUS_MESSAGE_TIMEOUT_SECS: u64 = 4;
 /// Minimum terminal width required for the TUI
 pub const MIN_TERMINAL_WIDTH: u16 = 80;
 
-/// Default minimum header height (for ASCII art)
-pub const MIN_HEADER_HEIGHT: u16 = 7;
+/// Default minimum header height (accommodates ASCII art and 8 controller status lines)
+pub const MIN_HEADER_HEIGHT: u16 = 8;
 
 /// Default minimum footer height
 pub const MIN_FOOTER_HEIGHT: u16 = 3;
@@ -32,3 +32,15 @@ pub const MAX_FOOTER_NAMESPACE_LENGTH: usize = 8;
 
 /// Splash screen display duration in milliseconds
 pub const SPLASH_DISPLAY_MS: u64 = 1500;
+
+/// Known Flux controller pod name prefixes
+pub const FLUX_CONTROLLER_NAMES: &[&str] = &[
+    "flux-operator",
+    "source-controller",
+    "kustomize-controller",
+    "helm-controller",
+    "notification-controller",
+    "image-reflector-controller",
+    "image-automation-controller",
+    "source-watcher",
+];

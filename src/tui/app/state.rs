@@ -187,3 +187,47 @@ impl PendingOperation {
         }
     }
 }
+
+/// Information about a Flux controller pod
+#[derive(Clone, Debug)]
+pub struct ControllerPodInfo {
+    pub name: String,
+    pub ready: bool,
+    pub total_containers: u32,
+    pub ready_containers: u32,
+    pub restarts: u32,
+    pub version: Option<String>,
+    pub age: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// State for Flux controller pod monitoring
+#[derive(Debug, Default)]
+pub struct ControllerPodState {
+    pods: std::collections::HashMap<String, ControllerPodInfo>,
+    last_updated: Option<std::time::Instant>,
+}
+
+impl ControllerPodState {
+    /// Add or update a pod in the state
+    pub fn upsert_pod(&mut self, name: String, info: ControllerPodInfo) {
+        self.pods.insert(name, info);
+        self.last_updated = Some(std::time::Instant::now());
+    }
+
+    /// Remove a pod from the state
+    pub fn remove_pod(&mut self, name: &str) {
+        self.pods.remove(name);
+        self.last_updated = Some(std::time::Instant::now());
+    }
+
+    /// Get all pods
+    pub fn get_all_pods(&self) -> Vec<ControllerPodInfo> {
+        self.pods.values().cloned().collect()
+    }
+
+    /// Clear all pod state
+    pub fn clear(&mut self) {
+        self.pods.clear();
+        self.last_updated = None;
+    }
+}

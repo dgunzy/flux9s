@@ -5,6 +5,7 @@
 
 use flux9s::config::{Config, LoggerConfig, UiConfig};
 use flux9s::tui::Theme;
+use flux9s::tui::app::state::ControllerPodState;
 use flux9s::tui::views::{
     render_footer, render_header, render_resource_detail, render_resource_list,
     render_resource_yaml,
@@ -13,6 +14,7 @@ use flux9s::watcher::{ResourceInfo, ResourceState};
 use insta::assert_snapshot;
 use ratatui::{Terminal, backend::TestBackend};
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 /// Create a test theme
 fn create_test_theme() -> Theme {
@@ -113,6 +115,7 @@ fn test_render_header() {
     let config = create_test_config();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let controller_pods = Arc::new(RwLock::new(ControllerPodState::default()));
 
     terminal
         .draw(|frame| {
@@ -121,6 +124,7 @@ fn test_render_header() {
                 frame,
                 area,
                 &state,
+                &controller_pods,
                 "test-context",
                 &None,
                 "",
@@ -146,6 +150,7 @@ fn test_render_header_with_namespace() {
     let config = create_test_config();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let controller_pods = Arc::new(RwLock::new(ControllerPodState::default()));
 
     terminal
         .draw(|frame| {
@@ -154,6 +159,7 @@ fn test_render_header_with_namespace() {
                 frame,
                 area,
                 &state,
+                &controller_pods,
                 "test-context",
                 &Some("flux-system".to_string()),
                 "",
@@ -179,6 +185,7 @@ fn test_render_header_with_filter() {
     let config = create_test_config();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let controller_pods = Arc::new(RwLock::new(ControllerPodState::default()));
 
     terminal
         .draw(|frame| {
@@ -187,6 +194,7 @@ fn test_render_header_with_filter() {
                 frame,
                 area,
                 &state,
+                &controller_pods,
                 "test-context",
                 &None,
                 "kustomization",
