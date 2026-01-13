@@ -130,38 +130,10 @@ fn extract_controller_pod_info(
         .map(|s| s == "True")
         .unwrap_or(false);
 
-    let total_containers = containers.len() as u32;
-    let ready_containers = pod_json["status"]["containerStatuses"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter(|c| c["ready"].as_bool().unwrap_or(false))
-                .count() as u32
-        })
-        .unwrap_or(0);
-
-    let restarts = pod_json["status"]["containerStatuses"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|c| c["restartCount"].as_u64())
-                .sum::<u64>() as u32
-        })
-        .unwrap_or(0);
-
-    let age = pod_json["metadata"]["creationTimestamp"]
-        .as_str()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc));
-
     Some(crate::tui::app::state::ControllerPodInfo {
         name,
         ready,
-        total_containers,
-        ready_containers,
-        restarts,
         version,
-        age,
     })
 }
 
