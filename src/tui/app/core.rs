@@ -1,6 +1,8 @@
 //! Application state and main TUI logic
 
-use super::state::{AsyncOperationState, HealthFilter, SelectionState, UIState, View, ViewState};
+use super::state::{
+    AsyncOperationState, ControllerPodState, HealthFilter, SelectionState, UIState, View, ViewState,
+};
 use crate::tui::{OperationRegistry, Theme};
 use crate::watcher::ResourceState;
 use anyhow::Result;
@@ -29,6 +31,7 @@ pub struct App {
     pub(crate) operation_registry: OperationRegistry,
     pub(crate) namespace_hotkeys: Vec<String>,
     pub(crate) pending_context_switch: Option<String>,
+    pub(crate) controller_pods: Arc<RwLock<ControllerPodState>>,
 }
 
 impl App {
@@ -72,6 +75,7 @@ impl App {
             operation_registry: OperationRegistry::new(),
             namespace_hotkeys: Self::build_namespace_hotkeys(&config, Vec::new()),
             pending_context_switch: None,
+            controller_pods: Arc::new(RwLock::new(ControllerPodState::default())),
         }
     }
 
@@ -222,6 +226,10 @@ impl App {
         {
             let mut objects = self.resource_objects.write().unwrap();
             objects.clear();
+        }
+        {
+            let mut controller_pods = self.controller_pods.write().unwrap();
+            controller_pods.clear();
         }
         self.view_state.selected_index = 0;
         self.view_state.scroll_offset = 0;

@@ -88,6 +88,83 @@ pub async fn fetch_resource_yaml(
     }
 }
 
+/// Parse Flux controller pod status from Kubernetes API JSON
+fn extract_controller_pod_info(
+    pod_json: &serde_json::Value,
+) -> Option<crate::tui::app::state::ControllerPodInfo> {
+    let name = pod_json["metadata"]["name"].as_str()?.to_string();
+
+    let containers = pod_json["spec"]["containers"].as_array()?;
+    let version = containers.first().and_then(|c| {
+        c["image"].as_str().and_then(|img| {
+            // Handle different image formats:
+            // - With tag: "ghcr.io/fluxcd/source-controller:v1.4.5"
+            // - With digest: "ghcr.io/fluxcd/source-controller@sha256:abc123..."
+            // - Both: "ghcr.io/fluxcd/source-controller:v1.4.5@sha256:abc123..."
+
+            if let Some(at_pos) = img.find('@') {
+                // Image uses digest format - extract tag before @ if present
+                let before_digest = &img[..at_pos];
+                before_digest
+                    .rfind(':')
+                    .map(|colon_pos| before_digest[colon_pos + 1..].to_string())
+            } else if let Some(colon_pos) = img.rfind(':') {
+                // Tag-based image (no digest)
+                let tag = &img[colon_pos + 1..];
+                // Skip if it looks like a port number
+                if tag.chars().all(|c| c.is_ascii_digit()) {
+                    None
+                } else {
+                    Some(tag.to_string())
+                }
+            } else {
+                None
+            }
+        })
+    });
+
+    let ready = pod_json["status"]["conditions"]
+        .as_array()
+        .and_then(|arr| arr.iter().find(|c| c["type"] == "Ready"))
+        .and_then(|c| c["status"].as_str())
+        .map(|s| s == "True")
+        .unwrap_or(false);
+
+    let total_containers = containers.len() as u32;
+    let ready_containers = pod_json["status"]["containerStatuses"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter(|c| c["ready"].as_bool().unwrap_or(false))
+                .count() as u32
+        })
+        .unwrap_or(0);
+
+    let restarts = pod_json["status"]["containerStatuses"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c["restartCount"].as_u64())
+                .sum::<u64>() as u32
+        })
+        .unwrap_or(0);
+
+    let age = pod_json["metadata"]["creationTimestamp"]
+        .as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    Some(crate::tui::app::state::ControllerPodInfo {
+        name,
+        ready,
+        total_containers,
+        ready_containers,
+        restarts,
+        version,
+        age,
+    })
+}
+
 /// Run the TUI application with async Kubernetes initialization
 /// This shows the splash screen immediately, then initializes Kubernetes in the background
 pub async fn run_tui_with_async_init(
@@ -673,6 +750,14 @@ pub async fn run_tui_with_async_init(
                         // Log errors but don't spam - only show first few
                         // Errors are also shown in the TUI if needed
                         tracing::warn!("Watch event error: {}", msg);
+                    }
+                    crate::watcher::WatchEvent::PodApplied(name, pod_json) => {
+                        if let Some(info) = extract_controller_pod_info(&pod_json) {
+                            app.controller_pods.write().unwrap().upsert_pod(name, info);
+                        }
+                    }
+                    crate::watcher::WatchEvent::PodDeleted(name) => {
+                        app.controller_pods.write().unwrap().remove_pod(&name);
                     }
                 }
             }
