@@ -262,10 +262,64 @@ impl CommandSubmenu for ContextSubmenu {
     }
 }
 
+/// Theme submenu provider for the :skin command
+pub struct ThemeSubmenu {
+    /// Current theme name
+    pub current_theme: String,
+}
+
+impl ThemeSubmenu {
+    /// Create a new theme submenu provider
+    pub fn new(current_theme: String) -> Self {
+        Self { current_theme }
+    }
+}
+
+impl CommandSubmenu for ThemeSubmenu {
+    fn get_submenu(&self) -> Result<Option<SubmenuState>> {
+        // Get available themes (includes embedded + user-installed)
+        let themes = crate::config::theme_loader::ThemeLoader::list_themes();
+
+        if themes.is_empty() {
+            return Ok(None);
+        }
+
+        // Create submenu items, marking current theme
+        let items: Vec<SubmenuItem> = themes
+            .into_iter()
+            .map(|theme| {
+                let display = if theme == self.current_theme {
+                    format!("{} (current)", theme)
+                } else {
+                    theme.clone()
+                };
+                // Mark embedded themes
+                let display = if crate::config::embedded_themes::is_embedded_theme(&theme) {
+                    format!("{} [built-in]", display)
+                } else {
+                    display
+                };
+                SubmenuItem::with_display(theme, display)
+            })
+            .collect();
+
+        // Create submenu state with title and help text
+        let state = SubmenuState::new("skin".to_string(), items)
+            .with_title("Select Theme".to_string())
+            .with_help("j/k: Navigate | Enter: Apply | s: Save | Esc: Cancel".to_string());
+
+        Ok(Some(state))
+    }
+}
+
 /// Get submenu for a command if it supports submenus
 ///
 /// Returns None if the command doesn't support submenus or if an argument was provided.
-pub fn get_command_submenu(cmd: &str, current_context: &str) -> Option<SubmenuState> {
+pub fn get_command_submenu(
+    cmd: &str,
+    current_context: &str,
+    current_theme: &str,
+) -> Option<SubmenuState> {
     // Only show submenu if command has no arguments
     if is_context_command(cmd) {
         let arg = extract_command_arg(cmd, "ctx").or_else(|| extract_command_arg(cmd, "context"));
@@ -281,8 +335,131 @@ pub fn get_command_submenu(cmd: &str, current_context: &str) -> Option<SubmenuSt
             Ok(Some(state)) => Some(state),
             _ => None,
         }
+    } else if is_skin_command(cmd) {
+        let arg = extract_command_arg(cmd, "skin");
+
+        // If argument provided, don't show submenu (preserve existing behavior)
+        if arg.is_some() {
+            return None;
+        }
+
+        // Create theme submenu
+        let submenu_provider = ThemeSubmenu::new(current_theme.to_string());
+        match submenu_provider.get_submenu() {
+            Ok(Some(state)) => Some(state),
+            _ => None,
+        }
     } else {
         // Other commands don't support submenus yet
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_theme_submenu_creation() {
+        let submenu = ThemeSubmenu::new("default".to_string());
+        let result = submenu.get_submenu();
+        assert!(result.is_ok(), "Should create theme submenu successfully");
+
+        let submenu_state = result.unwrap();
+        assert!(submenu_state.is_some(), "Should have submenu state");
+
+        let state = submenu_state.unwrap();
+        assert_eq!(state.command, "skin");
+        assert_eq!(state.title, Some("Select Theme".to_string()));
+        assert!(!state.items.is_empty(), "Should have theme items");
+    }
+
+    #[test]
+    fn test_theme_submenu_marks_current() {
+        let current_theme = "default".to_string();
+        let submenu = ThemeSubmenu::new(current_theme.clone());
+        let result = submenu.get_submenu().unwrap();
+
+        assert!(result.is_some());
+        let state = result.unwrap();
+
+        // Find the current theme item
+        let current_item = state.items.iter().find(|item| item.value == current_theme);
+
+        assert!(current_item.is_some(), "Should find current theme in items");
+        let item = current_item.unwrap();
+        assert!(
+            item.display_text.contains("(current)"),
+            "Current theme should be marked"
+        );
+    }
+
+    #[test]
+    fn test_theme_submenu_marks_embedded() {
+        // Use an embedded theme as current
+        let current_theme = "dracula".to_string();
+        let submenu = ThemeSubmenu::new(current_theme.clone());
+        let result = submenu.get_submenu().unwrap();
+
+        assert!(result.is_some());
+        let state = result.unwrap();
+
+        // Find dracula theme item
+        if let Some(item) = state.items.iter().find(|item| item.value == "dracula") {
+            assert!(
+                item.display_text.contains("[built-in]"),
+                "Embedded theme should be marked as [built-in]"
+            );
+        }
+    }
+
+    #[test]
+    fn test_theme_submenu_includes_embedded_themes() {
+        let submenu = ThemeSubmenu::new("default".to_string());
+        let result = submenu.get_submenu().unwrap();
+
+        assert!(result.is_some());
+        let state = result.unwrap();
+
+        // Should include at least some embedded themes
+        let theme_names: Vec<&String> = state.items.iter().map(|item| &item.value).collect();
+        let dracula_str = "dracula".to_string();
+        let nord_str = "nord".to_string();
+        assert!(
+            theme_names.contains(&&dracula_str) || theme_names.contains(&&nord_str),
+            "Should include embedded themes"
+        );
+    }
+
+    #[test]
+    fn test_get_command_submenu_skin_no_arg() {
+        // Test that skin without args returns submenu
+        // Note: commands are processed without the ':' prefix
+        let result = get_command_submenu("skin", "context1", "default");
+        assert!(
+            result.is_some(),
+            "Should return submenu for skin without args"
+        );
+
+        let submenu = result.unwrap();
+        assert_eq!(submenu.command, "skin");
+    }
+
+    #[test]
+    fn test_get_command_submenu_skin_with_arg() {
+        // Test that skin with args doesn't return submenu
+        let result = get_command_submenu("skin dracula", "context1", "default");
+        assert!(
+            result.is_none(),
+            "Should not return submenu when arg provided"
+        );
+    }
+
+    #[test]
+    fn test_get_command_submenu_skin_variations() {
+        // Test various skin command formats (without ':' prefix as commands are processed)
+        assert!(get_command_submenu("skin", "context1", "default").is_some());
+        assert!(get_command_submenu("skin ", "context1", "default").is_some());
+        assert!(get_command_submenu("skin dracula", "context1", "default").is_none());
     }
 }
