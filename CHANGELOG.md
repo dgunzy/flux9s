@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-01-13
+
+### Version 0.7.0
+
+#### Added
+- Ability to open skin submenu from skin UI
+- Controller pod status information
+
+#### Changed
+- Enhanced controller functionality
+
 ## [0.6.4] - 2026-01-09
 
 ### Version 0.6.4
