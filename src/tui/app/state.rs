@@ -193,11 +193,7 @@ impl PendingOperation {
 pub struct ControllerPodInfo {
     pub name: String,
     pub ready: bool,
-    pub total_containers: u32,
-    pub ready_containers: u32,
-    pub restarts: u32,
     pub version: Option<String>,
-    pub age: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// State for Flux controller pod monitoring
