@@ -136,7 +136,8 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `:ns <namespace>` - Switch namespace
 - `:ns all` - View all namespaces
 - `:favorites` or `:fav` - View favorite resources
-- `:skin {skin-name}` - set skin (Must be in your systems flux9s/skins dir)
+- `:skin {skin-name}` - set skin directly
+- `:skin` - open interactive theme selection menu with live preview (17 built-in themes + custom)
 - `:q` or `:q!` - Quit
 - `:help` - Show help
 

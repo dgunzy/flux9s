@@ -61,6 +61,8 @@ pub struct ViewState {
     pub previous_list_view: View,
     /// Active submenu state (if a submenu is currently being displayed)
     pub submenu_state: Option<SubmenuState>,
+    /// Original theme name when previewing themes in submenu (for restoration on cancel)
+    pub preview_original_theme: Option<String>,
 }
 
 impl Default for ViewState {
@@ -79,6 +81,7 @@ impl Default for ViewState {
             graph_scroll_offset: 0,
             previous_list_view: View::ResourceList,
             submenu_state: None,
+            preview_original_theme: None,
         }
     }
 }

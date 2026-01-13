@@ -4,6 +4,7 @@
 //! supporting multiple configuration layers, theme management, and persistent settings.
 
 mod defaults;
+pub mod embedded_themes;
 pub mod loader;
 pub mod paths;
 pub mod schema;

@@ -627,18 +627,51 @@ impl App {
                     // Update scroll if needed (assuming we have enough visible space)
                     let visible_height = 20; // Rough estimate for submenu height
                     submenu.update_scroll(visible_height);
+                    // Preview theme if this is a skin submenu
+                    self.preview_theme_in_submenu();
                 }
                 crossterm::event::KeyCode::Char('k') | crossterm::event::KeyCode::Up => {
                     submenu.move_up();
                     let visible_height = 20;
                     submenu.update_scroll(visible_height);
+                    // Preview theme if this is a skin submenu
+                    self.preview_theme_in_submenu();
+                }
+                crossterm::event::KeyCode::Char('s') | crossterm::event::KeyCode::Char('S') => {
+                    // Save/persist current selection (for skin submenu)
+                    if submenu.command == "skin" {
+                        if let Some(value) = submenu.selected_value() {
+                            match self.persist_theme(&value) {
+                                Ok(_) => {
+                                    // Close submenu and clear preview
+                                    self.view_state.submenu_state = None;
+                                    self.view_state.preview_original_theme = None;
+                                    let readonly_msg = if self.config.read_only {
+                                        " (readonly mode)"
+                                    } else {
+                                        ""
+                                    };
+                                    let msg = format!(
+                                        "Theme '{}' saved to config{}",
+                                        value, readonly_msg
+                                    );
+                                    self.set_status_message((msg, false));
+                                }
+                                Err(e) => {
+                                    let msg = format!("Failed to save theme: {}", e);
+                                    self.set_status_message((msg, true));
+                                }
+                            }
+                        }
+                    }
                 }
                 crossterm::event::KeyCode::Enter => {
                     // Select the current item and execute the command
                     if let Some(value) = submenu.selected_value() {
                         let command = submenu.command.clone();
-                        // Close submenu
+                        // Close submenu and clear preview
                         self.view_state.submenu_state = None;
+                        self.view_state.preview_original_theme = None;
                         // Execute the command with the selected value
                         // For context command, trigger context switch
                         if command == "ctx" {
@@ -647,17 +680,48 @@ impl App {
                                 format!("Switching to context '{}'...", value),
                                 false,
                             ));
+                        } else if command == "skin" {
+                            // Change theme (already previewed, so just confirm)
+                            match self.set_theme(&value) {
+                                Ok(_) => {
+                                    let msg = format!("Theme changed to: {}", value);
+                                    self.set_status_message((msg, false));
+                                }
+                                Err(e) => {
+                                    let msg = format!("Failed to load theme '{}': {}", value, e);
+                                    self.set_status_message((msg, true));
+                                }
+                            }
                         }
                     }
                 }
                 crossterm::event::KeyCode::Esc => {
-                    // Cancel submenu
+                    // Cancel submenu - restore original theme if previewing
+                    if submenu.command == "skin" {
+                        if let Some(original_theme) = self.view_state.preview_original_theme.clone()
+                        {
+                            let _ = self.set_theme(&original_theme);
+                        }
+                    }
                     self.view_state.submenu_state = None;
+                    self.view_state.preview_original_theme = None;
                 }
                 _ => {}
             }
         }
         None
+    }
+
+    /// Preview theme when navigating skin submenu
+    fn preview_theme_in_submenu(&mut self) {
+        if let Some(ref submenu) = self.view_state.submenu_state {
+            if submenu.command == "skin" {
+                if let Some(theme_name) = submenu.selected_value() {
+                    // Preview the theme (don't show errors, just silently fail)
+                    let _ = self.preview_theme(&theme_name);
+                }
+            }
+        }
     }
 
     fn handle_confirmation_key(&mut self, key: KeyEvent) -> Option<bool> {
@@ -823,22 +887,62 @@ impl App {
         // Handle skin/theme change command
         if crate::tui::commands::is_skin_command(&cmd_lower) {
             let theme_name = crate::tui::commands::extract_command_arg(cmd, "skin");
-            if let Some(name) = theme_name {
-                match self.set_theme(&name) {
-                    Ok(_) => {
-                        let msg = format!("Theme changed to: {}", name);
-                        self.set_status_message((msg, false));
-                    }
-                    Err(e) => {
-                        let msg = format!(
-                            "Failed to load theme '{}': {}. Use `default` to return to default theme",
-                            name, e
-                        );
-                        self.set_status_message((msg, true));
+            match theme_name {
+                Some(name) => {
+                    // Argument provided - change theme directly
+                    match self.set_theme(&name) {
+                        Ok(_) => {
+                            let msg = format!("Theme changed to: {}", name);
+                            self.set_status_message((msg, false));
+                        }
+                        Err(e) => {
+                            let msg = format!(
+                                "Failed to load theme '{}': {}. Use `default` to return to default theme",
+                                name, e
+                            );
+                            self.set_status_message((msg, true));
+                        }
                     }
                 }
-            } else {
-                self.set_status_message(("Usage: :skin <theme-name>".to_string(), true));
+                None => {
+                    // No argument - show submenu or list themes
+                    let current_theme = if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
+                        env_skin
+                    } else if let Some(context_skin) = self.config.context_skins.get(&self.context)
+                    {
+                        context_skin.clone()
+                    } else if self.config.read_only && self.config.ui.skin_read_only.is_some() {
+                        self.config.ui.skin_read_only.as_ref().unwrap().clone()
+                    } else {
+                        self.config.ui.skin.clone()
+                    };
+
+                    if let Some(submenu) = crate::tui::commands::get_command_submenu(
+                        cmd,
+                        &self.context,
+                        &current_theme,
+                    ) {
+                        // Store original theme for skin submenu preview
+                        if submenu.command == "skin" {
+                            self.view_state.preview_original_theme = Some(current_theme.clone());
+                            // Preview the first theme immediately
+                            if let Some(first_theme) = submenu.selected_value() {
+                                let _ = self.preview_theme(&first_theme);
+                            }
+                        }
+                        // Open submenu for selection
+                        self.view_state.submenu_state = Some(submenu);
+                    } else {
+                        // Fallback: List available themes
+                        let themes = crate::config::theme_loader::ThemeLoader::list_themes();
+                        let msg = format!(
+                            "Available themes: {}. Current: {}. Usage: :skin <theme-name>",
+                            themes.join(", "),
+                            current_theme
+                        );
+                        self.set_status_message((msg, false));
+                    }
+                }
             }
             return None;
         }
@@ -914,10 +1018,32 @@ impl App {
                     self.set_status_message((format!("Switching to context '{}'...", ctx), false));
                 }
                 None => {
-                    // Check if command supports submenu
-                    if let Some(submenu) =
-                        crate::tui::commands::get_command_submenu(cmd, &self.context)
+                    // Get current theme name (considering readonly mode and env vars)
+                    let current_theme = if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
+                        env_skin
+                    } else if let Some(context_skin) = self.config.context_skins.get(&self.context)
                     {
+                        context_skin.clone()
+                    } else if self.config.read_only && self.config.ui.skin_read_only.is_some() {
+                        self.config.ui.skin_read_only.as_ref().unwrap().clone()
+                    } else {
+                        self.config.ui.skin.clone()
+                    };
+
+                    // Check if command supports submenu
+                    if let Some(submenu) = crate::tui::commands::get_command_submenu(
+                        cmd,
+                        &self.context,
+                        &current_theme,
+                    ) {
+                        // Store original theme for skin submenu preview
+                        if submenu.command == "skin" {
+                            self.view_state.preview_original_theme = Some(current_theme.clone());
+                            // Preview the first theme immediately
+                            if let Some(first_theme) = submenu.selected_value() {
+                                let _ = self.preview_theme(&first_theme);
+                            }
+                        }
                         // Open submenu for selection
                         self.view_state.submenu_state = Some(submenu);
                     } else {

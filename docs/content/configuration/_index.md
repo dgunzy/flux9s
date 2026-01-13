@@ -60,19 +60,43 @@ favorites:
 
 flux9s supports custom skins to personalize the interface. Skins follow a similar format to K9s but may require adjustments.
 
-**Set a skin for readonly mode:**
+**Built-in Themes:**
+
+flux9s includes 17 popular themes embedded in the binary, including:
+- Dark themes: dracula, nord, solarized-dark, monokai, gruvbox-dark, catppuccin-mocha, rose-pine-moon, one-dark, tokyo-night, and more
+- Light themes: default-light, kiss
+
+These themes are available immediately without installation. Use the `:skin` command in the TUI to see all available themes.
+
+**Set a skin via command line:**
 
 ```bash
+# Set default skin
+flux9s config set ui.skin dracula
+
+# Set skin for readonly mode
 flux9s config set ui.skinReadOnly rose-pine
 ```
 
-**Import and set a skin:**
+**Import and set a custom skin:**
 
 ```bash
 flux9s config skins set navy.yaml
 ```
 
-Skins must be placed in your system's `flux9s/skins` directory:
+**Interactive Theme Selection:**
+
+In the TUI, type `:skin` (without arguments) to open an interactive theme selection menu:
+
+![Theme Submenu](/images/skin-submenu.png)
+
+- Navigate with `j`/`k` to browse themes
+- See live preview as you navigate
+- Press `Enter` to apply temporarily
+- Press `s` to save to config file
+- Press `Esc` to cancel
+
+Custom skins must be placed in your system's `flux9s/skins` directory:
 
 - **Linux/macOS**: `~/.config/flux9s/skins/`
 - **Windows**: `%APPDATA%\flux9s\skins\`
