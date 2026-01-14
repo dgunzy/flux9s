@@ -14,7 +14,6 @@ use flux9s::watcher::{ResourceInfo, ResourceState};
 use insta::assert_snapshot;
 use ratatui::{Terminal, backend::TestBackend};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
 
 /// Create a test theme
 fn create_test_theme() -> Theme {
@@ -115,7 +114,7 @@ fn test_render_header() {
     let config = create_test_config();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    let controller_pods = Arc::new(RwLock::new(ControllerPodState::default()));
+    let controller_pods = ControllerPodState::default();
 
     terminal
         .draw(|frame| {
@@ -150,7 +149,7 @@ fn test_render_header_with_namespace() {
     let config = create_test_config();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    let controller_pods = Arc::new(RwLock::new(ControllerPodState::default()));
+    let controller_pods = ControllerPodState::default();
 
     terminal
         .draw(|frame| {
@@ -185,7 +184,7 @@ fn test_render_header_with_filter() {
     let config = create_test_config();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    let controller_pods = Arc::new(RwLock::new(ControllerPodState::default()));
+    let controller_pods = ControllerPodState::default();
 
     terminal
         .draw(|frame| {
@@ -334,7 +333,7 @@ fn test_render_resource_list() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
                 area,
@@ -374,7 +373,7 @@ fn test_render_resource_list_with_selection() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
                 area,
@@ -411,7 +410,7 @@ fn test_render_resource_list_with_resource_type_filter() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
                 area,
@@ -441,7 +440,7 @@ fn test_render_resource_list_empty() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
                 area,
@@ -470,7 +469,7 @@ fn test_render_resource_detail() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_detail(
                 frame,
                 area,
@@ -495,7 +494,7 @@ fn test_render_resource_detail_no_selection() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_detail(frame, area, &None, &state, &resource_objects, &theme);
         })
         .unwrap();
@@ -514,7 +513,7 @@ fn test_render_resource_yaml_no_selection() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_yaml(
                 frame,
                 area,
@@ -543,7 +542,7 @@ fn test_render_resource_yaml_pending() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_yaml(
                 frame,
                 area,
@@ -598,7 +597,7 @@ fn test_render_resource_yaml_with_data() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_yaml(
                 frame,
                 area,

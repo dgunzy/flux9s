@@ -13,6 +13,7 @@ pub use state::*;
 
 use anyhow::Result;
 use futures::StreamExt;
+use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::Pod;
 use kube::core::{ApiResource, DynamicObject};
 use kube::runtime::watcher;
@@ -33,6 +34,8 @@ pub enum WatchEvent {
     PodApplied(String, serde_json::Value), // pod_name, pod_json
     /// Controller pod was deleted
     PodDeleted(String), // pod_name
+    /// Flux controller deployment was added or updated (for bundle version tracking)
+    DeploymentApplied(serde_json::Value), // deployment_json
 }
 
 /// Trait for watchable Flux resources
@@ -327,6 +330,74 @@ impl ResourceWatcher {
         Ok(())
     }
 
+    /// Watch Flux controller deployments for bundle version tracking
+    pub fn watch_flux_deployments(&mut self) -> Result<()> {
+        let client = self.client.clone();
+        let namespace = self
+            .current_namespace
+            .clone()
+            .unwrap_or_else(|| "flux-system".to_string());
+        let event_tx = self.event_tx.clone();
+
+        let handle = tokio::spawn(async move {
+            let api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
+            let config = watcher::Config::default();
+
+            let mut w = Box::pin(watcher(api, config));
+            let mut error_count = 0u32;
+            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
+            tracing::debug!(
+                "Starting Flux controller deployment watcher for namespace: {}",
+                namespace
+            );
+
+            while let Some(event) = w.next().await {
+                match event {
+                    Ok(watcher::Event::InitApply(deployment))
+                    | Ok(watcher::Event::Apply(deployment)) => {
+                        error_count = 0;
+                        // Only track Flux deployments (with app.kubernetes.io/part-of: flux label)
+                        if let Some(labels) = &deployment.metadata.labels {
+                            if labels.get("app.kubernetes.io/part-of") == Some(&"flux".to_string())
+                            {
+                                let deployment_json =
+                                    serde_json::to_value(&deployment).unwrap_or_default();
+                                let _ =
+                                    event_tx.send(WatchEvent::DeploymentApplied(deployment_json));
+                            }
+                        }
+                    }
+                    Ok(watcher::Event::Delete(_)) => {
+                        error_count = 0;
+                        // We don't need to track deletion - version will just become unavailable
+                    }
+                    Ok(watcher::Event::Init) | Ok(watcher::Event::InitDone) => {
+                        error_count = 0;
+                        tracing::debug!("Flux controller deployment watcher initialized");
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        if error_count == 1 || error_count.is_multiple_of(10) {
+                            tracing::warn!("Deployment watcher error ({}): {}", error_count, e);
+                        }
+                        if error_count >= MAX_CONSECUTIVE_ERRORS {
+                            tracing::error!(
+                                "Deployment watcher stopped after {} consecutive errors",
+                                error_count
+                            );
+                            break;
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        });
+
+        self.handles.push(handle);
+        Ok(())
+    }
+
     /// Watch OCIRepository with version-agnostic support (v1 and v1beta2)
     ///
     /// This uses DynamicObject to watch OCIRepository resources regardless of their API version.
@@ -532,6 +603,9 @@ impl ResourceWatcher {
 
         // Flux Controller Pods (for status monitoring)
         self.watch_flux_pods()?;
+
+        // Flux Controller Deployments (for bundle version tracking)
+        self.watch_flux_deployments()?;
 
         tracing::debug!("All watchers started ({} total)", self.handles.len());
         Ok(())

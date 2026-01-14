@@ -11,8 +11,6 @@ use ratatui::{
 };
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::RwLock;
 
 /// Clean a JSON object by removing Kubernetes internal fields
 fn clean_resource_json(obj: &Value) -> Value {
@@ -42,7 +40,7 @@ pub fn render_resource_yaml(
     area: Rect,
     selected_resource_key: &Option<String>,
     state: &ResourceState,
-    resource_objects: &Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    resource_objects: &HashMap<String, serde_json::Value>,
     yaml_fetched: &Option<serde_json::Value>,
     yaml_fetch_pending: &Option<String>,
     yaml_scroll_offset: &mut usize,
@@ -78,8 +76,7 @@ pub fn render_resource_yaml(
         return;
     } else {
         // Fall back to stored object
-        let objects = resource_objects.read().unwrap();
-        match objects.get(key).cloned() {
+        match resource_objects.get(key).cloned() {
             Some(obj) => obj,
             None => {
                 crate::tui::views::helpers::render_empty_state(

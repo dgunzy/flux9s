@@ -204,6 +204,8 @@ pub struct ControllerPodInfo {
 pub struct ControllerPodState {
     pods: std::collections::HashMap<String, ControllerPodInfo>,
     last_updated: Option<std::time::Instant>,
+    /// Flux bundle version from deployment label (e.g., "v2.7.5")
+    flux_bundle_version: Option<String>,
 }
 
 impl ControllerPodState {
@@ -228,5 +230,18 @@ impl ControllerPodState {
     pub fn clear(&mut self) {
         self.pods.clear();
         self.last_updated = None;
+        self.flux_bundle_version = None;
+    }
+
+    /// Set the Flux bundle version from deployment label
+    pub fn set_flux_bundle_version(&mut self, version: Option<String>) {
+        self.flux_bundle_version = version;
+        self.last_updated = Some(std::time::Instant::now());
+    }
+
+    /// Get the Flux bundle version (e.g., "v2.7.5") from deployment labels
+    /// This represents the overall Flux release version, not individual controller versions
+    pub fn get_flux_version(&self) -> Option<&str> {
+        self.flux_bundle_version.as_deref()
     }
 }

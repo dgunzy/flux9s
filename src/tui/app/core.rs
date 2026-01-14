@@ -7,7 +7,6 @@ use crate::tui::{OperationRegistry, Theme};
 use crate::watcher::ResourceState;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
 
 /// Main application state
 pub struct App {
@@ -25,13 +24,13 @@ pub struct App {
     pub(crate) async_state: AsyncOperationState,
 
     // Services & infrastructure
-    pub(crate) resource_objects: Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    pub(crate) resource_objects: HashMap<String, serde_json::Value>,
     pub(crate) watcher: Option<crate::watcher::ResourceWatcher>,
     pub(crate) kube_client: Option<kube::Client>,
     pub(crate) operation_registry: OperationRegistry,
     pub(crate) namespace_hotkeys: Vec<String>,
     pub(crate) pending_context_switch: Option<String>,
-    pub(crate) controller_pods: Arc<RwLock<ControllerPodState>>,
+    pub(crate) controller_pods: ControllerPodState,
 }
 
 impl App {
@@ -69,13 +68,13 @@ impl App {
             async_state: AsyncOperationState::default(),
 
             // Services & infrastructure
-            resource_objects: Arc::new(RwLock::new(HashMap::new())),
+            resource_objects: HashMap::new(),
             watcher: None,
             kube_client: None,
             operation_registry: OperationRegistry::new(),
             namespace_hotkeys: Self::build_namespace_hotkeys(&config, Vec::new()),
             pending_context_switch: None,
-            controller_pods: Arc::new(RwLock::new(ControllerPodState::default())),
+            controller_pods: ControllerPodState::default(),
         }
     }
 
@@ -270,14 +269,8 @@ impl App {
     pub fn complete_context_switch(&mut self, context: String) {
         self.context = context;
         self.state.clear();
-        {
-            let mut objects = self.resource_objects.write().unwrap();
-            objects.clear();
-        }
-        {
-            let mut controller_pods = self.controller_pods.write().unwrap();
-            controller_pods.clear();
-        }
+        self.resource_objects.clear();
+        self.controller_pods.clear();
         self.view_state.selected_index = 0;
         self.view_state.scroll_offset = 0;
         self.view_state.selected_resource_type = None;
@@ -287,7 +280,7 @@ impl App {
         &mut self.state
     }
 
-    pub fn resource_objects(&self) -> &Arc<RwLock<HashMap<String, serde_json::Value>>> {
+    pub fn resource_objects(&self) -> &HashMap<String, serde_json::Value> {
         &self.resource_objects
     }
 
@@ -354,6 +347,23 @@ impl App {
                 self.ui_state.status_message = None;
                 self.ui_state.status_message_time = None;
             }
+        }
+    }
+
+    /// Get the currently selected resource based on the current view
+    /// Returns ResourceInfo if a resource is selected, None otherwise
+    pub(crate) fn get_current_resource(&self) -> Option<crate::watcher::ResourceInfo> {
+        match self.view_state.current_view {
+            View::ResourceList | View::ResourceFavorites => {
+                let resources = self.get_filtered_resources();
+                resources.get(self.view_state.selected_index).cloned()
+            }
+            View::ResourceDetail => self
+                .selection_state
+                .selected_resource_key
+                .as_ref()
+                .and_then(|key| self.state.get(key)),
+            _ => None,
         }
     }
 
