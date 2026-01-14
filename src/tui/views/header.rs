@@ -11,14 +11,13 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 
 /// Render the main header with context, namespace, totals, and resource counts
 pub fn render_header(
     f: &mut Frame,
     area: Rect,
     state: &ResourceState,
-    controller_pods: &Arc<RwLock<ControllerPodState>>,
+    controller_pods: &ControllerPodState,
     context: &str,
     namespace: &Option<String>,
     filter: &str,
@@ -291,11 +290,16 @@ pub fn render_header(
     render_controller_status(f, middle_area, controller_pods, theme, no_icons);
 
     // Render ASCII art on the right
-    render_header_ascii(f, right_area, theme);
+    render_header_ascii(f, right_area, controller_pods, theme);
 }
 
 /// Render the ASCII art logo
-pub fn render_header_ascii(f: &mut Frame, area: Rect, theme: &Theme) {
+pub fn render_header_ascii(
+    f: &mut Frame,
+    area: Rect,
+    controller_pods: &ControllerPodState,
+    theme: &Theme,
+) {
     // Simple ASCII art - one line per character row
     let ascii_lines = [
         " _____ _             ___      ",
@@ -305,7 +309,7 @@ pub fn render_header_ascii(f: &mut Frame, area: Rect, theme: &Theme) {
         "|_|   |_|\\__,_/_/\\_\\  /_/|___/",
     ];
 
-    let lines: Vec<Line> = ascii_lines
+    let mut lines: Vec<Line> = ascii_lines
         .iter()
         .map(|line| {
             Line::from(vec![Span::styled(
@@ -317,6 +321,15 @@ pub fn render_header_ascii(f: &mut Frame, area: Rect, theme: &Theme) {
         })
         .collect();
 
+    // Add Flux version if available
+    if let Some(version) = controller_pods.get_flux_version() {
+        lines.push(Line::from("")); // Empty line for spacing
+        lines.push(Line::from(vec![Span::styled(
+            format!("Flux {}", version),
+            Style::default().fg(theme.header_ascii),
+        )]));
+    }
+
     // Center the ASCII art vertically and horizontally
     let paragraph = Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(paragraph, area);
@@ -326,14 +339,13 @@ pub fn render_header_ascii(f: &mut Frame, area: Rect, theme: &Theme) {
 fn render_controller_status(
     f: &mut Frame,
     area: Rect,
-    controller_pods: &Arc<RwLock<ControllerPodState>>,
+    controller_pods: &ControllerPodState,
     theme: &Theme,
     no_icons: bool,
 ) {
     use crate::tui::app::state::ControllerPodInfo;
 
-    let pods = controller_pods.read().unwrap();
-    let all_pods = pods.get_all_pods();
+    let all_pods = controller_pods.get_all_pods();
 
     if all_pods.is_empty() {
         // No controllers found - show message

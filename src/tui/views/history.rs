@@ -10,7 +10,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 
 /// Render the reconciliation history view for a resource
 /// Extracts history directly from status.history field in the resource object
@@ -18,7 +17,7 @@ pub fn render_reconciliation_history(
     f: &mut Frame,
     area: Rect,
     resource: &ResourceInfo,
-    resource_objects: &Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    resource_objects: &HashMap<String, serde_json::Value>,
     scroll_offset: &mut usize,
     theme: &Theme,
 ) -> Result<(), String> {
@@ -37,8 +36,7 @@ pub fn render_reconciliation_history(
     let key =
         crate::watcher::resource_key(&resource.namespace, &resource.name, &resource.resource_type);
 
-    let objects = resource_objects.read().unwrap();
-    let obj = match objects.get(&key) {
+    let obj = match resource_objects.get(&key) {
         Some(obj) => obj,
         None => {
             return Err("Resource object not found".to_string());

@@ -12,7 +12,6 @@ use ratatui::{
 };
 use std::cmp;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
 
 /// Render the resource list table
 pub fn render_resource_list(
@@ -22,7 +21,7 @@ pub fn render_resource_list(
     selected_index: usize,
     scroll_offset: &mut usize,
     selected_resource_type: &Option<String>,
-    resource_objects: &Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    resource_objects: &HashMap<String, serde_json::Value>,
     theme: &Theme,
     no_icons: bool,
     favorites: &HashSet<String>,
@@ -174,8 +173,6 @@ pub fn render_resource_list(
                 .add_modifier(Modifier::BOLD),
         );
 
-        let objects = resource_objects.read().unwrap();
-
         let rows: Vec<Row> = visible_resources
             .iter()
             .enumerate()
@@ -194,7 +191,7 @@ pub fn render_resource_list(
 
                 // Get resource-specific fields from stored object
                 let key = crate::watcher::resource_key(&r.namespace, &r.name, &r.resource_type);
-                let specific_fields = objects
+                let specific_fields = resource_objects
                     .get(&key)
                     .map(|obj| extract_resource_specific_fields(resource_type, obj))
                     .unwrap_or_default();

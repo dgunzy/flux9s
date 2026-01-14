@@ -88,12 +88,21 @@ pub async fn fetch_resource_yaml(
     }
 }
 
+/// Extract Flux bundle version from deployment metadata labels
+/// Returns the app.kubernetes.io/version label if present (e.g., "v2.7.5")
+fn extract_flux_bundle_version(deployment_json: &serde_json::Value) -> Option<String> {
+    deployment_json["metadata"]["labels"]["app.kubernetes.io/version"]
+        .as_str()
+        .map(|s| s.to_string())
+}
+
 /// Parse Flux controller pod status from Kubernetes API JSON
 fn extract_controller_pod_info(
     pod_json: &serde_json::Value,
 ) -> Option<crate::tui::app::state::ControllerPodInfo> {
     let name = pod_json["metadata"]["name"].as_str()?.to_string();
 
+    // Extract version from container image tag
     let containers = pod_json["spec"]["containers"].as_array()?;
     let version = containers.first().and_then(|c| {
         c["image"].as_str().and_then(|img| {
@@ -709,10 +718,7 @@ pub async fn run_tui_with_async_init(
                             },
                         );
                         // Store full object for detail view
-                        {
-                            let mut objects = app.resource_objects().write().unwrap();
-                            objects.insert(key.clone(), obj_json);
-                        }
+                        app.resource_objects.insert(key.clone(), obj_json);
                     }
                     crate::watcher::WatchEvent::Deleted(resource_type, ns, name) => {
                         let key = crate::watcher::resource_key(&ns, &name, &resource_type);
@@ -725,11 +731,15 @@ pub async fn run_tui_with_async_init(
                     }
                     crate::watcher::WatchEvent::PodApplied(name, pod_json) => {
                         if let Some(info) = extract_controller_pod_info(&pod_json) {
-                            app.controller_pods.write().unwrap().upsert_pod(name, info);
+                            app.controller_pods.upsert_pod(name, info);
                         }
                     }
                     crate::watcher::WatchEvent::PodDeleted(name) => {
-                        app.controller_pods.write().unwrap().remove_pod(&name);
+                        app.controller_pods.remove_pod(&name);
+                    }
+                    crate::watcher::WatchEvent::DeploymentApplied(deployment_json) => {
+                        let version = extract_flux_bundle_version(&deployment_json);
+                        app.controller_pods.set_flux_bundle_version(version);
                     }
                 }
             }

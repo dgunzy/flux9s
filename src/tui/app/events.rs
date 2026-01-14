@@ -97,14 +97,8 @@ impl App {
                         self.namespace = new_namespace.clone();
 
                         self.state.clear();
-                        {
-                            let mut objects = self.resource_objects.write().unwrap();
-                            objects.clear();
-                        }
-                        {
-                            let mut controller_pods = self.controller_pods.write().unwrap();
-                            controller_pods.clear();
-                        }
+                        self.resource_objects.clear();
+                        self.controller_pods.clear();
                         if let Some(ref mut watcher) = self.watcher {
                             if let Err(e) = watcher.set_namespace(new_namespace) {
                                 self.set_status_message((
@@ -177,22 +171,7 @@ impl App {
             | crossterm::event::KeyCode::Char('R')
             | crossterm::event::KeyCode::Char('W') => {
                 // Handle Flux operations - works from list, favorites, and detail view
-                let resource_info = if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    let resources = self.get_filtered_resources();
-                    resources.get(self.view_state.selected_index).cloned()
-                } else if self.view_state.current_view == View::ResourceDetail {
-                    if let Some(ref key) = self.selection_state.selected_resource_key {
-                        self.state.get(key)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(resource) = resource_info {
+                if let Some(resource) = self.get_current_resource() {
                     let op_key = match key.code {
                         crossterm::event::KeyCode::Char('s') => 's',
                         crossterm::event::KeyCode::Char('r') => 'r',
@@ -265,22 +244,7 @@ impl App {
             }
             crossterm::event::KeyCode::Char('t') => {
                 // Trace command - works from list, favorites, and detail view
-                let resource_info = if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    let resources = self.get_filtered_resources();
-                    resources.get(self.view_state.selected_index).cloned()
-                } else if self.view_state.current_view == View::ResourceDetail {
-                    if let Some(ref key) = self.selection_state.selected_resource_key {
-                        self.state.get(key)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(resource) = resource_info {
+                if let Some(resource) = self.get_current_resource() {
                     self.async_state.trace_pending = Some(ResourceKey::new(
                         resource.resource_type.clone(),
                         resource.namespace.clone(),
@@ -423,22 +387,7 @@ impl App {
             }
             crossterm::event::KeyCode::Char('h') => {
                 // View reconciliation history - works from list, favorites, and detail view
-                let resource_info = if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    let resources = self.get_filtered_resources();
-                    resources.get(self.view_state.selected_index).cloned()
-                } else if self.view_state.current_view == View::ResourceDetail {
-                    if let Some(ref key) = self.selection_state.selected_resource_key {
-                        self.state.get(key)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(resource) = resource_info {
+                if let Some(resource) = self.get_current_resource() {
                     use crate::models::FluxResourceKind;
 
                     let key = crate::watcher::resource_key(
@@ -448,8 +397,7 @@ impl App {
                     );
 
                     // Check if resource object exists and has status.history
-                    let objects = self.resource_objects.read().unwrap();
-                    let obj = objects.get(&key);
+                    let obj = self.resource_objects.get(&key);
                     let has_history = obj
                         .and_then(|obj| obj.get("status"))
                         .and_then(|s| s.get("history"))
@@ -460,8 +408,6 @@ impl App {
                         FluxResourceKind::parse_optional(&resource.resource_type),
                         Some(FluxResourceKind::Kustomization)
                     );
-
-                    drop(objects); // Release lock before switching view
 
                     if has_history {
                         // Save current view as previous list view before navigating
@@ -496,22 +442,7 @@ impl App {
             }
             crossterm::event::KeyCode::Char('g') => {
                 // View resource graph - works from list, favorites, and detail view
-                let resource_info = if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    let resources = self.get_filtered_resources();
-                    resources.get(self.view_state.selected_index).cloned()
-                } else if self.view_state.current_view == View::ResourceDetail {
-                    if let Some(ref key) = self.selection_state.selected_resource_key {
-                        self.state.get(key)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(resource) = resource_info {
+                if let Some(resource) = self.get_current_resource() {
                     // Check if resource type supports graph view
                     if !crate::trace::is_resource_type_with_graph(&resource.resource_type) {
                         self.set_status_message((
@@ -1091,11 +1022,7 @@ impl App {
 
                 // Clear state when switching namespaces (will repopulate from new watchers)
                 self.state().clear();
-
-                {
-                    let mut objects = self.resource_objects().write().unwrap();
-                    objects.clear();
-                }
+                self.resource_objects.clear();
 
                 // Restart watchers with new namespace (more efficient than watching all)
                 if let Some(ref mut watcher) = self.watcher {
