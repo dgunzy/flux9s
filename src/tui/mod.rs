@@ -89,6 +89,64 @@ pub async fn fetch_resource_yaml(
     }
 }
 
+/// Extract Flux bundle version from deployment metadata labels
+/// Returns the app.kubernetes.io/version label if present (e.g., "v2.7.5")
+fn extract_flux_bundle_version(deployment_json: &serde_json::Value) -> Option<String> {
+    deployment_json["metadata"]["labels"]["app.kubernetes.io/version"]
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+/// Parse Flux controller pod status from Kubernetes API JSON
+fn extract_controller_pod_info(
+    pod_json: &serde_json::Value,
+) -> Option<crate::tui::app::state::ControllerPodInfo> {
+    let name = pod_json["metadata"]["name"].as_str()?.to_string();
+
+    // Extract version from container image tag
+    let containers = pod_json["spec"]["containers"].as_array()?;
+    let version = containers.first().and_then(|c| {
+        c["image"].as_str().and_then(|img| {
+            // Handle different image formats:
+            // - With tag: "ghcr.io/fluxcd/source-controller:v1.4.5"
+            // - With digest: "ghcr.io/fluxcd/source-controller@sha256:abc123..."
+            // - Both: "ghcr.io/fluxcd/source-controller:v1.4.5@sha256:abc123..."
+
+            if let Some(at_pos) = img.find('@') {
+                // Image uses digest format - extract tag before @ if present
+                let before_digest = &img[..at_pos];
+                before_digest
+                    .rfind(':')
+                    .map(|colon_pos| before_digest[colon_pos + 1..].to_string())
+            } else if let Some(colon_pos) = img.rfind(':') {
+                // Tag-based image (no digest)
+                let tag = &img[colon_pos + 1..];
+                // Skip if it looks like a port number
+                if tag.chars().all(|c| c.is_ascii_digit()) {
+                    None
+                } else {
+                    Some(tag.to_string())
+                }
+            } else {
+                None
+            }
+        })
+    });
+
+    let ready = pod_json["status"]["conditions"]
+        .as_array()
+        .and_then(|arr| arr.iter().find(|c| c["type"] == "Ready"))
+        .and_then(|c| c["status"].as_str())
+        .map(|s| s == "True")
+        .unwrap_or(false);
+
+    Some(crate::tui::app::state::ControllerPodInfo {
+        name,
+        ready,
+        version,
+    })
+}
+
 /// Run the TUI application with async Kubernetes initialization
 /// This shows the splash screen immediately, then initializes Kubernetes in the background
 pub async fn run_tui_with_async_init(
@@ -232,44 +290,74 @@ pub async fn run_tui_with_async_init(
 
         // Load plugins
         tracing::debug!("Loading plugins");
-        let (plugin_registry, plugin_cache, plugin_manifests) = match crate::plugins::PluginLoader::new() {
-            Ok(loader) => match loader.load_all() {
-                Ok(plugins) => {
-                    if !plugins.is_empty() {
-                        tracing::info!("Loaded {} plugin(s)", plugins.len());
+        let (plugin_registry, plugin_cache, plugin_manifests) =
+            match crate::plugins::PluginLoader::new() {
+                Ok(loader) => match loader.load_all() {
+                    Ok(plugins) => {
+                        if !plugins.is_empty() {
+                            tracing::info!("Loaded {} plugin(s)", plugins.len());
 
-                        // Create plugin registry
-                        let mut registry = crate::plugins::PluginRegistry::new();
-                        for plugin in plugins.clone() {
-                            registry.register(plugin);
-                        }
+                            // Create plugin registry
+                            let mut registry = crate::plugins::PluginRegistry::new();
+                            for plugin in plugins.clone() {
+                                registry.register(plugin);
+                            }
 
-                        // Create plugin cache and load connectors
-                        let mut cache = crate::plugins::PluginCache::new(Some(client.clone()));
-                        if let Err(e) = cache.load_plugins(plugins.clone()) {
-                            tracing::warn!("Failed to load plugin connectors: {}", e);
-                            (None, None, None)
+                            // Collect all watched_resources from all plugins
+                            let mut watched_resources = Vec::new();
+                            for plugin in &plugins {
+                                watched_resources.extend(plugin.watched_resources.clone());
+                            }
+
+                            // Start watching plugin resources
+                            if !watched_resources.is_empty() {
+                                tracing::debug!(
+                                    "Starting watchers for {} plugin resource(s)",
+                                    watched_resources.len()
+                                );
+                                if let Err(e) = watcher.watch_plugin_resources(&watched_resources) {
+                                    tracing::warn!(
+                                        "Failed to start plugin resource watchers: {}",
+                                        e
+                                    );
+                                } else {
+                                    tracing::info!(
+                                        "Started watchers for {} plugin resource(s)",
+                                        watched_resources.len()
+                                    );
+                                }
+                            }
+
+                            // Create plugin cache and load connectors
+                            let dns_suffix = config.plugin.kubernetes_dns_suffix.clone();
+                            let mut cache =
+                                crate::plugins::PluginCache::new(Some(client.clone()), dns_suffix);
+                            if let Err(e) = cache.load_plugins(plugins.clone()) {
+                                tracing::warn!("Failed to load plugin connectors: {}", e);
+                                (None, None, None)
+                            } else {
+                                (Some(registry), Some(Arc::new(cache)), Some(plugins))
+                            }
                         } else {
-                            (Some(registry), Some(Arc::new(cache)), Some(plugins))
+                            tracing::debug!("No plugins found");
+                            (None, None, None)
                         }
-                    } else {
-                        tracing::debug!("No plugins found");
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load plugin manifests: {}", e);
                         (None, None, None)
                     }
-                }
+                },
                 Err(e) => {
-                    tracing::warn!("Failed to load plugin manifests: {}", e);
+                    tracing::warn!("Failed to create plugin loader: {}", e);
                     (None, None, None)
                 }
-            },
-            Err(e) => {
-                tracing::warn!("Failed to create plugin loader: {}", e);
-                (None, None, None)
-            }
-        };
+            };
 
         // Spawn background task to refresh plugin data
-        if let (Some(cache_arc), Some(manifests)) = (plugin_cache.as_ref(), plugin_manifests.as_ref()) {
+        if let (Some(cache_arc), Some(manifests)) =
+            (plugin_cache.as_ref(), plugin_manifests.as_ref())
+        {
             let cache_clone = Arc::clone(cache_arc);
             let manifests_clone = manifests.clone();
 
@@ -320,7 +408,16 @@ pub async fn run_tui_with_async_init(
         if !kube_initialized {
             if let Ok(result) = kube_init_rx.try_recv() {
                 match result {
-                    Ok((client, context, namespace, w, rx, namespace_hotkeys, plugin_registry, plugin_cache)) => {
+                    Ok((
+                        client,
+                        context,
+                        namespace,
+                        w,
+                        rx,
+                        namespace_hotkeys,
+                        plugin_registry,
+                        plugin_cache,
+                    )) => {
                         tracing::debug!("Kubernetes initialization complete");
                         kube_client = Some(client.clone());
                         event_rx = Some(rx);
@@ -339,7 +436,10 @@ pub async fn run_tui_with_async_init(
 
                         // Set plugin registry and cache
                         if let Some(registry) = plugin_registry {
-                            tracing::debug!("Plugin registry initialized with {} plugin(s)", registry.len());
+                            tracing::debug!(
+                                "Plugin registry initialized with {} plugin(s)",
+                                registry.len()
+                            );
                             app.set_plugin_registry(registry);
                         }
                         if let Some(cache) = plugin_cache {
@@ -627,6 +727,24 @@ pub async fn run_tui_with_async_init(
                             return Ok(());
                         }
 
+                        // Restart plugin watchers if any plugins are loaded
+                        if let Some(ref registry) = app.plugin_registry {
+                            let mut watched_resources = Vec::new();
+                            for plugin in registry.all() {
+                                watched_resources.extend(plugin.watched_resources.clone());
+                            }
+                            if !watched_resources.is_empty() {
+                                if let Err(e) =
+                                    new_watcher.watch_plugin_resources(&watched_resources)
+                                {
+                                    tracing::warn!(
+                                        "Failed to restart plugin watchers after context switch: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+
                         // Update app with new context and watcher
                         app.complete_context_switch(new_context.clone());
                         app.set_kube_client(new_client.clone());
@@ -740,10 +858,7 @@ pub async fn run_tui_with_async_init(
                             },
                         );
                         // Store full object for detail view
-                        {
-                            let mut objects = app.resource_objects().write().unwrap();
-                            objects.insert(key.clone(), obj_json);
-                        }
+                        app.resource_objects.insert(key.clone(), obj_json);
                     }
                     crate::watcher::WatchEvent::Deleted(resource_type, ns, name) => {
                         let key = crate::watcher::resource_key(&ns, &name, &resource_type);
@@ -753,6 +868,18 @@ pub async fn run_tui_with_async_init(
                         // Log errors but don't spam - only show first few
                         // Errors are also shown in the TUI if needed
                         tracing::warn!("Watch event error: {}", msg);
+                    }
+                    crate::watcher::WatchEvent::PodApplied(name, pod_json) => {
+                        if let Some(info) = extract_controller_pod_info(&pod_json) {
+                            app.controller_pods.upsert_pod(name, info);
+                        }
+                    }
+                    crate::watcher::WatchEvent::PodDeleted(name) => {
+                        app.controller_pods.remove_pod(&name);
+                    }
+                    crate::watcher::WatchEvent::DeploymentApplied(deployment_json) => {
+                        let version = extract_flux_bundle_version(&deployment_json);
+                        app.controller_pods.set_flux_bundle_version(version);
                     }
                 }
             }

@@ -3,7 +3,10 @@
 //! Handles loading configuration from multiple sources and merging them
 //! according to precedence rules.
 
-use super::{defaults, paths, schema::Config};
+use super::{
+    defaults, paths,
+    schema::{Config, PluginConfig},
+};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
@@ -125,6 +128,9 @@ impl ConfigLoader {
                 buffer: other.logger.buffer,
                 since_seconds: other.logger.since_seconds,
                 text_wrap: other.logger.text_wrap,
+            },
+            plugin: PluginConfig {
+                kubernetes_dns_suffix: other.plugin.kubernetes_dns_suffix.clone(),
             },
             namespace_hotkeys: other.namespace_hotkeys.clone(),
             context_skins: other.context_skins.clone(),

@@ -46,7 +46,8 @@ Type these commands in command mode (press `:`):
 | `:unhealthy`      | Show only unhealthy resources            |
 | `:favorites`      | View favorite resources                  |
 | `:fav`            | Alias for `:favorites`                   |
-| `:skin <name>`    | Change theme/skin                        |
+| `:skin <name>`    | Change theme/skin (direct)               |
+| `:skin`           | Open interactive theme selection menu    |
 | `:readonly`       | Toggle readonly mode                     |
 | `:help`           | Show/hide help                           |
 | `:q` or `:q!`     | Quit application                         |
@@ -55,7 +56,11 @@ Type these commands in command mode (press `:`):
 
 Some commands open interactive selection menus when used without arguments, providing an easier way to select from available options.
 
-### Context Submenu (`:ctx`)
+### Interactive Submenus
+
+Some commands open interactive selection menus when used without arguments, providing an easier way to select from available options.
+
+#### Context Submenu (`:ctx`)
 
 When you type `:ctx` and press Enter without specifying a context name, flux9s displays an interactive menu of available Kubernetes contexts. The current context is marked with "(current)".
 
@@ -65,6 +70,26 @@ When you type `:ctx` and press Enter without specifying a context name, flux9s d
 - `Esc` - Cancel and close submenu
 
 The submenu appears as a centered overlay on top of the current view, making it easy to see and select your desired context without needing to remember exact names.
+
+#### Theme Submenu (`:skin`)
+
+When you type `:skin` and press Enter without specifying a theme name, flux9s displays an interactive menu of available themes with live preview.
+
+![Theme Submenu](/images/skin-submenu.png)
+
+**Features:**
+- **Live Preview**: Theme changes immediately as you navigate
+- **Current Theme**: Marked with "(current)"
+- **Built-in Themes**: Embedded themes marked with "[built-in]"
+- **17 Built-in Themes**: Includes popular themes like dracula, nord, monokai, gruvbox-dark, and more
+
+**Navigation:**
+- `j` / `k` or `↓` / `↑` - Navigate through themes (with live preview)
+- `Enter` - Apply theme temporarily (session only)
+- `s` - Save theme to config file (persists across sessions)
+- `Esc` - Cancel and restore original theme
+
+The submenu saves themes to `ui.skin` in normal mode, or `ui.skinReadOnly` when readonly mode is enabled.
 
 ## Health Filtering
 
@@ -187,5 +212,13 @@ Quickly find resources by name using the filter feature.
 Visualize resource relationships and dependencies in a graph format.
 
 Shows upstream sources and downstream managed resources for Kustomization, HelmRelease, and other resources with inventory tracking.
+{{% /blocks/feature %}}
+
+{{% blocks/feature icon="fa-palette" title="Theme Selection" %}}
+![flux9s theme submenu](/images/skin-submenu.png)
+
+Interactive theme selection with live preview. Choose from 17 built-in themes or your custom themes.
+
+Navigate with `j`/`k` to preview, press `Enter` to apply, or `s` to save to config.
 {{% /blocks/feature %}}
 {{< /blocks/section >}}

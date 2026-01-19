@@ -61,6 +61,8 @@ pub struct ViewState {
     pub previous_list_view: View,
     /// Active submenu state (if a submenu is currently being displayed)
     pub submenu_state: Option<SubmenuState>,
+    /// Original theme name when previewing themes in submenu (for restoration on cancel)
+    pub preview_original_theme: Option<String>,
 }
 
 impl Default for ViewState {
@@ -79,6 +81,7 @@ impl Default for ViewState {
             graph_scroll_offset: 0,
             previous_list_view: View::ResourceList,
             submenu_state: None,
+            preview_original_theme: None,
         }
     }
 }
@@ -185,5 +188,60 @@ impl PendingOperation {
             name,
             operation_key,
         }
+    }
+}
+
+/// Information about a Flux controller pod
+#[derive(Clone, Debug)]
+pub struct ControllerPodInfo {
+    pub name: String,
+    pub ready: bool,
+    pub version: Option<String>,
+}
+
+/// State for Flux controller pod monitoring
+#[derive(Debug, Default)]
+pub struct ControllerPodState {
+    pods: std::collections::HashMap<String, ControllerPodInfo>,
+    last_updated: Option<std::time::Instant>,
+    /// Flux bundle version from deployment label (e.g., "v2.7.5")
+    flux_bundle_version: Option<String>,
+}
+
+impl ControllerPodState {
+    /// Add or update a pod in the state
+    pub fn upsert_pod(&mut self, name: String, info: ControllerPodInfo) {
+        self.pods.insert(name, info);
+        self.last_updated = Some(std::time::Instant::now());
+    }
+
+    /// Remove a pod from the state
+    pub fn remove_pod(&mut self, name: &str) {
+        self.pods.remove(name);
+        self.last_updated = Some(std::time::Instant::now());
+    }
+
+    /// Get all pods
+    pub fn get_all_pods(&self) -> Vec<ControllerPodInfo> {
+        self.pods.values().cloned().collect()
+    }
+
+    /// Clear all pod state
+    pub fn clear(&mut self) {
+        self.pods.clear();
+        self.last_updated = None;
+        self.flux_bundle_version = None;
+    }
+
+    /// Set the Flux bundle version from deployment label
+    pub fn set_flux_bundle_version(&mut self, version: Option<String>) {
+        self.flux_bundle_version = version;
+        self.last_updated = Some(std::time::Instant::now());
+    }
+
+    /// Get the Flux bundle version (e.g., "v2.7.5") from deployment labels
+    /// This represents the overall Flux release version, not individual controller versions
+    pub fn get_flux_version(&self) -> Option<&str> {
+        self.flux_bundle_version.as_deref()
     }
 }

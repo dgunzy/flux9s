@@ -3,7 +3,7 @@
 //! Manages fetching and caching data from plugin data sources.
 //! Each plugin has its own refresh interval and cache entry.
 
-use super::datasource::{create_connector, DataSourceConnector};
+use super::datasource::{DataSourceConnector, create_connector};
 use super::manifest::PluginManifest;
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -41,28 +41,52 @@ pub struct PluginCache {
     cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
     /// Kubernetes client for service connectors
     kube_client: Option<kube::Client>,
+    /// Kubernetes DNS suffix for service connectors
+    dns_suffix: String,
 }
 
 impl PluginCache {
     /// Create a new plugin cache
-    pub fn new(kube_client: Option<kube::Client>) -> Self {
+    ///
+    /// # Arguments
+    /// * `kube_client` - Optional Kubernetes client (required for kubernetes_service connectors)
+    /// * `dns_suffix` - Kubernetes DNS suffix (e.g., ".svc.cluster.local") from config
+    pub fn new(kube_client: Option<kube::Client>, dns_suffix: String) -> Self {
         Self {
             connectors: HashMap::new(),
             cache: Arc::new(RwLock::new(HashMap::new())),
             kube_client,
+            dns_suffix,
         }
     }
 
     /// Load plugins and create connectors
+    ///
+    /// Only creates connectors for plugins that have a data source configured.
+    /// Plugins with only watched_resources don't need connectors.
     pub fn load_plugins(&mut self, plugins: Vec<PluginManifest>) -> Result<()> {
         tracing::info!("Loading {} plugin(s) into cache", plugins.len());
 
         for plugin in plugins {
+            // Skip plugins without a data source (they only have watched_resources)
+            let source = match &plugin.source {
+                Some(src) => src,
+                None => {
+                    tracing::debug!(
+                        "Plugin '{}' has no data source, skipping connector creation",
+                        plugin.name
+                    );
+                    continue;
+                }
+            };
+
             tracing::debug!("Creating connector for plugin: {}", plugin.name);
 
             // Create connector for this plugin's data source
-            let connector = create_connector(&plugin.source, self.kube_client.clone())
-                .with_context(|| format!("Failed to create connector for plugin '{}'", plugin.name))?;
+            let connector = create_connector(source, self.kube_client.clone(), &self.dns_suffix)
+                .with_context(|| {
+                    format!("Failed to create connector for plugin '{}'", plugin.name)
+                })?;
 
             // Store connector
             self.connectors
@@ -123,10 +147,17 @@ impl PluginCache {
     /// Refresh all plugins that are expired
     ///
     /// This should be called periodically from a background task.
+    /// Only refreshes plugins that have a data source configured.
     pub async fn refresh_expired(&self, plugins: &[PluginManifest]) -> Result<()> {
         let mut refresh_count = 0;
 
         for plugin in plugins {
+            // Skip plugins without a data source
+            let source = match &plugin.source {
+                Some(src) => src,
+                None => continue,
+            };
+
             // Check if entry is expired
             let should_refresh = {
                 let cache = self.cache.read().await;
@@ -138,11 +169,7 @@ impl PluginCache {
 
             if should_refresh {
                 // Use refresh_interval from config, or default to 30s
-                let interval_str = plugin
-                    .source
-                    .refresh_interval
-                    .as_deref()
-                    .unwrap_or("30s");
+                let interval_str = source.refresh_interval.as_deref().unwrap_or("30s");
                 let ttl = parse_duration(interval_str)?;
 
                 if let Err(e) = self.refresh(&plugin.name, ttl).await {
@@ -209,9 +236,7 @@ pub struct CacheStats {
 /// Parse duration string (e.g., "30s", "1m", "5s")
 fn parse_duration(s: &str) -> Result<Duration> {
     if let Some(secs) = s.strip_suffix("ms") {
-        let ms: u64 = secs
-            .parse()
-            .context("Invalid milliseconds in duration")?;
+        let ms: u64 = secs.parse().context("Invalid milliseconds in duration")?;
         Ok(Duration::from_millis(ms))
     } else if let Some(secs) = s.strip_suffix('s') {
         let secs: u64 = secs.parse().context("Invalid seconds in duration")?;
@@ -236,10 +261,7 @@ mod tests {
         assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
         assert_eq!(parse_duration("1m").unwrap(), Duration::from_secs(60));
         assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
-        assert_eq!(
-            parse_duration("500ms").unwrap(),
-            Duration::from_millis(500)
-        );
+        assert_eq!(parse_duration("500ms").unwrap(), Duration::from_millis(500));
         assert!(parse_duration("invalid").is_err());
     }
 

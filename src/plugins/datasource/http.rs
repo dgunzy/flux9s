@@ -1,7 +1,7 @@
 //! HTTP data source connector
 
 use super::connector::DataSourceConnector;
-use crate::plugins::manifest::{AuthConfig, AuthType, DataSourceConfig};
+use crate::plugins::manifest::{AuthConfig, AuthType, DataSourceConfig, DataSourceType};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -60,7 +60,10 @@ impl HttpDataSource {
                     req = req.basic_auth(username, Some(password));
                 }
                 AuthType::ApiKey => {
-                    let header = auth.header.clone().context("header required for api_key auth")?;
+                    let header = auth
+                        .header
+                        .clone()
+                        .context("header required for api_key auth")?;
                     let token = self.get_env_var(&auth.token_env, "token_env")?;
                     req = req.header(header, token);
                 }
@@ -106,10 +109,7 @@ impl DataSourceConnector for HttpDataSource {
             );
         }
 
-        let data = resp
-            .json()
-            .await
-            .context("Failed to parse JSON response")?;
+        let data = resp.json().await.context("Failed to parse JSON response")?;
 
         tracing::debug!("Successfully fetched data from: {}", self.endpoint);
 
@@ -117,7 +117,7 @@ impl DataSourceConnector for HttpDataSource {
     }
 
     fn connector_type(&self) -> &str {
-        "http"
+        DataSourceType::Http.as_str()
     }
 
     async fn health_check(&self) -> Result<()> {

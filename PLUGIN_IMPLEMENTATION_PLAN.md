@@ -2,561 +2,372 @@
 
 ## Overview
 
-Add a YAML-based plugin system to flux9s that enables external data sources to enhance resource views with additional columns and custom detail views.
+YAML-based plugin system enabling:
+1. **Column enrichment** - Add columns to existing Flux resource views from external data
+2. **Custom resource views** - Watch and display arbitrary CRDs with full TUI support (`:argo`, `:crossplane`, etc.)
 
-**Status**: Planning
+**Status**: Phase 1 Complete, Phase 2 In Progress
 **Target Version**: v0.7.0
-**Maintainer**: @dgunzy
 
 ## Philosophy
 
-flux9s is a Flux monitoring tool. Plugins extend it but don't change its core identity:
-- Plugins are **optional** - flux9s works perfectly without them
-- Plugins are **read-only** - no cluster modifications
-- Plugins are **declarative** - YAML configuration, no templates or code
-- Plugins are **flexible** - support on-cluster and off-cluster data sources
-
-## Goals
-
-1. **Kubernetes-Native**: Support CRDs and Services as data sources (most common use case)
-2. **Resource Agnostic**: Enhance ANY Kubernetes resource, not just Flux
-3. **Zero Bundled Plugins**: Ships with examples only, nothing enabled
-4. **Backwards Compatible**: Existing flux9s behavior unchanged
-5. **Strong Validation**: CLI catches configuration errors early
-6. **Theme Integration**: Use existing theme system for colors
-
-## Non-Goals
-
-- Plugin sandboxing (future)
-- Write operations (future)
-- Plugin marketplace (future)
-- Binary/WASM plugins (YAML only)
+- **Optional** - flux9s works without plugins
+- **Read-only** - No cluster modifications
+- **Declarative** - YAML only, no code/templates
+- **Extensible** - Watch any CRD, not just Flux resources
 
 ## Architecture
 
 ```
-flux9s Core                         Plugin System
-────────────                        ─────────────
-
-┌─────────────┐                    ┌──────────────────┐
-│ TUI Views   │◄───────────────────│ Plugin Registry  │
-│ (list,      │  Add columns       │                  │
-│  detail)    │  Add views         │  - Loader        │
-└─────────────┘                    │  - Validator     │
-      ▲                            │  - Data Cache    │
-      │                            └──────────────────┘
-      │                                     ▲
-┌─────────────┐                            │
-│ App State   │                            │
-│ (resources) │                    ┌───────┴──────────┐
-└─────────────┘                    │  Data Sources    │
-      ▲                            │                  │
-      │                            │  - K8s CRD       │
-┌─────────────┐                    │  - K8s Service   │
-│ Watcher     │                    │  - HTTP API      │
-│ (kube-rs)   │                    │  - File          │
-└─────────────┘                    └──────────────────┘
-      ▲                                     ▲
-      │                                     │
-      └─────────────┬───────────────────────┘
-                    │
-            ┌───────▼────────┐
-            │  Kubernetes    │
-            │   API Server   │
-            └────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                       Plugin System                          │
+├─────────────────────────────────────────────────────────────┤
+│  Plugin Manifest (YAML)                                      │
+│  ├── source: data enrichment (K8s Service, HTTP, File)      │
+│  ├── columns: add to existing views                          │
+│  └── watched_resources: NEW resource views with CRD watching │
+└─────────────────────────────────────────────────────────────┘
+         │                              │
+         ▼                              ▼
+┌─────────────────┐          ┌─────────────────────┐
+│ Column Renderer │          │ Dynamic Watcher     │
+│ (enriches Flux  │          │ (watches plugin     │
+│  resource list) │          │  CRDs via kube-rs)  │
+└─────────────────┘          └─────────────────────┘
 ```
-
-### Data Flow
-
-1. Load plugins from `~/.config/flux9s/plugins/*.yaml`
-2. Validate schemas and initialize data source connectors
-3. Start background task to fetch plugin data (respects refresh_interval)
-4. When rendering views, extract values using JSONPath and apply renderers
-5. Plugin views accessible via keybindings (e.g., `:agent`)
 
 ## Plugin YAML Schema
 
-### Example: ConfigHub Agent Plugin
+### Watched Resource Types
 
-```yaml
-name: confighub-agent
-version: 1.0.0
-enabled: true
+Each watched resource must specify a `type` that determines how data is fetched:
 
-# Data Source (choose one type)
-source:
-  # Option 1: Kubernetes Service (MOST COMMON)
-  type: kubernetes_service
-  service: confighub-agent
-  namespace: confighub-system
-  port: 8080
-  path: /api/map
-  refresh_interval: 30s
+| Type | Description | Status |
+|------|-------------|--------|
+| `kubernetes_crd` | Watch Kubernetes CRD via kube-rs watcher | **Implemented** |
+| `http_api` | Poll HTTP API endpoint | Future |
+| `grpc` | Stream from gRPC service | Future |
 
-  # Option 2: Kubernetes CRD
-  # type: kubernetes_crd
-  # kind: ConfigHubData
-  # group: confighub.com
-  # version: v1
-  # namespace: confighub-system  # optional, default all
-  # name: cluster-data           # optional, default all
-  # data_path: .status.data      # JSONPath to extract data
-  # refresh_interval: 30s
+This extensible design allows plugins to integrate with different data sources while maintaining a consistent view experience.
 
-  # Option 3: External HTTP API
-  # type: http
-  # endpoint: https://api.example.com/data
-  # auth:
-  #   type: bearer
-  #   token_env: API_TOKEN
-  # refresh_interval: 30s
+### Future Type Implementation Notes
 
-# Resources this plugin enhances (ANY K8s resource, not just Flux)
-resources:
-  - Kustomization          # Flux resources
-  - HelmRelease
-  - Deployment             # Core K8s resources
-  - Service
-  - MyCustomResource       # Your CRDs
+When adding new watched resource types, the following changes are needed:
 
-# Add columns to resource list view
-columns:
-  - name: owner
-    path: .ownership.owner
-    width: 12
-    renderer: text
-
-  - name: issues
-    path: .ccve.count
-    width: 8
-    renderer: issue_badge  # Built-in: text, issue_badge, percentage_bar, duration
-
-# Custom detail views
-views:
-  - name: agent_detail
-    keybinding: ":agent"
-
-  - name: relationships
-    keybinding: ":graph"
+**1. Add enum variant** in `src/plugins/manifest.rs`:
+```rust
+pub enum WatchedResourceType {
+    KubernetesCrd,
+    HttpApi,    // New
+    Grpc,       // New
+}
 ```
 
-### Data Source Types
+**2. Add type-specific fields** to `WatchedResourceConfig`:
+- `http_api`: endpoint, refresh_interval, auth, headers
+- `grpc`: endpoint, service, method, tls_config
 
-**kubernetes_service**: Query K8s service endpoint (in-cluster or via port-forward)
-- Most common use case for on-cluster APIs
-- Uses current kubeconfig context
+**3. Add validation** in `src/plugins/validator.rs`:
+- Validate type-specific required fields
+- Check endpoint URLs, intervals, etc.
 
-**kubernetes_crd**: Watch a CRD that contains plugin data
-- Data stored in cluster as CRD
-- Efficient for frequently updated data
+**4. Implement watcher** in `src/watcher/mod.rs`:
+- `http_api`: Polling loop with configurable interval, transform response to resources
+- `grpc`: Streaming client, map events to WatchEvent
 
-**http**: External HTTP API
-- For off-cluster data sources
-- Supports authentication
+**5. Update template** in `src/cli/plugin.rs` to uncomment the examples
 
-**file**: Local JSON file
-- For testing or static data
+### Full Example: Argo CD Plugin
 
-### Built-in Renderers
-
-Renderers apply theme-appropriate styling automatically:
-
-- `text` - Plain text (default, uses theme's text color)
-- `issue_badge` - "-", "⚠ 1", "🔴 2" (themed warn/error colors)
-- `percentage_bar` - `[████████░░] 80%` (themed based on percentage)
-- `duration` - "2h 30m" (themed text color)
-
-All styling respects user's active theme (rose-pine, dracula, etc.)
-
-## File Structure
-
-```
-src/
-├── plugins/                  # NEW
-│   ├── manifest.rs           # Plugin YAML schema
-│   ├── loader.rs             # Load and validate plugins
-│   ├── registry.rs           # Plugin registry
-│   ├── datasource/           # Data source connectors
-│   │   ├── k8s_service.rs    # Kubernetes Service
-│   │   ├── k8s_crd.rs        # Kubernetes CRD
-│   │   ├── http.rs           # HTTP API
-│   │   └── file.rs           # File
-│   ├── renderer.rs           # Built-in renderers
-│   └── views/                # Plugin view implementations
-│
-├── tui/
-│   ├── app/state.rs          # UPDATED: Add plugin state
-│   └── views/
-│       └── resource_list.rs  # UPDATED: Render plugin columns
-│
-└── cli/commands.rs           # UPDATED: Add plugin CLI
-
-examples/plugins/             # NEW: Example plugins (not enabled)
-├── confighub-agent.yaml
-├── argocd.yaml
-└── minimal.yaml
-
-tests/plugin_tests.rs         # NEW: Plugin tests
-```
-
-## CLI Commands
-
-```bash
-flux9s plugin list                         # List loaded plugins
-flux9s plugin validate <file>              # Validate plugin YAML
-flux9s plugin init <name>                  # Generate template
-flux9s plugin install <file>               # Install plugin
-flux9s plugin uninstall <name>             # Remove plugin
-```
-
-## Plugin Discovery View
-
-**`:plugins`** - Interactive view listing all loaded plugins and their available views
-
-Shows:
-- Plugin name and version
-- Data source type and status
-- Columns added
-- Views available with keybindings
-- Last refresh time
-- Any errors
-
-Navigate to plugin views directly from this menu.
-
-## Implementation Phases
-
-### Phase 1: Foundation
-- Plugin manifest schema (Serde structs)
-- YAML validation with helpful error messages
-- Plugin loader (scan `~/.config/flux9s/plugins/*.yaml`)
-- Column conflict detection (error if multiple plugins define same column name)
-- CLI: `plugin list`, `plugin validate`, `plugin init`
-- Tests for schema validation
-
-### Phase 2: Data Sources
-- DataSource trait (`fetch()`, `health_check()`)
-- Kubernetes Service connector (uses kube-rs client)
-- Kubernetes CRD connector (watch CRD, extract data path)
-- HTTP connector (with auth support)
-- File connector (for testing)
-- Data cache with TTL
-- Async refresh in background
-
-### Phase 3: Column Rendering
-- JSONPath extraction from plugin data
-- Built-in renderers (text, issue_badge, percentage_bar, duration)
-- Theme style integration
-- Update resource_list view to render plugin columns
-- Handle missing data gracefully (show "-")
-
-### Phase 4: Custom Views
-- Plugin view registry
-- `:plugins` discovery view (list all plugins and their views)
-- View implementations (agent_detail, relationships, fleet_summary)
-- Keybinding handling
-- Footer shows plugin view keybindings
-- Navigation (ESC returns to main view)
-
-### Phase 5: Polish
-- Error handling review
-- Performance optimization
-- Documentation (PLUGIN_SYSTEM.md, examples/plugins/README.md)
-- Example plugins tested against real data sources
-- Release notes
-
-## Example Plugins
-
-### Minimal Template
-```yaml
-name: my-plugin
-version: 1.0.0
-enabled: true
-
-source:
-  type: kubernetes_service
-  service: my-service
-  namespace: default
-  port: 8080
-  path: /api/data
-
-resources:
-  - Deployment
-
-columns:
-  - name: status
-    path: .status
-    width: 10
-```
-
-### ConfigHub Agent (Full-Featured)
-```yaml
-name: confighub-agent
-version: 1.0.0
-enabled: true
-
-source:
-  type: kubernetes_service
-  service: confighub-agent
-  namespace: confighub-system
-  port: 8080
-  path: /api/map
-  refresh_interval: 30s
-
-resources:
-  - Kustomization
-  - HelmRelease
-  - Deployment
-  - Service
-
-columns:
-  - name: owner
-    path: .ownership.owner
-    width: 12
-
-  - name: unit
-    path: .ownership.unit
-    width: 15
-
-  - name: issues
-    path: .ccve.count
-    width: 8
-    renderer: issue_badge
-
-views:
-  - name: agent_detail
-    keybinding: ":agent"
-  - name: relationships
-    keybinding: ":graph"
-```
-
-### Argo CD
 ```yaml
 name: argocd
 version: 1.0.0
 enabled: true
 
+# FEATURE 1: Watch CRDs and create new resource views
+watched_resources:
+  - type: kubernetes_crd          # Required: data source type
+    kind: Application
+    group: argoproj.io
+    version: v1alpha1
+    plural: applications
+    command: ":argo"              # Keybinding to access view
+    display_name: "Argo Apps"     # Shown in header/footer
+
+    # View capabilities
+    supports_yaml: true           # Enable 'y' for YAML view
+    supports_describe: true       # Enable 'd' for describe
+    supports_logs: false          # No logs (not a workload)
+
+    # Column definitions for list view
+    columns:
+      - name: NAME
+        path: .metadata.name
+        width: 25
+      - name: NAMESPACE
+        path: .metadata.namespace
+        width: 15
+      - name: SYNC
+        path: .status.sync.status
+        width: 10
+        renderer: status_badge
+      - name: HEALTH
+        path: .status.health.status
+        width: 10
+        renderer: status_badge
+      - name: REPO
+        path: .spec.source.repoURL
+        width: 30
+
+    # Status extraction for ready/suspended indicators
+    status:
+      ready_path: .status.health.status
+      ready_value: "Healthy"
+      suspended_path: .spec.syncPolicy.automated
+      suspended_when_missing: true  # suspended if field missing
+      message_path: .status.conditions[0].message
+
+  - kind: AppProject
+    group: argoproj.io
+    version: v1alpha1
+    plural: appprojects
+    command: ":argoproj"
+    display_name: "Argo Projects"
+    supports_yaml: true
+    columns:
+      - name: NAME
+        path: .metadata.name
+        width: 20
+      - name: DESCRIPTION
+        path: .spec.description
+        width: 40
+
+# FEATURE 2: Enrich existing Flux views with extra columns (existing feature)
 source:
   type: kubernetes_service
   service: argocd-server
   namespace: argocd
   port: 8080
   path: /api/v1/applications
+  refresh_interval: 30s
 
 resources:
   - Kustomization
   - HelmRelease
 
 columns:
-  - name: sync
+  - name: argo-sync
     path: .status.sync.status
     width: 12
-
-  - name: health
-    path: .status.health.status
-    width: 10
 ```
+
+### Minimal Example: Crossplane Plugin
+
+```yaml
+name: crossplane
+version: 1.0.0
+enabled: true
+
+watched_resources:
+  - type: kubernetes_crd          # Required: only "kubernetes_crd" supported currently
+    kind: Claim
+    group: example.crossplane.io
+    version: v1
+    plural: claims
+    command: ":xp"
+    display_name: "XP Claims"
+    supports_yaml: true
+    columns:
+      - name: NAME
+        path: .metadata.name
+        width: 30
+      - name: READY
+        path: .status.conditions[?(@.type=="Ready")].status
+        width: 8
+      - name: SYNCED
+        path: .status.conditions[?(@.type=="Synced")].status
+        width: 8
+```
+
+## Schema Reference
+
+### WatchedResource
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `type` | **Yes** | Resource type: `kubernetes_crd` (future: `http_api`, `grpc`) |
+| `kind` | Yes* | CRD kind (e.g., "Application") - required for `kubernetes_crd` |
+| `group` | Yes* | API group (e.g., "argoproj.io") - required for `kubernetes_crd` |
+| `version` | Yes* | API version (e.g., "v1alpha1") - required for `kubernetes_crd` |
+| `plural` | Yes* | Plural name (e.g., "applications") - required for `kubernetes_crd` |
+| `command` | Yes | Keybinding (e.g., ":argo") |
+| `display_name` | No | Header text (defaults to kind) |
+| `supports_yaml` | No | Enable YAML view (default: true) |
+| `supports_describe` | No | Enable describe (default: true) |
+| `supports_logs` | No | Enable logs for pods (default: false) |
+| `columns` | Yes | List view columns |
+| `status` | No | Status field extraction config |
+
+*Fields marked with * are required based on the `type` value.
+
+### Column
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Column header |
+| `path` | Yes | JSONPath to extract value |
+| `width` | Yes | Column width in characters |
+| `renderer` | No | Renderer: text, status_badge, duration, age |
+
+### Status
+
+| Field | Description |
+|-------|-------------|
+| `ready_path` | JSONPath to ready indicator |
+| `ready_value` | Value that means "ready" |
+| `suspended_path` | JSONPath to suspended field |
+| `suspended_when_missing` | Treat missing field as suspended |
+| `message_path` | JSONPath to status message |
+
+## Built-in Renderers
+
+- `text` - Plain text (default)
+- `status_badge` - Colored based on value (Ready=green, Degraded=yellow, etc.)
+- `duration` - Human-readable duration (2h 30m)
+- `age` - Time since timestamp
+- `issue_badge` - Issue count with severity coloring
+
+## Implementation
+
+### Data Flow for Watched Resources
+
+```
+1. Plugin loaded → Register command (":argo")
+2. User types ":argo" → Switch to plugin resource view
+3. ResourceWatcher.watch_dynamic(group, version, kind, plural)
+4. Events flow to same ResourceState as Flux resources
+5. Plugin columns define how to render the list
+6. 'y' key → fetch full YAML (if supports_yaml: true)
+7. ESC → return to previous view
+```
+
+### Key Integration Points
+
+**Command Registration**: Plugin commands registered alongside built-in commands
+- Handled in `src/tui/commands.rs`
+- Plugin keybindings must not conflict with built-ins
+
+**Dynamic Watching**: New `watch_dynamic()` method on ResourceWatcher
+- Uses `DynamicObject` + `ApiResource` (same pattern as OCIRepository multi-version)
+- Events use plugin's `display_name` as resource_type
+
+**View Rendering**: Plugin provides column config, core handles rendering
+- Same `resource_list` view, different column definitions
+- Status extraction uses plugin's `status` config
+
+**YAML/Describe Support**: Controlled by flags
+- `supports_yaml: true` → 'y' key fetches full object
+- `supports_describe: true` → 'd' key shows formatted describe
+- Objects stored in `resource_objects` HashMap same as Flux resources
+
+## Implementation Phases
+
+### Phase 1: Foundation (COMPLETE)
+- [x] Plugin manifest schema
+- [x] YAML validation
+- [x] Plugin loader
+- [x] CLI commands (list, validate, init, install, uninstall)
+- [x] Conflict detection
+
+### Phase 2: Data Sources (COMPLETE)
+- [x] DataSource trait
+- [x] HTTP connector
+- [x] File connector
+- [x] K8s Service connector
+- [ ] K8s CRD connector (for data enrichment) - deferred to Phase 4
+- [x] Data cache with TTL
+
+### Phase 3: Watched Resources (COMPLETE)
+- [x] `watched_resources` schema in manifest
+- [x] `WatchedResourceType` enum for extensible resource types
+- [x] `watch_dynamic()` method on ResourceWatcher
+- [x] Command registration for plugin views (dynamic commands in help menu)
+- [x] Plugin resource list view rendering with custom columns
+- [x] Status extraction from plugin config
+- [x] YAML view support flag
+- [x] Describe view support flag
+- [x] Plugin column rendering with custom renderers
+
+### Phase 4: Column Enrichment (IN PROGRESS)
+- [x] JSONPath extraction (`column_extraction.rs`)
+- [x] Built-in renderers (text, status_badge, duration, age, boolean, issue_badge, percentage_bar)
+- [x] Theme integration (colors from theme)
+- [ ] Render plugin columns in Flux resource views (column enrichment for existing views)
+- [ ] K8s CRD connector for data enrichment
+
+### Phase 5: Polish
+- [x] Error handling (graceful degradation, logging)
+- [x] Example plugins (Argo CD)
+- [ ] Additional example plugins (Crossplane, Kyverno, cert-manager)
+- [ ] Documentation site updates
+- [ ] Performance testing
+
+## Example Plugins to Ship
+
+1. **argocd.yaml** - Watch Applications and AppProjects
+2. **crossplane.yaml** - Watch Claims and Compositions
+3. **kyverno.yaml** - Watch PolicyReports
+4. **cert-manager.yaml** - Watch Certificates and Issuers
 
 ## Design Decisions
 
-### Kubernetes-First Architecture
-**Decision**: Default to Kubernetes Service and CRD data sources
+### Why watched_resources vs extending source types?
+
+**Decision**: Separate `watched_resources` section for CRD watching
 
 **Rationale**:
-- flux9s already uses kubeconfig for authentication
-- Users expect on-cluster integrations
-- Consistent with flux9s philosophy
-- No additional credentials needed
+- `source` is for data enrichment (fetch JSON, add columns to existing views)
+- `watched_resources` is for new views (watch CRDs, render full TUI)
+- Clear separation of concerns
+- A plugin can do both (enrich Flux views AND add Argo view)
 
-### Resource Agnostic
-**Decision**: Plugins can enhance ANY K8s resource, not just Flux
+### Why require explicit column definitions?
 
-**Rationale**:
-- Users may want to enhance Deployments, Services, custom CRDs
-- Plugin system should be flexible
-- Still primarily a Flux tool, but extensible
-
-### Theme Integration
-**Decision**: Renderers manage all styling, no color configuration in YAML
+**Decision**: Plugin must define columns, no auto-discovery
 
 **Rationale**:
-- Respects user's chosen theme (rose-pine, dracula, etc.)
-- Consistent with existing flux9s design
-- Simpler - no color mapping needed
-- Renderers apply semantic colors (warn/error/success) automatically
+- Different CRDs have different important fields
+- Auto-discovery would show too much noise
+- Plugin author knows what's important
+- Consistent with k9s custom resource views
 
-### No Templating
-**Decision**: Use JSONPath for data extraction, renderers for formatting
+### Why optional YAML/describe support?
 
-**Rationale**:
-- Simpler to understand and debug
-- Type-safe rendering in Rust code
-- Avoids security risks of template injection
-- Clear separation: YAML = config, Rust = logic
-
-### Read-Only
-**Decision**: v0.7.0 plugins cannot modify cluster state
+**Decision**: Flags control view capabilities
 
 **Rationale**:
-- Safer for initial release
-- Focus on observation/enrichment use case
-- Write operations can be added later with proper safeguards
-
-## Backwards Compatibility
-
-### Guarantees
-1. flux9s works without any plugins loaded
-2. Plugin loading failures are logged, not fatal
-3. No config file changes required
-4. Existing CLI commands unchanged
-5. Performance impact only when plugins enabled
-
-### Implementation
-```
-AppState {
-    plugins: Option<PluginRegistry>  // None if no plugins or load failed
-}
-
-// In views
-if let Some(plugins) = &app.state.plugins {
-    render_plugin_columns(plugins, ...);
-}
-```
-
-### Testing
-- Test suite includes "no plugins" scenario
-- Plugin errors logged with `tracing::warn`
-- Graceful degradation on data fetch failures
-
-## ConfigHub Agent Integration
-
-The plugin system is designed to support the ConfigHub Agent use case:
-
-### What ConfigHub Agent Provides
-- **Ownership detection**: Who owns each resource (ConfigHub, Flux, Argo, Helm, Native)
-- **CCVE scanning**: Configuration vulnerabilities (637 patterns)
-- **Drift detection**: Live state vs desired state
-- **Relationship graphs**: Resource ownership chains (GitRepo → Kustomization → Deployment)
-- **Fleet queries**: Query across all resources
-
-### How Plugins Enable This
-
-**Data Source**: Kubernetes Service connector
-```yaml
-source:
-  type: kubernetes_service
-  service: confighub-agent
-  namespace: confighub-system
-  port: 8080
-  path: /api/map
-```
-
-**Ownership Columns**: Show owner for all resources
-```yaml
-columns:
-  - name: owner
-    path: .ownership.owner  # ConfigHub, Flux, Argo, Helm, Native
-    width: 12
-
-  - name: unit
-    path: .ownership.unit   # ConfigHub unit
-    width: 15
-```
-
-**Issue Detection**: Show CCVEs
-```yaml
-columns:
-  - name: issues
-    path: .ccve.count
-    width: 8
-    renderer: issue_badge  # ⚠ 1, 🔴 2
-```
-
-**Custom Views**: Detailed ownership and relationships
-```yaml
-views:
-  - name: agent_detail      # Show ownership, drift, CCVEs for selected resource
-    keybinding: ":agent"
-
-  - name: relationships     # Show resource ownership graph
-    keybinding: ":graph"
-```
-
-### Expected Data Format
-
-ConfigHub Agent's `/api/map` endpoint returns:
-```json
-{
-  "resources": [
-    {
-      "kind": "Kustomization",
-      "namespace": "flux-system",
-      "name": "apps",
-      "ownership": {
-        "owner": "ConfigHub",
-        "unit": "apps",
-        "space": "prod"
-      },
-      "ccve": {
-        "count": 1,
-        "findings": [...]
-      },
-      "drift": {
-        "status": "detected"
-      }
-    }
-  ]
-}
-```
-
-Plugins use JSONPath to extract values from this structure.
-
-## Design Decisions (Resolved)
-
-1. **Plugin directory**: `~/.config/flux9s/plugins/`
-2. **Default refresh interval**: 30s (reasonable for most use cases)
-3. **Column name conflicts**: Error out with verbose message listing conflicting plugins
-4. **View discovery**: `:plugins` view lists all plugins and their views
-5. **Data format**: No enforcement, JSONPath extracts whatever exists
-6. **TLS/Service Mesh**: Not in v0.7.0, architecture supports future extension
-7. **Resource validation**: Accept any string (maximum flexibility for custom CRDs)
+- Some resources benefit from YAML view (Applications)
+- Some don't (simple status CRDs)
+- Keeps UI clean when features aren't useful
+- Default to true for YAML, true for describe
 
 ## Success Criteria
 
 ### Functional
-- [ ] Load plugins from config directory
-- [ ] Kubernetes Service connector works
-- [ ] Plugin columns render correctly
-- [ ] Theme styles apply
-- [ ] JSONPath extraction works
-- [ ] Plugin views accessible via keybindings
-- [ ] CLI commands functional
+- [x] `:argo` command shows Argo Applications
+- [x] YAML view works for plugin resources
+- [ ] Plugin columns appear in Flux resource list (enrichment - Phase 4)
+- [x] Multiple plugins can coexist
+- [x] Namespace filtering works
 
 ### Quality
-- [ ] All tests pass
-- [ ] No clippy warnings
-- [ ] Documentation complete
-- [ ] Example plugins tested
-- [ ] Performance < 100ms overhead
-
-### Compatibility
-- [ ] flux9s works without plugins
-- [ ] No breaking changes
-- [ ] Plugin errors don't crash app
-
-## Timeline
-
-- **Phase 1**: Foundation (1 week)
-- **Phase 2**: Data Sources (1 week)
-- **Phase 3**: Column Rendering (1 week)
-- **Phase 4**: Custom Views (1 week)
-- **Phase 5**: Polish (1 week)
-
-**Total**: 5 weeks to v0.7.0
+- [x] No performance regression
+- [x] Plugin errors don't crash app
+- [x] Clear error messages for invalid YAML
 
 ## Next Steps
 
-1. Review and approve this plan
-2. Start Phase 1 implementation
-3. Create minimal working example
-4. Iterate based on feedback
-5. Test with real ConfigHub Agent integration
+1. Complete column enrichment for existing Flux views (Phase 4)
+2. Add K8s CRD connector for data enrichment
+3. Create additional example plugins (Crossplane, Kyverno, cert-manager)
+4. Update documentation site with plugin guide

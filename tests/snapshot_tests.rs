@@ -3,8 +3,10 @@
 //! These tests use insta to capture and compare the rendered output of the TUI views.
 //! Run `cargo insta review` to review and accept snapshot changes.
 
+use flux9s::config::schema::PluginConfig;
 use flux9s::config::{Config, LoggerConfig, UiConfig};
 use flux9s::tui::Theme;
+use flux9s::tui::app::state::ControllerPodState;
 use flux9s::tui::views::{
     render_footer, render_header, render_resource_detail, render_resource_list,
     render_resource_yaml,
@@ -38,6 +40,9 @@ fn create_test_config() -> Config {
             buffer: 1000,
             since_seconds: 3600,
             text_wrap: false,
+        },
+        plugin: PluginConfig {
+            kubernetes_dns_suffix: ".svc.cluster.local".to_string(),
         },
         context_skins: HashMap::new(),
         cluster: HashMap::new(),
@@ -113,6 +118,7 @@ fn test_render_header() {
     let config = create_test_config();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let controller_pods = ControllerPodState::default();
 
     terminal
         .draw(|frame| {
@@ -121,6 +127,7 @@ fn test_render_header() {
                 frame,
                 area,
                 &state,
+                &controller_pods,
                 "test-context",
                 &None,
                 "",
@@ -146,6 +153,7 @@ fn test_render_header_with_namespace() {
     let config = create_test_config();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let controller_pods = ControllerPodState::default();
 
     terminal
         .draw(|frame| {
@@ -154,6 +162,7 @@ fn test_render_header_with_namespace() {
                 frame,
                 area,
                 &state,
+                &controller_pods,
                 "test-context",
                 &Some("flux-system".to_string()),
                 "",
@@ -179,6 +188,7 @@ fn test_render_header_with_filter() {
     let config = create_test_config();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let controller_pods = ControllerPodState::default();
 
     terminal
         .draw(|frame| {
@@ -187,6 +197,7 @@ fn test_render_header_with_filter() {
                 frame,
                 area,
                 &state,
+                &controller_pods,
                 "test-context",
                 &None,
                 "kustomization",
@@ -232,6 +243,7 @@ fn test_render_footer_navigation() {
                 &theme,
                 &[],
                 &None,
+                None,
             );
         })
         .unwrap();
@@ -265,6 +277,7 @@ fn test_render_footer_command_mode() {
                 &theme,
                 &[],
                 &None,
+                None,
             );
         })
         .unwrap();
@@ -298,6 +311,7 @@ fn test_render_footer_filter_mode() {
                 &theme,
                 &[],
                 &None,
+                None,
             );
         })
         .unwrap();
@@ -326,7 +340,7 @@ fn test_render_resource_list() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
                 area,
@@ -338,6 +352,7 @@ fn test_render_resource_list() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                None,
             );
         })
         .unwrap();
@@ -366,7 +381,7 @@ fn test_render_resource_list_with_selection() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
                 area,
@@ -378,6 +393,7 @@ fn test_render_resource_list_with_selection() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                None,
             );
         })
         .unwrap();
@@ -403,7 +419,7 @@ fn test_render_resource_list_with_resource_type_filter() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
                 area,
@@ -415,6 +431,7 @@ fn test_render_resource_list_with_resource_type_filter() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                None,
             );
         })
         .unwrap();
@@ -433,7 +450,7 @@ fn test_render_resource_list_empty() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
                 area,
@@ -445,6 +462,7 @@ fn test_render_resource_list_empty() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                None,
             );
         })
         .unwrap();
@@ -462,7 +480,7 @@ fn test_render_resource_detail() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_detail(
                 frame,
                 area,
@@ -487,7 +505,7 @@ fn test_render_resource_detail_no_selection() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_detail(frame, area, &None, &state, &resource_objects, &theme);
         })
         .unwrap();
@@ -506,7 +524,7 @@ fn test_render_resource_yaml_no_selection() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_yaml(
                 frame,
                 area,
@@ -535,7 +553,7 @@ fn test_render_resource_yaml_pending() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_yaml(
                 frame,
                 area,
@@ -590,7 +608,7 @@ fn test_render_resource_yaml_with_data() {
     terminal
         .draw(|frame| {
             let area = frame.size();
-            let resource_objects = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+            let resource_objects = HashMap::new();
             render_resource_yaml(
                 frame,
                 area,

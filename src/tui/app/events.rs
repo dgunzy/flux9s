@@ -97,10 +97,8 @@ impl App {
                         self.namespace = new_namespace.clone();
 
                         self.state.clear();
-                        {
-                            let mut objects = self.resource_objects.write().unwrap();
-                            objects.clear();
-                        }
+                        self.resource_objects.clear();
+                        self.controller_pods.clear();
                         if let Some(ref mut watcher) = self.watcher {
                             if let Err(e) = watcher.set_namespace(new_namespace) {
                                 self.set_status_message((
@@ -173,22 +171,7 @@ impl App {
             | crossterm::event::KeyCode::Char('R')
             | crossterm::event::KeyCode::Char('W') => {
                 // Handle Flux operations - works from list, favorites, and detail view
-                let resource_info = if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    let resources = self.get_filtered_resources();
-                    resources.get(self.view_state.selected_index).cloned()
-                } else if self.view_state.current_view == View::ResourceDetail {
-                    if let Some(ref key) = self.selection_state.selected_resource_key {
-                        self.state.get(key)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(resource) = resource_info {
+                if let Some(resource) = self.get_current_resource() {
                     let op_key = match key.code {
                         crossterm::event::KeyCode::Char('s') => 's',
                         crossterm::event::KeyCode::Char('r') => 'r',
@@ -261,22 +244,7 @@ impl App {
             }
             crossterm::event::KeyCode::Char('t') => {
                 // Trace command - works from list, favorites, and detail view
-                let resource_info = if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    let resources = self.get_filtered_resources();
-                    resources.get(self.view_state.selected_index).cloned()
-                } else if self.view_state.current_view == View::ResourceDetail {
-                    if let Some(ref key) = self.selection_state.selected_resource_key {
-                        self.state.get(key)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(resource) = resource_info {
+                if let Some(resource) = self.get_current_resource() {
                     self.async_state.trace_pending = Some(ResourceKey::new(
                         resource.resource_type.clone(),
                         resource.namespace.clone(),
@@ -419,22 +387,7 @@ impl App {
             }
             crossterm::event::KeyCode::Char('h') => {
                 // View reconciliation history - works from list, favorites, and detail view
-                let resource_info = if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    let resources = self.get_filtered_resources();
-                    resources.get(self.view_state.selected_index).cloned()
-                } else if self.view_state.current_view == View::ResourceDetail {
-                    if let Some(ref key) = self.selection_state.selected_resource_key {
-                        self.state.get(key)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(resource) = resource_info {
+                if let Some(resource) = self.get_current_resource() {
                     use crate::models::FluxResourceKind;
 
                     let key = crate::watcher::resource_key(
@@ -444,8 +397,7 @@ impl App {
                     );
 
                     // Check if resource object exists and has status.history
-                    let objects = self.resource_objects.read().unwrap();
-                    let obj = objects.get(&key);
+                    let obj = self.resource_objects.get(&key);
                     let has_history = obj
                         .and_then(|obj| obj.get("status"))
                         .and_then(|s| s.get("history"))
@@ -456,8 +408,6 @@ impl App {
                         FluxResourceKind::parse_optional(&resource.resource_type),
                         Some(FluxResourceKind::Kustomization)
                     );
-
-                    drop(objects); // Release lock before switching view
 
                     if has_history {
                         // Save current view as previous list view before navigating
@@ -492,22 +442,7 @@ impl App {
             }
             crossterm::event::KeyCode::Char('g') => {
                 // View resource graph - works from list, favorites, and detail view
-                let resource_info = if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    let resources = self.get_filtered_resources();
-                    resources.get(self.view_state.selected_index).cloned()
-                } else if self.view_state.current_view == View::ResourceDetail {
-                    if let Some(ref key) = self.selection_state.selected_resource_key {
-                        self.state.get(key)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(resource) = resource_info {
+                if let Some(resource) = self.get_current_resource() {
                     // Check if resource type supports graph view
                     if !crate::trace::is_resource_type_with_graph(&resource.resource_type) {
                         self.set_status_message((
@@ -623,18 +558,51 @@ impl App {
                     // Update scroll if needed (assuming we have enough visible space)
                     let visible_height = 20; // Rough estimate for submenu height
                     submenu.update_scroll(visible_height);
+                    // Preview theme if this is a skin submenu
+                    self.preview_theme_in_submenu();
                 }
                 crossterm::event::KeyCode::Char('k') | crossterm::event::KeyCode::Up => {
                     submenu.move_up();
                     let visible_height = 20;
                     submenu.update_scroll(visible_height);
+                    // Preview theme if this is a skin submenu
+                    self.preview_theme_in_submenu();
+                }
+                crossterm::event::KeyCode::Char('s') | crossterm::event::KeyCode::Char('S') => {
+                    // Save/persist current selection (for skin submenu)
+                    if submenu.command == "skin" {
+                        if let Some(value) = submenu.selected_value() {
+                            match self.persist_theme(&value) {
+                                Ok(_) => {
+                                    // Close submenu and clear preview
+                                    self.view_state.submenu_state = None;
+                                    self.view_state.preview_original_theme = None;
+                                    let readonly_msg = if self.config.read_only {
+                                        " (readonly mode)"
+                                    } else {
+                                        ""
+                                    };
+                                    let msg = format!(
+                                        "Theme '{}' saved to config{}",
+                                        value, readonly_msg
+                                    );
+                                    self.set_status_message((msg, false));
+                                }
+                                Err(e) => {
+                                    let msg = format!("Failed to save theme: {}", e);
+                                    self.set_status_message((msg, true));
+                                }
+                            }
+                        }
+                    }
                 }
                 crossterm::event::KeyCode::Enter => {
                     // Select the current item and execute the command
                     if let Some(value) = submenu.selected_value() {
                         let command = submenu.command.clone();
-                        // Close submenu
+                        // Close submenu and clear preview
                         self.view_state.submenu_state = None;
+                        self.view_state.preview_original_theme = None;
                         // Execute the command with the selected value
                         // For context command, trigger context switch
                         if command == "ctx" {
@@ -643,17 +611,48 @@ impl App {
                                 format!("Switching to context '{}'...", value),
                                 false,
                             ));
+                        } else if command == "skin" {
+                            // Change theme (already previewed, so just confirm)
+                            match self.set_theme(&value) {
+                                Ok(_) => {
+                                    let msg = format!("Theme changed to: {}", value);
+                                    self.set_status_message((msg, false));
+                                }
+                                Err(e) => {
+                                    let msg = format!("Failed to load theme '{}': {}", value, e);
+                                    self.set_status_message((msg, true));
+                                }
+                            }
                         }
                     }
                 }
                 crossterm::event::KeyCode::Esc => {
-                    // Cancel submenu
+                    // Cancel submenu - restore original theme if previewing
+                    if submenu.command == "skin" {
+                        if let Some(original_theme) = self.view_state.preview_original_theme.clone()
+                        {
+                            let _ = self.set_theme(&original_theme);
+                        }
+                    }
                     self.view_state.submenu_state = None;
+                    self.view_state.preview_original_theme = None;
                 }
                 _ => {}
             }
         }
         None
+    }
+
+    /// Preview theme when navigating skin submenu
+    fn preview_theme_in_submenu(&mut self) {
+        if let Some(ref submenu) = self.view_state.submenu_state {
+            if submenu.command == "skin" {
+                if let Some(theme_name) = submenu.selected_value() {
+                    // Preview the theme (don't show errors, just silently fail)
+                    let _ = self.preview_theme(&theme_name);
+                }
+            }
+        }
     }
 
     fn handle_confirmation_key(&mut self, key: KeyEvent) -> Option<bool> {
@@ -768,8 +767,9 @@ impl App {
         }
 
         // Use centralized command registry to find matches
-        // This prioritizes CRD commands over app commands
-        let matches = crate::tui::commands::find_matching_commands(&cmd_lower);
+        // This prioritizes CRD commands over plugin commands over app commands
+        let plugin_registry = self.plugin_registry.as_ref();
+        let matches = crate::tui::commands::find_matching_commands(&cmd_lower, plugin_registry);
 
         if matches.is_empty() {
             return;
@@ -819,22 +819,62 @@ impl App {
         // Handle skin/theme change command
         if crate::tui::commands::is_skin_command(&cmd_lower) {
             let theme_name = crate::tui::commands::extract_command_arg(cmd, "skin");
-            if let Some(name) = theme_name {
-                match self.set_theme(&name) {
-                    Ok(_) => {
-                        let msg = format!("Theme changed to: {}", name);
-                        self.set_status_message((msg, false));
-                    }
-                    Err(e) => {
-                        let msg = format!(
-                            "Failed to load theme '{}': {}. Use `default` to return to default theme",
-                            name, e
-                        );
-                        self.set_status_message((msg, true));
+            match theme_name {
+                Some(name) => {
+                    // Argument provided - change theme directly
+                    match self.set_theme(&name) {
+                        Ok(_) => {
+                            let msg = format!("Theme changed to: {}", name);
+                            self.set_status_message((msg, false));
+                        }
+                        Err(e) => {
+                            let msg = format!(
+                                "Failed to load theme '{}': {}. Use `default` to return to default theme",
+                                name, e
+                            );
+                            self.set_status_message((msg, true));
+                        }
                     }
                 }
-            } else {
-                self.set_status_message(("Usage: :skin <theme-name>".to_string(), true));
+                None => {
+                    // No argument - show submenu or list themes
+                    let current_theme = if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
+                        env_skin
+                    } else if let Some(context_skin) = self.config.context_skins.get(&self.context)
+                    {
+                        context_skin.clone()
+                    } else if self.config.read_only && self.config.ui.skin_read_only.is_some() {
+                        self.config.ui.skin_read_only.as_ref().unwrap().clone()
+                    } else {
+                        self.config.ui.skin.clone()
+                    };
+
+                    if let Some(submenu) = crate::tui::commands::get_command_submenu(
+                        cmd,
+                        &self.context,
+                        &current_theme,
+                    ) {
+                        // Store original theme for skin submenu preview
+                        if submenu.command == "skin" {
+                            self.view_state.preview_original_theme = Some(current_theme.clone());
+                            // Preview the first theme immediately
+                            if let Some(first_theme) = submenu.selected_value() {
+                                let _ = self.preview_theme(&first_theme);
+                            }
+                        }
+                        // Open submenu for selection
+                        self.view_state.submenu_state = Some(submenu);
+                    } else {
+                        // Fallback: List available themes
+                        let themes = crate::config::theme_loader::ThemeLoader::list_themes();
+                        let msg = format!(
+                            "Available themes: {}. Current: {}. Usage: :skin <theme-name>",
+                            themes.join(", "),
+                            current_theme
+                        );
+                        self.set_status_message((msg, false));
+                    }
+                }
             }
             return None;
         }
@@ -910,10 +950,32 @@ impl App {
                     self.set_status_message((format!("Switching to context '{}'...", ctx), false));
                 }
                 None => {
-                    // Check if command supports submenu
-                    if let Some(submenu) =
-                        crate::tui::commands::get_command_submenu(cmd, &self.context)
+                    // Get current theme name (considering readonly mode and env vars)
+                    let current_theme = if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
+                        env_skin
+                    } else if let Some(context_skin) = self.config.context_skins.get(&self.context)
                     {
+                        context_skin.clone()
+                    } else if self.config.read_only && self.config.ui.skin_read_only.is_some() {
+                        self.config.ui.skin_read_only.as_ref().unwrap().clone()
+                    } else {
+                        self.config.ui.skin.clone()
+                    };
+
+                    // Check if command supports submenu
+                    if let Some(submenu) = crate::tui::commands::get_command_submenu(
+                        cmd,
+                        &self.context,
+                        &current_theme,
+                    ) {
+                        // Store original theme for skin submenu preview
+                        if submenu.command == "skin" {
+                            self.view_state.preview_original_theme = Some(current_theme.clone());
+                            // Preview the first theme immediately
+                            if let Some(first_theme) = submenu.selected_value() {
+                                let _ = self.preview_theme(&first_theme);
+                            }
+                        }
                         // Open submenu for selection
                         self.view_state.submenu_state = Some(submenu);
                     } else {
@@ -961,11 +1023,7 @@ impl App {
 
                 // Clear state when switching namespaces (will repopulate from new watchers)
                 self.state().clear();
-
-                {
-                    let mut objects = self.resource_objects().write().unwrap();
-                    objects.clear();
-                }
+                self.resource_objects.clear();
 
                 // Restart watchers with new namespace (more efficient than watching all)
                 if let Some(ref mut watcher) = self.watcher {
@@ -1026,11 +1084,25 @@ impl App {
             return None;
         }
 
+        // Check for CRD resource command first
         if let Some(display_name) = crate::watcher::get_display_name_for_command(&cmd_lower) {
             self.view_state.selected_resource_type = Some(display_name.to_string());
             self.view_state.selected_index = 0;
             self.view_state.scroll_offset = 0;
             self.invalidate_layout_cache(); // Resource type filter affects header display
+            return None;
+        }
+
+        // Check for plugin watched resource command
+        if let Some(display_name) = crate::tui::commands::get_plugin_display_name_for_command(
+            &cmd_lower,
+            self.plugin_registry.as_ref(),
+        ) {
+            self.view_state.selected_resource_type = Some(display_name);
+            self.view_state.selected_index = 0;
+            self.view_state.scroll_offset = 0;
+            self.invalidate_layout_cache(); // Resource type filter affects header display
+            return None;
         }
 
         None

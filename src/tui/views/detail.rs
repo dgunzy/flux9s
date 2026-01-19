@@ -10,8 +10,6 @@ use ratatui::{
     widgets::Paragraph,
 };
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::RwLock;
 
 /// Render the resource detail view
 pub fn render_resource_detail(
@@ -19,7 +17,7 @@ pub fn render_resource_detail(
     area: Rect,
     selected_resource_key: &Option<String>,
     state: &ResourceState,
-    resource_objects: &Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    resource_objects: &HashMap<String, serde_json::Value>,
     theme: &Theme,
 ) {
     let key = match selected_resource_key {
@@ -44,8 +42,7 @@ pub fn render_resource_detail(
         }
     };
 
-    let objects = resource_objects.read().unwrap();
-    let obj_json = objects.get(key);
+    let obj_json = resource_objects.get(key);
 
     let mut lines = vec![
         Line::from(vec![

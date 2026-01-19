@@ -30,9 +30,10 @@ pub fn render_footer(
     theme: &Theme,
     namespace_hotkeys: &[String],
     current_namespace: &Option<String>,
+    plugin_registry: Option<&crate::plugins::PluginRegistry>,
 ) -> usize {
     if command_mode {
-        return render_command_footer(f, area, command_buffer, theme);
+        return render_command_footer(f, area, command_buffer, theme, plugin_registry);
     }
 
     if filter_mode {
@@ -80,7 +81,13 @@ pub fn render_footer(
     1 // Single line for these cases
 }
 
-fn render_command_footer(f: &mut Frame, area: Rect, command_buffer: &str, theme: &Theme) -> usize {
+fn render_command_footer(
+    f: &mut Frame,
+    area: Rect,
+    command_buffer: &str,
+    theme: &Theme,
+    plugin_registry: Option<&crate::plugins::PluginRegistry>,
+) -> usize {
     let cmd = command_buffer.trim().to_lowercase();
     let mut command_line = vec![
         Span::styled(":", theme.command_prompt_style()),
@@ -90,7 +97,7 @@ fn render_command_footer(f: &mut Frame, area: Rect, command_buffer: &str, theme:
 
     // Add autocomplete hint
     if !cmd.is_empty() {
-        let matches = crate::tui::commands::find_matching_commands(&cmd);
+        let matches = crate::tui::commands::find_matching_commands(&cmd, plugin_registry);
         if !matches.is_empty() {
             // Show first match, or multiple if there are conflicts
             if matches.len() == 1 {

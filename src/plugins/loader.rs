@@ -9,6 +9,9 @@ use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+/// Default subdirectory name for plugins within the config directory
+const PLUGINS_SUBDIR: &str = "plugins";
+
 /// Plugin loader
 pub struct PluginLoader {
     plugins_dir: PathBuf,
@@ -27,10 +30,23 @@ impl PluginLoader {
     }
 
     /// Get the default plugins directory
+    ///
+    /// Checks in order:
+    /// 1. FLUX9S_PLUGINS_DIR environment variable (highest priority)
+    /// 2. Config directory from config system (config_dir/plugins)
+    ///
+    /// This ensures consistency with the rest of the flux9s configuration system
+    /// and allows users to override the plugin directory location.
     pub fn get_plugins_dir() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir().context("Could not determine config directory")?;
+        // Check environment variable first (highest priority)
+        if let Ok(dir) = std::env::var("FLUX9S_PLUGINS_DIR") {
+            tracing::debug!("Using plugin directory from FLUX9S_PLUGINS_DIR: {}", dir);
+            return Ok(PathBuf::from(dir));
+        }
 
-        Ok(config_dir.join("flux9s").join("plugins"))
+        // Use config system helper (handles FLUX9S_CONFIG_DIR env var and platform-specific paths)
+        let config_dir = crate::config::paths::config_dir();
+        Ok(config_dir.join(PLUGINS_SUBDIR))
     }
 
     /// Load all plugins from the plugins directory
@@ -267,7 +283,7 @@ mod tests {
             version: "1.0.0".to_string(),
             enabled: true,
             description: None,
-            source: DataSourceConfig {
+            source: Some(DataSourceConfig {
                 source_type: DataSourceType::File,
                 file_path: Some("/tmp/test.json".to_string()),
                 service: None,
@@ -283,11 +299,12 @@ mod tests {
                 auth: None,
                 refresh_interval: None,
                 timeout: None,
-            },
+            }),
             resources: vec!["Deployment".to_string()],
             columns: vec![],
             views: vec![],
             view_columns: Default::default(),
+            watched_resources: vec![],
         }
     }
 

@@ -58,6 +58,23 @@ pub struct Theme {
     pub footer_text: Color,
 }
 
+impl Theme {
+    /// Get status ready color (green)
+    pub fn status_ready_color(&self) -> Color {
+        self.status_ready
+    }
+
+    /// Get status warning color (yellow)
+    pub fn status_warning_color(&self) -> Color {
+        self.status_pending
+    }
+
+    /// Get status error color (red)
+    pub fn status_error_color(&self) -> Color {
+        self.status_error
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self {

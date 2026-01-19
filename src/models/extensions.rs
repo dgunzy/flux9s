@@ -6,11 +6,6 @@
 //! These extensions are implemented externally (not modifying generated code)
 //! to allow safe regeneration of models without conflicts.
 
-// TODO: Implement extension traits for:
-// - Status checking (is_ready, is_reconciling, is_failed)
-// - Display formatting (status icons, summaries)
-// - Flux-specific parsing (interval format, condition extraction)
-
 /// Trait for checking resource readiness status
 /// Reserved for future status checking abstraction
 #[allow(dead_code)]

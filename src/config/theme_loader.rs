@@ -152,7 +152,8 @@ impl ThemeLoader {
     /// Resolution order:
     /// 1. Config skins directory ($XDG_CONFIG_HOME/flux9s/skins/{name}.yaml) - user-installed skins
     /// 2. Data skins directory ($XDG_DATA_HOME/flux9s/skins/{name}.yaml) - legacy location
-    /// 3. Built-in default skin
+    /// 3. Embedded themes (built into binary)
+    /// 4. Built-in default skin
     pub fn load_theme(name: &str) -> Result<Theme> {
         // Try config skins directory first (where user-installed skins go)
         let config_skin_path = paths::skins_dir().join(format!("{}.yaml", name));
@@ -166,13 +167,18 @@ impl ThemeLoader {
             return Self::load_from_file(&data_skin_path);
         }
 
+        // Try embedded themes
+        if let Ok(theme) = super::embedded_themes::load_embedded_theme(name) {
+            return Ok(theme);
+        }
+
         // Fall back to default skin
         if name == "default" {
             return Ok(Theme::default());
         }
 
         Err(anyhow::anyhow!(
-            "Skin '{}' not found in either \n '{}'\n  or '{}'",
+            "Skin '{}' not found in either \n '{}'\n  or '{}'\n  or in embedded themes",
             name,
             paths::skins_dir().join(format!("{}.yaml", name)).display(),
             paths::user_skins_dir()
@@ -315,10 +321,17 @@ impl ThemeLoader {
 
         tracing::debug!("Loading theme from: {}", path.display());
 
-        let skin: SkinFile = serde_yaml::from_str(&contents)
-            .with_context(|| format!("Failed to parse theme file: {}", path.display()))?;
+        Self::load_from_yaml(&contents)
+    }
 
-        tracing::debug!("Successfully parsed theme file");
+    /// Load theme from YAML string content
+    ///
+    /// This is used for both file-based themes and embedded themes.
+    pub fn load_from_yaml(yaml_content: &str) -> Result<Theme> {
+        let skin: SkinFile =
+            serde_yaml::from_str(yaml_content).with_context(|| "Failed to parse theme YAML")?;
+
+        tracing::debug!("Successfully parsed theme YAML");
         Self::convert_skin_to_theme(skin)
     }
 
@@ -455,15 +468,28 @@ impl ThemeLoader {
     }
 
     /// List available skins
+    ///
+    /// Returns all available themes in this order:
+    /// 1. Embedded themes (built into binary)
+    /// 2. User-installed themes from config directory
+    /// 3. User-installed themes from data directory (legacy)
+    /// 4. Default theme
     pub fn list_themes() -> Vec<String> {
         let mut skins = Vec::new();
 
-        // Check config skins directory first (where user-installed skins go)
+        // Start with embedded themes
+        let embedded = super::embedded_themes::list_embedded_themes();
+        skins.extend(embedded);
+
+        // Check config skins directory (where user-installed skins go)
         if let Ok(entries) = std::fs::read_dir(paths::skins_dir()) {
             for entry in entries.flatten() {
                 if let Some(name) = entry.file_name().to_str() {
                     if name.ends_with(".yaml") {
-                        skins.push(name.trim_end_matches(".yaml").to_string());
+                        let skin_name = name.trim_end_matches(".yaml").to_string();
+                        if !skins.contains(&skin_name) {
+                            skins.push(skin_name);
+                        }
                     }
                 }
             }
@@ -483,9 +509,9 @@ impl ThemeLoader {
             }
         }
 
-        // Always include default
+        // Always include default if not already present
         if !skins.contains(&"default".to_string()) {
-            skins.insert(0, "default".to_string());
+            skins.push("default".to_string());
         }
 
         skins.sort();
@@ -644,5 +670,96 @@ mod tests {
     fn test_parse_invalid_color() {
         assert!(parse_color("notacolor").is_err());
         assert!(parse_color("#gggggg").is_err());
+    }
+
+    #[test]
+    fn test_load_from_yaml() {
+        // Test loading theme from YAML string
+        // Use a simple valid theme YAML (similar to embedded themes)
+        let yaml_content = include_str!("embedded_themes/dracula.yaml");
+
+        let result = ThemeLoader::load_from_yaml(yaml_content);
+        assert!(result.is_ok(), "Should parse valid YAML theme");
+        let theme = result.unwrap();
+        // Verify theme was loaded correctly
+        let _ = theme.header_context;
+        let _ = theme.text_primary;
+    }
+
+    #[test]
+    fn test_load_from_yaml_invalid() {
+        // Test loading invalid YAML
+        let invalid_yaml = "not valid yaml: [";
+        let result = ThemeLoader::load_from_yaml(invalid_yaml);
+        assert!(result.is_err(), "Should fail on invalid YAML");
+    }
+
+    #[test]
+    fn test_load_theme_embedded_fallback() {
+        // Test that load_theme can load embedded themes when file doesn't exist
+        // This test assumes no file exists for "dracula" in config/data directories
+        // (which should be true in test environment)
+
+        // First verify dracula is an embedded theme
+        assert!(crate::config::embedded_themes::is_embedded_theme("dracula"));
+
+        // Try to load it - should succeed via embedded themes fallback
+        let result = ThemeLoader::load_theme("dracula");
+        assert!(
+            result.is_ok(),
+            "Should load dracula from embedded themes: {:?}",
+            result.err()
+        );
+        let theme = result.unwrap();
+        let _ = theme.header_context;
+    }
+
+    #[test]
+    fn test_load_theme_default() {
+        // Test loading default theme
+        let result = ThemeLoader::load_theme("default");
+        assert!(result.is_ok(), "Should load default theme");
+        let theme = result.unwrap();
+        let _ = theme.header_context;
+    }
+
+    #[test]
+    fn test_load_theme_nonexistent() {
+        // Test loading a theme that doesn't exist anywhere
+        let result = ThemeLoader::load_theme("nonexistent-theme-12345");
+        assert!(result.is_err(), "Should fail to load nonexistent theme");
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("not found") || error_msg.contains("nonexistent"));
+    }
+
+    #[test]
+    fn test_list_themes_includes_embedded() {
+        // Test that list_themes includes embedded themes
+        let themes = ThemeLoader::list_themes();
+
+        // Should include at least some embedded themes
+        assert!(themes.contains(&"dracula".to_string()) || themes.contains(&"nord".to_string()));
+
+        // Should include default
+        assert!(themes.contains(&"default".to_string()));
+
+        // Should be sorted
+        let mut sorted = themes.clone();
+        sorted.sort();
+        assert_eq!(themes, sorted, "Themes should be sorted");
+    }
+
+    #[test]
+    fn test_list_themes_no_duplicates() {
+        // Test that list_themes doesn't include duplicates
+        let themes = ThemeLoader::list_themes();
+        let mut seen = std::collections::HashSet::new();
+        for theme in &themes {
+            assert!(
+                seen.insert(theme),
+                "Theme '{}' appears multiple times",
+                theme
+            );
+        }
     }
 }

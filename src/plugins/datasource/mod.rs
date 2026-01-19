@@ -7,11 +7,8 @@
 //! - Local files (for testing)
 
 mod connector;
+mod file;
 mod http;
 mod k8s_service;
-mod file;
 
 pub use connector::{DataSourceConnector, create_connector};
-pub use http::HttpDataSource;
-pub use k8s_service::KubernetesServiceDataSource;
-pub use file::FileDataSource;

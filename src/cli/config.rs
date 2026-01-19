@@ -72,8 +72,8 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
     match cmd {
         ConfigSubcommand::Get { key } => {
             // Load config (will use defaults if no file exists)
-            let cluster = None; // TODO: Get from kubeconfig
-            let context = None; // TODO: Get from kubeconfig
+            let cluster = None;
+            let context = None;
             let config =
                 ConfigLoader::load(cluster, context).context("Failed to load configuration")?;
 
@@ -113,8 +113,8 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
             }
         }
         ConfigSubcommand::List => {
-            let cluster = None; // TODO: Get from kubeconfig
-            let context = None; // TODO: Get from kubeconfig
+            let cluster = None;
+            let context = None;
             let config =
                 ConfigLoader::load(cluster, context).context("Failed to load configuration")?;
 
@@ -126,8 +126,8 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
             println!("{}", config_path.display());
         }
         ConfigSubcommand::Validate => {
-            let cluster = None; // TODO: Get from kubeconfig
-            let context = None; // TODO: Get from kubeconfig
+            let cluster = None;
+            let context = None;
 
             // Validate by actually loading and parsing the config
             // This will catch YAML syntax errors, invalid types, etc.
@@ -163,8 +163,8 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
                     ThemeLoader::install_theme(&file).context("Failed to install skin")?;
 
                 // Automatically set the skin in config
-                let cluster = None; // TODO: Get from kubeconfig
-                let context = None; // TODO: Get from kubeconfig
+                let cluster = None;
+                let context = None;
                 let mut config = ConfigLoader::load(cluster, context)
                     .unwrap_or_else(|_| ConfigLoader::load_defaults());
 

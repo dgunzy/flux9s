@@ -7,6 +7,21 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 use std::path::{Path, PathBuf};
 
+/// Convert a string to title case (e.g., "my-plugin" -> "My Plugin")
+fn to_title_case(s: &str) -> String {
+    s.split(['-', '_'])
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Plugin subcommands
 #[derive(Subcommand, Debug)]
 pub enum PluginSubcommand {
@@ -77,10 +92,22 @@ async fn list_plugins() -> Result<()> {
         if let Some(desc) = &plugin.description {
             println!("    Description: {}", desc);
         }
-        println!("    Source: {:?}", plugin.source.source_type);
-        println!("    Resources: {}", plugin.resources.join(", "));
-        println!("    Columns: {}", plugin.columns.len());
-        println!("    Views: {}", plugin.views.len());
+        if let Some(ref source) = plugin.source {
+            println!("    Source: {:?}", source.source_type);
+            println!("    Resources: {}", plugin.resources.join(", "));
+        }
+        if !plugin.columns.is_empty() {
+            println!("    Columns: {}", plugin.columns.len());
+        }
+        if !plugin.views.is_empty() {
+            println!("    Views: {}", plugin.views.len());
+        }
+        if !plugin.watched_resources.is_empty() {
+            println!("    Watched resources: {}", plugin.watched_resources.len());
+            for watched in &plugin.watched_resources {
+                println!("      - {} ({})", watched.display_name(), watched.command);
+            }
+        }
         println!();
     }
 
@@ -113,10 +140,22 @@ async fn validate_plugin(path: &PathBuf) -> Result<()> {
     if let Some(desc) = &plugin.description {
         println!("  Description: {}", desc);
     }
-    println!("  Source type: {:?}", plugin.source.source_type);
-    println!("  Resources: {}", plugin.resources.len());
-    println!("  Columns: {}", plugin.columns.len());
-    println!("  Views: {}", plugin.views.len());
+    if let Some(ref source) = plugin.source {
+        println!("  Source type: {:?}", source.source_type);
+        println!("  Resources: {}", plugin.resources.len());
+    }
+    if !plugin.columns.is_empty() {
+        println!("  Columns: {}", plugin.columns.len());
+    }
+    if !plugin.views.is_empty() {
+        println!("  Views: {}", plugin.views.len());
+    }
+    if !plugin.watched_resources.is_empty() {
+        println!("  Watched resources: {}", plugin.watched_resources.len());
+        for watched in &plugin.watched_resources {
+            println!("    - {} ({})", watched.display_name(), watched.command);
+        }
+    }
 
     Ok(())
 }
@@ -140,60 +179,107 @@ async fn init_plugin(name: &str, output: Option<&Path>) -> Result<()> {
         );
     }
 
-    // Generate template
+    // Generate template - focused on watched_resources (CRD watching)
     let template = format!(
         r#"name: {name}
 version: 1.0.0
 enabled: true
-description: "{name} plugin"
+description: "{name} plugin - watch custom Kubernetes CRDs"
 
-# Data source configuration
-source:
-  # Option 1: Kubernetes Service (MOST COMMON)
-  type: kubernetes_service
-  service: my-service
-  namespace: default
-  port: 8080
-  path: /api/data
-  refresh_interval: 30s
+# =============================================================================
+# WATCHED RESOURCES - Create new resource views for any Kubernetes CRD
+# =============================================================================
+# This is the primary plugin pattern. Each watched resource:
+# - Registers a command (e.g., ":{name}") to access the view
+# - Watches the CRD via Kubernetes API (real-time updates)
+# - Displays custom columns you define
+# - Supports YAML view, describe, and status indicators
 
-  # Option 2: Kubernetes CRD
-  # type: kubernetes_crd
-  # kind: MyData
-  # group: example.com
-  # version: v1
-  # namespace: default
-  # data_path: .status.data
+watched_resources:
+  - type: kubernetes_crd        # Required: resource type (see Future Types below)
+    kind: MyResource            # CRD kind (e.g., "Application", "Certificate")
+    group: example.com          # API group (e.g., "argoproj.io", "cert-manager.io")
+    version: v1                 # API version (e.g., "v1", "v1alpha1")
+    plural: myresources         # Plural name for API calls
+    command: ":{name}"          # Command to access this view
+    display_name: "{display}"   # Shown in header (defaults to kind)
+    supports_yaml: true         # Enable 'y' key for YAML view
+    supports_describe: true     # Enable 'd' key for describe view
 
-  # Option 3: External HTTP API
-  # type: http
-  # endpoint: https://api.example.com/data
-  # refresh_interval: 30s
+    # Column definitions for the list view
+    columns:
+      - name: NAME
+        path: .metadata.name
+        width: 30
+      - name: NAMESPACE
+        path: .metadata.namespace
+        width: 20
+      - name: STATUS
+        path: .status.phase       # Adjust to your CRD's status field
+        width: 12
+        renderer: status_badge    # Renderers: text, status_badge, duration, age, boolean
+      - name: AGE
+        path: .metadata.creationTimestamp
+        width: 10
+        renderer: age
 
-  # Option 4: Local file (for testing)
-  # type: file
-  # file_path: /path/to/data.json
+    # Optional: Status extraction for ready/suspended indicators
+    status:
+      ready_path: .status.conditions[0].status    # JSONPath to ready indicator
+      ready_value: "True"                          # Value that means "ready"
+      message_path: .status.conditions[0].message  # Status message to display
 
-# Resources this plugin enhances (ANY Kubernetes resource)
-resources:
-  - Deployment
-  - Service
+# =============================================================================
+# FUTURE RESOURCE TYPES (not yet implemented, architecture supports these)
+# =============================================================================
+# When these types are implemented, you'll be able to watch non-CRD sources:
+#
+#   - type: http_api              # Poll an HTTP/REST API endpoint
+#     endpoint: https://api.example.com/resources
+#     refresh_interval: 30s
+#     auth:
+#       type: bearer
+#       token_env: API_TOKEN
+#     command: ":myapi"
+#     columns: [...]
+#
+#   - type: grpc                  # Stream from a gRPC service
+#     endpoint: grpc.example.com:443
+#     service: MyService
+#     method: WatchResources
+#     command: ":mygrpc"
+#     columns: [...]
 
-# Columns to add to resource list view
-columns:
-  - name: status
-    path: .status        # JSONPath to extract value
-    width: 10
-    enabled: true
-    renderer: text       # text, issue_badge, percentage_bar, duration
-
-# Custom detail views (optional)
-views: []
-  # - name: my_view
-  #   keybinding: ":myview"
-  #   description: "My custom view"
+# =============================================================================
+# COLUMN ENRICHMENT (optional) - Add columns to existing Flux resource views
+# =============================================================================
+# Use this pattern to fetch data from an external source and add columns
+# to existing Flux resources (Kustomization, HelmRelease, etc.)
+#
+# source:
+#   type: kubernetes_service     # Options: kubernetes_service, http, file
+#   service: my-data-service
+#   namespace: default
+#   port: 8080
+#   path: /api/data
+#   refresh_interval: 30s
+#
+#   # Note: Kubernetes DNS suffix is configured in flux9s config file
+#   # Default: ".svc.cluster.local"
+#   # Override in config.yaml: plugin.kubernetesDnsSuffix: ".svc.cluster.local"
+#
+# resources:                     # Which Flux resources to enrich
+#   - Kustomization
+#   - HelmRelease
+#
+# columns:                       # Columns to add (data from source)
+#   - name: owner
+#     path: .ownership.owner     # JSONPath into source data
+#     width: 15
+#     renderer: text
 "#,
-        name = name
+        name = name,
+        display = to_title_case(name)
     );
 
     // Write template
@@ -204,8 +290,7 @@ views: []
     println!("\nNext steps:");
     println!("  1. Edit the plugin file to configure your data source");
     println!("  2. Validate: flux9s plugin validate {:?}", output_path);
-    println!("  3. Install: flux9s plugin install {:?}", output_path);
-    println!("  4. The plugin will be loaded automatically when flux9s starts");
+    println!("  3. The plugin will be loaded automatically when flux9s starts");
 
     Ok(())
 }
@@ -223,7 +308,11 @@ async fn install_plugin(path: &PathBuf) -> Result<()> {
         .load_plugin(path)
         .context("Plugin validation failed")?;
 
-    tracing::info!("Plugin '{}' v{} validated successfully", plugin.name, plugin.version);
+    tracing::info!(
+        "Plugin '{}' v{} validated successfully",
+        plugin.name,
+        plugin.version
+    );
 
     // Determine installation path
     let plugins_dir = PluginLoader::get_plugins_dir()?;

@@ -100,6 +100,69 @@ impl PluginRegistry {
             .filter(|plugin| plugin.resources.contains(&resource_type.to_string()))
             .collect()
     }
+
+    /// Get all watched resource commands from all plugins
+    ///
+    /// Returns a vector of (command, display_name) tuples for all watched resources
+    pub fn get_watched_resource_commands(&self) -> Vec<(String, String)> {
+        let mut commands = Vec::new();
+        for plugin in self.plugins.values() {
+            for watched in &plugin.watched_resources {
+                // Remove leading ':' if present
+                let cmd = watched
+                    .command
+                    .strip_prefix(':')
+                    .unwrap_or(&watched.command)
+                    .to_string();
+                let display_name = watched.display_name().to_string();
+                commands.push((cmd, display_name));
+            }
+        }
+        commands
+    }
+
+    /// Get watched resource config for a command
+    ///
+    /// Returns the WatchedResourceConfig if the command matches a watched resource
+    pub fn get_watched_resource_for_command(
+        &self,
+        cmd: &str,
+    ) -> Option<(&PluginManifest, &super::manifest::WatchedResourceConfig)> {
+        let cmd_lower = cmd.to_lowercase();
+        // Remove leading ':' if present
+        let cmd_normalized = cmd_lower.strip_prefix(':').unwrap_or(&cmd_lower);
+
+        for plugin in self.plugins.values() {
+            for watched in &plugin.watched_resources {
+                let watched_cmd = watched
+                    .command
+                    .strip_prefix(':')
+                    .unwrap_or(&watched.command)
+                    .to_lowercase();
+                if watched_cmd == cmd_normalized {
+                    return Some((plugin, watched));
+                }
+            }
+        }
+        None
+    }
+
+    /// Get watched resource config for a display name (resource type)
+    ///
+    /// Returns the WatchedResourceConfig if the display name matches a watched resource
+    pub fn get_watched_resource_for_display_name(
+        &self,
+        display_name: &str,
+    ) -> Option<(&PluginManifest, &super::manifest::WatchedResourceConfig)> {
+        for plugin in self.plugins.values() {
+            for watched in &plugin.watched_resources {
+                if watched.display_name() == display_name {
+                    return Some((plugin, watched));
+                }
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -113,7 +176,7 @@ mod tests {
             version: "1.0.0".to_string(),
             enabled: true,
             description: None,
-            source: DataSourceConfig {
+            source: Some(DataSourceConfig {
                 source_type: DataSourceType::File,
                 file_path: Some("/tmp/test.json".to_string()),
                 service: None,
@@ -129,11 +192,12 @@ mod tests {
                 auth: None,
                 refresh_interval: None,
                 timeout: None,
-            },
+            }),
             resources: resources.iter().map(|s| s.to_string()).collect(),
             columns: vec![],
             views: vec![],
             view_columns: Default::default(),
+            watched_resources: vec![],
         }
     }
 

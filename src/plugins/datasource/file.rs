@@ -1,6 +1,7 @@
 //! File data source connector (for testing)
 
 use super::connector::DataSourceConnector;
+use crate::plugins::manifest::DataSourceType;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -43,7 +44,7 @@ impl DataSourceConnector for FileDataSource {
     }
 
     fn connector_type(&self) -> &str {
-        "file"
+        DataSourceType::File.as_str()
     }
 
     async fn health_check(&self) -> Result<()> {

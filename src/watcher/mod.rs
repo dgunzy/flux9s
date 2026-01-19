@@ -13,6 +13,8 @@ pub use state::*;
 
 use anyhow::Result;
 use futures::StreamExt;
+use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::core::v1::Pod;
 use kube::core::{ApiResource, DynamicObject};
 use kube::runtime::watcher;
 use kube::{Api, Client, ResourceExt};
@@ -28,6 +30,12 @@ pub enum WatchEvent {
     Deleted(String, String, String), // resource_type, namespace, name
     /// Watch error occurred
     Error(String),
+    /// Controller pod was added or updated
+    PodApplied(String, serde_json::Value), // pod_name, pod_json
+    /// Controller pod was deleted
+    PodDeleted(String), // pod_name
+    /// Flux controller deployment was added or updated (for bundle version tracking)
+    DeploymentApplied(serde_json::Value), // deployment_json
 }
 
 /// Trait for watchable Flux resources
@@ -60,6 +68,8 @@ pub struct ResourceWatcher {
     current_namespace: Option<String>,
     event_tx: mpsc::UnboundedSender<WatchEvent>,
     handles: Vec<JoinHandle<()>>,
+    /// Plugin watched resources to restart when namespace changes
+    plugin_watched_resources: Vec<crate::plugins::WatchedResourceConfig>,
 }
 
 impl ResourceWatcher {
@@ -78,6 +88,7 @@ impl ResourceWatcher {
                 current_namespace: namespace,
                 event_tx: tx,
                 handles: Vec::new(),
+                plugin_watched_resources: Vec::new(),
             },
             rx,
         )
@@ -105,7 +116,15 @@ impl ResourceWatcher {
         self.current_namespace = namespace;
 
         // Restart all watchers with new namespace
-        self.watch_all()
+        self.watch_all()?;
+
+        // Restart plugin watchers if any (clone to avoid borrow checker issues)
+        let plugin_resources = self.plugin_watched_resources.clone();
+        if !plugin_resources.is_empty() {
+            self.watch_plugin_resources(&plugin_resources)?;
+        }
+
+        Ok(())
     }
 
     /// Start watching a specific resource type
@@ -249,6 +268,137 @@ impl ResourceWatcher {
                             break;
                         }
                         // Add small delay before retrying to avoid spam
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        });
+
+        self.handles.push(handle);
+        Ok(())
+    }
+
+    /// Watch Flux controller pods for status monitoring
+    pub fn watch_flux_pods(&mut self) -> Result<()> {
+        let client = self.client.clone();
+        let namespace = self
+            .current_namespace
+            .clone()
+            .unwrap_or_else(|| "flux-system".to_string());
+        let event_tx = self.event_tx.clone();
+
+        let handle = tokio::spawn(async move {
+            let api: Api<Pod> = Api::namespaced(client.clone(), &namespace);
+            // Watch all pods in flux-system to catch flux-operator and other controllers
+            // that may use different labels
+            let config = watcher::Config::default();
+
+            let mut w = Box::pin(watcher(api, config));
+            let mut error_count = 0u32;
+            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
+            tracing::debug!(
+                "Starting Flux controller pod watcher for namespace: {}",
+                namespace
+            );
+
+            while let Some(event) = w.next().await {
+                match event {
+                    Ok(watcher::Event::InitApply(pod)) | Ok(watcher::Event::Apply(pod)) => {
+                        error_count = 0;
+                        let name = pod.name_any();
+                        let pod_json = serde_json::to_value(&pod).unwrap_or_default();
+                        let _ = event_tx.send(WatchEvent::PodApplied(name, pod_json));
+                    }
+                    Ok(watcher::Event::Delete(pod)) => {
+                        error_count = 0;
+                        let name = pod.name_any();
+                        let _ = event_tx.send(WatchEvent::PodDeleted(name));
+                    }
+                    Ok(watcher::Event::Init) | Ok(watcher::Event::InitDone) => {
+                        error_count = 0;
+                        tracing::debug!("Flux controller pod watcher initialized");
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        if error_count == 1 || error_count.is_multiple_of(10) {
+                            tracing::warn!("Pod watcher error ({}): {}", error_count, e);
+                        }
+                        if error_count >= MAX_CONSECUTIVE_ERRORS {
+                            tracing::error!(
+                                "Pod watcher stopped after {} consecutive errors",
+                                error_count
+                            );
+                            break;
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        });
+
+        self.handles.push(handle);
+        Ok(())
+    }
+
+    /// Watch Flux controller deployments for bundle version tracking
+    pub fn watch_flux_deployments(&mut self) -> Result<()> {
+        let client = self.client.clone();
+        let namespace = self
+            .current_namespace
+            .clone()
+            .unwrap_or_else(|| "flux-system".to_string());
+        let event_tx = self.event_tx.clone();
+
+        let handle = tokio::spawn(async move {
+            let api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
+            let config = watcher::Config::default();
+
+            let mut w = Box::pin(watcher(api, config));
+            let mut error_count = 0u32;
+            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
+            tracing::debug!(
+                "Starting Flux controller deployment watcher for namespace: {}",
+                namespace
+            );
+
+            while let Some(event) = w.next().await {
+                match event {
+                    Ok(watcher::Event::InitApply(deployment))
+                    | Ok(watcher::Event::Apply(deployment)) => {
+                        error_count = 0;
+                        // Only track Flux deployments (with app.kubernetes.io/part-of: flux label)
+                        if let Some(labels) = &deployment.metadata.labels {
+                            if labels.get("app.kubernetes.io/part-of") == Some(&"flux".to_string())
+                            {
+                                let deployment_json =
+                                    serde_json::to_value(&deployment).unwrap_or_default();
+                                let _ =
+                                    event_tx.send(WatchEvent::DeploymentApplied(deployment_json));
+                            }
+                        }
+                    }
+                    Ok(watcher::Event::Delete(_)) => {
+                        error_count = 0;
+                        // We don't need to track deletion - version will just become unavailable
+                    }
+                    Ok(watcher::Event::Init) | Ok(watcher::Event::InitDone) => {
+                        error_count = 0;
+                        tracing::debug!("Flux controller deployment watcher initialized");
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        if error_count == 1 || error_count.is_multiple_of(10) {
+                            tracing::warn!("Deployment watcher error ({}): {}", error_count, e);
+                        }
+                        if error_count >= MAX_CONSECUTIVE_ERRORS {
+                            tracing::error!(
+                                "Deployment watcher stopped after {} consecutive errors",
+                                error_count
+                            );
+                            break;
+                        }
                         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                     }
                 }
@@ -462,7 +612,231 @@ impl ResourceWatcher {
         self.watch::<resource::FluxReport>()?;
         self.watch::<resource::FluxInstance>()?;
 
+        // Flux Controller Pods (for status monitoring)
+        self.watch_flux_pods()?;
+
+        // Flux Controller Deployments (for bundle version tracking)
+        self.watch_flux_deployments()?;
+
         tracing::debug!("All watchers started ({} total)", self.handles.len());
+        Ok(())
+    }
+
+    /// Watch a dynamic CRD defined by plugin configuration
+    ///
+    /// This enables plugins to watch arbitrary CRDs without requiring
+    /// compile-time typed resources. Uses DynamicObject + ApiResource.
+    ///
+    /// # Arguments
+    /// * `group` - API group (e.g., "argoproj.io")
+    /// * `version` - API version (e.g., "v1alpha1")
+    /// * `kind` - Resource kind (e.g., "Application")
+    /// * `plural` - Plural name for API calls (e.g., "applications")
+    /// * `display_name` - Display name for events and logging
+    pub fn watch_dynamic(
+        &mut self,
+        group: &str,
+        version: &str,
+        kind: &str,
+        plural: &str,
+        display_name: &str,
+    ) -> Result<()> {
+        let client = self.client.clone();
+        let namespace = self.current_namespace.clone();
+        let event_tx = self.event_tx.clone();
+
+        // Build ApiResource for the dynamic CRD
+        let api_version = if group.is_empty() {
+            version.to_string()
+        } else {
+            format!("{}/{}", group, version)
+        };
+
+        let api_resource = ApiResource {
+            group: group.to_string(),
+            version: version.to_string(),
+            api_version,
+            kind: kind.to_string(),
+            plural: plural.to_string(),
+        };
+
+        let resource_type = display_name.to_string();
+        let display_name_owned = display_name.to_string();
+
+        let handle = tokio::spawn(async move {
+            let api: Api<DynamicObject> = match namespace {
+                Some(ref ns) => {
+                    tracing::debug!(
+                        "Starting {} watcher (plugin) for namespace: {}",
+                        display_name_owned,
+                        ns
+                    );
+                    Api::namespaced_with(client.clone(), ns, &api_resource)
+                }
+                None => {
+                    tracing::debug!(
+                        "Starting {} watcher (plugin) for all namespaces",
+                        display_name_owned
+                    );
+                    Api::all_with(client.clone(), &api_resource)
+                }
+            };
+
+            let mut w = Box::pin(watcher(api, watcher::Config::default()));
+            let mut error_count = 0u32;
+            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
+            while let Some(event) = w.next().await {
+                match event {
+                    Ok(watcher::Event::InitApply(obj)) | Ok(watcher::Event::Apply(obj)) => {
+                        error_count = 0;
+                        let name = obj.name_any();
+                        let ns = obj.namespace().unwrap_or_default();
+                        let obj_json = serde_json::to_value(&obj).unwrap_or_default();
+                        let _ = event_tx.send(WatchEvent::Applied(
+                            resource_type.clone(),
+                            ns,
+                            name,
+                            obj_json,
+                        ));
+                    }
+                    Ok(watcher::Event::Delete(obj)) => {
+                        error_count = 0;
+                        let name = obj.name_any();
+                        let ns = obj.namespace().unwrap_or_default();
+                        let _ = event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
+                    }
+                    Ok(watcher::Event::Init) => {
+                        error_count = 0;
+                        tracing::debug!("{} watcher (plugin) initialized", display_name_owned);
+                    }
+                    Ok(watcher::Event::InitDone) => {
+                        error_count = 0;
+                        tracing::debug!(
+                            "{} watcher (plugin) initialization complete",
+                            display_name_owned
+                        );
+                    }
+                    Err(e) => {
+                        let error_string = format!("{}", e);
+                        let is_404 = error_string.contains("404")
+                            || error_string.contains("Not Found")
+                            || error_string.contains("page not found");
+
+                        if is_404 {
+                            tracing::info!(
+                                "{} CRD not found (404), stopping plugin watcher",
+                                display_name_owned
+                            );
+                            let _ = event_tx.send(WatchEvent::Error(format!(
+                                "{} CRD not available in cluster (plugin)",
+                                display_name_owned
+                            )));
+                            break;
+                        }
+
+                        error_count += 1;
+                        if error_count == 1 || error_count % 10 == 0 {
+                            tracing::warn!(
+                                "{} watcher (plugin) error ({}): {}",
+                                display_name_owned,
+                                error_count,
+                                e
+                            );
+                            let _ = event_tx.send(WatchEvent::Error(format!(
+                                "{} watcher (plugin) error ({}): {}",
+                                display_name_owned, error_count, e
+                            )));
+                        }
+
+                        if error_count >= MAX_CONSECUTIVE_ERRORS {
+                            tracing::error!(
+                                "{} watcher (plugin) stopped after {} consecutive errors",
+                                display_name_owned,
+                                error_count
+                            );
+                            break;
+                        }
+
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        });
+
+        self.handles.push(handle);
+        tracing::info!(
+            "Started plugin watcher for {} ({}/{}/{})",
+            display_name,
+            group,
+            version,
+            kind
+        );
+        Ok(())
+    }
+
+    /// Watch multiple dynamic CRDs from plugin configurations
+    ///
+    /// Convenience method to start watchers for all watched_resources in plugins.
+    /// Only watches resources of type `kubernetes_crd`.
+    /// Stores the watched resources so they can be restarted when namespace changes.
+    pub fn watch_plugin_resources(
+        &mut self,
+        watched_resources: &[crate::plugins::WatchedResourceConfig],
+    ) -> Result<()> {
+        // Store watched resources for namespace restarts
+        self.plugin_watched_resources = watched_resources.to_vec();
+        use crate::plugins::WatchedResourceType;
+
+        for resource in watched_resources {
+            match resource.resource_type {
+                WatchedResourceType::KubernetesCrd => {
+                    // Get required fields (validation ensures these exist)
+                    let group = resource.group().unwrap_or("");
+                    let version = match resource.version() {
+                        Some(v) => v,
+                        None => {
+                            tracing::warn!(
+                                "Skipping plugin resource {}: missing version",
+                                resource.display_name()
+                            );
+                            continue;
+                        }
+                    };
+                    let kind = match resource.kind() {
+                        Some(k) => k,
+                        None => {
+                            tracing::warn!(
+                                "Skipping plugin resource {}: missing kind",
+                                resource.display_name()
+                            );
+                            continue;
+                        }
+                    };
+                    let plural = match resource.plural() {
+                        Some(p) => p,
+                        None => {
+                            tracing::warn!(
+                                "Skipping plugin resource {}: missing plural",
+                                resource.display_name()
+                            );
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) =
+                        self.watch_dynamic(group, version, kind, plural, resource.display_name())
+                    {
+                        tracing::warn!(
+                            "Failed to start watcher for plugin resource {}: {}",
+                            resource.display_name(),
+                            e
+                        );
+                        // Continue with other resources even if one fails
+                    }
+                } // Future types would be handled here
+            }
+        }
         Ok(())
     }
 

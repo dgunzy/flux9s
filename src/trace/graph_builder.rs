@@ -321,7 +321,7 @@ async fn discover_kustomization_resources(
                     name: flux_entry.name.clone(),
                     namespace: flux_entry.namespace.clone(),
                     node_type: NodeType::FluxResource,
-                    ready: None, // TODO: Fetch status in a separate call
+                    ready: None,
                     position: None,
                     description: None,
                 };
@@ -532,7 +532,7 @@ async fn discover_helmrelease_resources(
                 name: flux_entry.name.clone(),
                 namespace: flux_entry.namespace.clone(),
                 node_type: NodeType::FluxResource,
-                ready: None, // TODO: Fetch status in a separate call
+                ready: None,
                 position: None,
                 description: None,
             };

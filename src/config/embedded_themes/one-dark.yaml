@@ -1,0 +1,44 @@
+k9s:
+  body:
+    fgColor: "#abb2bf"
+    bgColor: "#282c34"
+    logoColor: "#61afef"
+  frame:
+    border:
+      fgColor: "#5c6370"
+      focusColor: "#61afef"
+    menu:
+      fgColor: "#abb2bf"
+      bgColor: "#282c34"
+      keyColor: "#e06c75"
+      numKeyColor: "#61afef"
+    crumbs:
+      fgColor: "#5c6370"
+      activeColor: "#61afef"
+    status:
+      newColor: "#98c379"
+      modifyColor: "#e5c07b"
+      addColor: "#56b6c2"
+      errorColor: "#e06c75"
+      highlightcolor: "#c678dd"
+    title:
+      fgColor: "#61afef"
+      bgColor: "#282c34"
+  views:
+    table:
+      fgColor: "#abb2bf"
+      bgColor: "#282c34"
+      cursor:
+        fgColor: "#282c34"
+        bgColor: "#61afef"
+      header:
+        fgColor: "#61afef"
+        bgColor: "#282c34"
+    yaml:
+      keyColor: "#56b6c2"
+      colonColor: "#5c6370"
+      valueColor: "#abb2bf"
+    logs:
+      fgColor: "#abb2bf"
+      bgColor: "#282c34"
+

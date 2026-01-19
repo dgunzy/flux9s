@@ -187,6 +187,7 @@ impl App {
                 f,
                 chunks[0],
                 &self.state,
+                &self.controller_pods,
                 &self.context,
                 &self.namespace,
                 &self.view_state.filter,
@@ -216,6 +217,7 @@ impl App {
             &self.theme,
             self.namespace_hotkeys(),
             &self.namespace,
+            self.plugin_registry.as_ref(),
         );
     }
 
@@ -304,7 +306,13 @@ impl App {
         }
 
         if self.ui_state.show_help {
-            render_help(f, area, &self.theme, self.namespace_hotkeys());
+            render_help(
+                f,
+                area,
+                &self.theme,
+                self.namespace_hotkeys(),
+                self.plugin_registry.as_ref(),
+            );
         } else if let Some(ref submenu) = self.view_state.submenu_state {
             // First render the current view in the background
             match self.view_state.current_view {
@@ -321,6 +329,7 @@ impl App {
                         &self.theme,
                         self.config.ui.no_icons,
                         &self.selection_state.favorites,
+                        self.plugin_registry.as_ref(),
                     );
                 }
                 View::ResourceFavorites => {
@@ -336,6 +345,7 @@ impl App {
                         &self.theme,
                         self.config.ui.no_icons,
                         &self.selection_state.favorites,
+                        self.plugin_registry.as_ref(),
                     );
                 }
                 _ => {
@@ -359,6 +369,7 @@ impl App {
                         &self.theme,
                         self.config.ui.no_icons,
                         &self.selection_state.favorites,
+                        self.plugin_registry.as_ref(),
                     );
                 }
                 View::ResourceDetail => {
@@ -408,6 +419,7 @@ impl App {
                         &self.theme,
                         self.config.ui.no_icons,
                         &self.selection_state.favorites,
+                        self.plugin_registry.as_ref(),
                     );
                 }
                 View::ResourceGraph => {
@@ -460,7 +472,13 @@ impl App {
                     }
                 }
                 View::Help => {
-                    render_help(f, area, &self.theme, self.namespace_hotkeys());
+                    render_help(
+                        f,
+                        area,
+                        &self.theme,
+                        self.namespace_hotkeys(),
+                        self.plugin_registry.as_ref(),
+                    );
                 }
             }
         }

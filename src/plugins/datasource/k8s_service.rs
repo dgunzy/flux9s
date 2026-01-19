@@ -1,9 +1,14 @@
 //! Kubernetes Service data source connector
 
 use super::connector::DataSourceConnector;
+use crate::plugins::manifest::DataSourceType;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
+use std::time::Duration;
+
+/// Default HTTP timeout for Kubernetes service requests (10 seconds)
+const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 10;
 
 /// Kubernetes Service data source connector
 ///
@@ -15,28 +20,39 @@ pub struct KubernetesServiceDataSource {
     namespace: String,
     port: u16,
     path: String,
+    dns_suffix: String,
 }
 
 impl KubernetesServiceDataSource {
     /// Create a new Kubernetes Service data source
+    ///
+    /// # Arguments
+    /// * `_client` - Kubernetes client (not used directly, but required for consistency)
+    /// * `service` - Service name
+    /// * `namespace` - Namespace name
+    /// * `port` - Service port
+    /// * `path` - HTTP path
+    /// * `dns_suffix` - Kubernetes DNS suffix (e.g., ".svc.cluster.local")
     pub fn new(
         _client: kube::Client,
         service: String,
         namespace: String,
         port: u16,
         path: String,
+        dns_suffix: String,
     ) -> Result<Self> {
         tracing::debug!(
-            "Created Kubernetes Service data source: {}.{}.svc:{}{}",
+            "Created Kubernetes Service data source: {}.{}{}:{}{}",
             service,
             namespace,
+            dns_suffix,
             port,
             path
         );
 
         // Create HTTP client for service requests
         let http_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS))
             .build()
             .context("Failed to create HTTP client for Kubernetes service")?;
 
@@ -46,15 +62,18 @@ impl KubernetesServiceDataSource {
             namespace,
             port,
             path,
+            dns_suffix,
         })
     }
 
     /// Build service URL
+    ///
+    /// Uses Kubernetes service DNS format: http://{service}.{namespace}{dns_suffix}:{port}{path}
+    /// The DNS suffix is configurable via the plugin configuration.
     fn service_url(&self) -> String {
-        // Use Kubernetes service DNS
         format!(
-            "http://{}.{}.svc.cluster.local:{}{}",
-            self.service, self.namespace, self.port, self.path
+            "http://{}.{}{}:{}{}",
+            self.service, self.namespace, self.dns_suffix, self.port, self.path
         )
     }
 }
@@ -91,7 +110,7 @@ impl DataSourceConnector for KubernetesServiceDataSource {
     }
 
     fn connector_type(&self) -> &str {
-        "kubernetes_service"
+        DataSourceType::KubernetesService.as_str()
     }
 
     async fn health_check(&self) -> Result<()> {

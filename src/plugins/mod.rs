@@ -4,6 +4,7 @@
 // and custom detail views through YAML configuration.
 
 pub mod cache;
+pub mod column_extraction;
 pub mod datasource;
 pub mod loader;
 pub mod manifest;
@@ -11,8 +12,9 @@ pub mod registry;
 pub mod validator;
 
 pub use cache::PluginCache;
+pub use column_extraction::{extract_plugin_columns, render_column_value};
 pub use loader::PluginLoader;
-pub use manifest::{ColumnConfig, DataSourceConfig, DataSourceType, PluginManifest, ViewConfig};
+pub use manifest::{WatchedResourceConfig, WatchedResourceType};
 pub use registry::PluginRegistry;
 pub use validator::PluginValidator;
 

@@ -25,6 +25,10 @@ pub struct Config {
     #[serde(default)]
     pub logger: LoggerConfig,
 
+    /// Plugin configuration
+    #[serde(default)]
+    pub plugin: PluginConfig,
+
     /// Namespace hotkeys configuration (0-9)
     /// Array of namespace names, where index corresponds to hotkey (0=all, 1=flux-system, etc.)
     /// Maximum 10 items (0-9)
@@ -95,6 +99,24 @@ pub struct LoggerConfig {
     pub text_wrap: bool,
 }
 
+/// Plugin configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginConfig {
+    /// Kubernetes service DNS suffix for plugin data sources
+    ///
+    /// Default: ".svc.cluster.local"
+    /// Some Kubernetes clusters use different DNS suffixes (e.g., ".svc.cluster.local.cluster.local").
+    /// This setting allows you to override the default DNS suffix used when connecting to
+    /// Kubernetes services from plugins.
+    #[serde(default = "default_plugin_dns_suffix")]
+    pub kubernetes_dns_suffix: String,
+}
+
+fn default_plugin_dns_suffix() -> String {
+    ".svc.cluster.local".to_string()
+}
+
 // Default value functions
 fn default_read_only() -> bool {
     true
@@ -135,6 +157,7 @@ impl Default for Config {
             default_namespace: default_namespace(),
             ui: UiConfig::default(),
             logger: LoggerConfig::default(),
+            plugin: PluginConfig::default(),
             namespace_hotkeys: Vec::new(), // Empty means use auto-discovered defaults
             context_skins: HashMap::new(),
             cluster: HashMap::new(),
@@ -163,6 +186,14 @@ impl Default for LoggerConfig {
             buffer: default_log_buffer(),
             since_seconds: default_log_since_seconds(),
             text_wrap: default_false(),
+        }
+    }
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            kubernetes_dns_suffix: default_plugin_dns_suffix(),
         }
     }
 }

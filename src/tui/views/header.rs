@@ -1,5 +1,6 @@
 //! Header view rendering
 
+use crate::tui::app::state::ControllerPodState;
 use crate::tui::theme::Theme;
 use crate::watcher::ResourceState;
 use ratatui::{
@@ -9,12 +10,14 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
+use std::collections::HashMap;
 
 /// Render the main header with context, namespace, totals, and resource counts
 pub fn render_header(
     f: &mut Frame,
     area: Rect,
     state: &ResourceState,
+    controller_pods: &ControllerPodState,
     context: &str,
     namespace: &Option<String>,
     filter: &str,
@@ -27,14 +30,19 @@ pub fn render_header(
     no_icons: bool,
     namespace_hotkeys: &[String],
 ) {
-    // Split header into left (info) and right (ASCII art)
+    // Split header into left (info), middle (controller status), and right (ASCII art)
     let header_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .constraints([
+            Constraint::Percentage(60), // Left: context/namespace/resources
+            Constraint::Percentage(15), // Middle: controller status
+            Constraint::Percentage(25), // Right: ASCII logo
+        ])
         .split(area);
 
     let left_area = header_chunks[0];
-    let right_area = header_chunks[1];
+    let middle_area = header_chunks[1];
+    let right_area = header_chunks[2];
 
     let counts = state.count_by_type();
     let total: usize = counts.values().sum();
@@ -278,12 +286,20 @@ pub fn render_header(
     let header = Paragraph::new(header_lines).block(Block::default().borders(Borders::ALL));
     f.render_widget(header, left_area);
 
+    // Render controller status in the middle
+    render_controller_status(f, middle_area, controller_pods, theme, no_icons);
+
     // Render ASCII art on the right
-    render_header_ascii(f, right_area, theme);
+    render_header_ascii(f, right_area, controller_pods, theme);
 }
 
 /// Render the ASCII art logo
-pub fn render_header_ascii(f: &mut Frame, area: Rect, theme: &Theme) {
+pub fn render_header_ascii(
+    f: &mut Frame,
+    area: Rect,
+    controller_pods: &ControllerPodState,
+    theme: &Theme,
+) {
     // Simple ASCII art - one line per character row
     let ascii_lines = [
         " _____ _             ___      ",
@@ -293,7 +309,7 @@ pub fn render_header_ascii(f: &mut Frame, area: Rect, theme: &Theme) {
         "|_|   |_|\\__,_/_/\\_\\  /_/|___/",
     ];
 
-    let lines: Vec<Line> = ascii_lines
+    let mut lines: Vec<Line> = ascii_lines
         .iter()
         .map(|line| {
             Line::from(vec![Span::styled(
@@ -305,7 +321,134 @@ pub fn render_header_ascii(f: &mut Frame, area: Rect, theme: &Theme) {
         })
         .collect();
 
+    // Add Flux version if available
+    if let Some(version) = controller_pods.get_flux_version() {
+        lines.push(Line::from("")); // Empty line for spacing
+        lines.push(Line::from(vec![Span::styled(
+            format!("Flux {}", version),
+            Style::default().fg(theme.header_ascii),
+        )]));
+    }
+
     // Center the ASCII art vertically and horizontally
     let paragraph = Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(paragraph, area);
+}
+
+/// Render controller pod status in the middle header column
+fn render_controller_status(
+    f: &mut Frame,
+    area: Rect,
+    controller_pods: &ControllerPodState,
+    theme: &Theme,
+    no_icons: bool,
+) {
+    use crate::tui::app::state::ControllerPodInfo;
+
+    let all_pods = controller_pods.get_all_pods();
+
+    if all_pods.is_empty() {
+        // No controllers found - show message
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Controllers")
+            .style(Style::default().fg(theme.header_resources));
+        let text = Paragraph::new("N/A")
+            .block(block)
+            .style(Style::default().fg(theme.status_unknown));
+        f.render_widget(text, area);
+        return;
+    }
+
+    // Group pods by controller type
+    let mut controller_groups: HashMap<&str, Vec<&ControllerPodInfo>> = HashMap::new();
+    for pod in &all_pods {
+        if let Some(controller_name) = extract_controller_name(&pod.name) {
+            controller_groups
+                .entry(controller_name)
+                .or_default()
+                .push(pod);
+        }
+    }
+
+    let mut lines = Vec::new();
+    let status_letters = [' ', 'S', 'T', 'A', 'T', 'U', 'S', ' '];
+    let mut line_index = 0;
+
+    for controller_name in crate::tui::constants::FLUX_CONTROLLER_NAMES {
+        if let Some(pods) = controller_groups.get(controller_name) {
+            let short_name = abbreviate_controller_name(controller_name);
+
+            let total_replicas = pods.len();
+            let ready_replicas = pods.iter().filter(|p| p.ready).count();
+            let all_ready = ready_replicas == total_replicas;
+
+            let (status_icon, status_color) = if all_ready {
+                (if no_icons { "[OK]" } else { "✓" }, theme.status_ready)
+            } else if ready_replicas > 0 {
+                (if no_icons { "[WARN]" } else { "⚠" }, theme.status_unknown)
+            } else {
+                (if no_icons { "[ERR]" } else { "✗" }, theme.status_error)
+            };
+
+            let version = pods
+                .iter()
+                .find_map(|p| p.version.as_ref())
+                .map(|v| v.as_str())
+                .unwrap_or("?");
+
+            let status_char = status_letters.get(line_index).unwrap_or(&' ');
+            let line_spans = vec![
+                Span::styled(
+                    format!(" {}  ", status_char),
+                    Style::default()
+                        .fg(theme.header_resources)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<5} ", short_name),
+                    Style::default().fg(theme.header_resources),
+                ),
+                Span::styled(
+                    format!("{}/{} ", ready_replicas, total_replicas),
+                    Style::default().fg(theme.header_total),
+                ),
+                Span::styled(
+                    format!("{} ", status_icon),
+                    Style::default()
+                        .fg(status_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(version, Style::default().fg(theme.header_context)),
+            ];
+            lines.push(Line::from(line_spans));
+            line_index += 1;
+        }
+    }
+
+    let paragraph = Paragraph::new(lines);
+    f.render_widget(paragraph, area);
+}
+
+/// Match pod name prefix against known Flux controllers
+fn extract_controller_name(pod_name: &str) -> Option<&str> {
+    crate::tui::constants::FLUX_CONTROLLER_NAMES
+        .iter()
+        .find(|&&controller| pod_name.starts_with(controller))
+        .copied()
+}
+
+/// Abbreviate controller names for compact display
+fn abbreviate_controller_name(name: &str) -> &str {
+    match name {
+        "source-controller" => "Src",
+        "kustomize-controller" => "Kstz",
+        "helm-controller" => "Helm",
+        "notification-controller" => "Notif",
+        "image-reflector-controller" => "ImgR",
+        "image-automation-controller" => "ImgA",
+        "source-watcher" => "SrcW",
+        "flux-operator" => "Oper",
+        _ => "?",
+    }
 }
