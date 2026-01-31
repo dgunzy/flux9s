@@ -109,18 +109,26 @@ async fn main() -> Result<()> {
                 context_skin
             );
             context_skin.clone()
-        } else if read_only && config.ui.skin_read_only.is_some() {
-            let skin = config.ui.skin_read_only.as_ref().unwrap();
+        } else if read_only {
+            if let Some(ref skin) = config.ui.skin_read_only {
+                tracing::debug!("Using readonly-specific skin: {}", skin);
+                skin.clone()
+            } else {
+                tracing::debug!("Using default skin: {}", config.ui.skin);
+                config.ui.skin.clone()
+            }
+        } else {
+            tracing::debug!("Using default skin: {}", config.ui.skin);
+            config.ui.skin.clone()
+        }
+    } else if read_only {
+        if let Some(ref skin) = config.ui.skin_read_only {
             tracing::debug!("Using readonly-specific skin: {}", skin);
             skin.clone()
         } else {
             tracing::debug!("Using default skin: {}", config.ui.skin);
             config.ui.skin.clone()
         }
-    } else if read_only && config.ui.skin_read_only.is_some() {
-        let skin = config.ui.skin_read_only.as_ref().unwrap();
-        tracing::debug!("Using readonly-specific skin: {}", skin);
-        skin.clone()
     } else {
         tracing::debug!("Using default skin: {}", config.ui.skin);
         config.ui.skin.clone()

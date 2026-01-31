@@ -842,8 +842,12 @@ impl App {
                     } else if let Some(context_skin) = self.config.context_skins.get(&self.context)
                     {
                         context_skin.clone()
-                    } else if self.config.read_only && self.config.ui.skin_read_only.is_some() {
-                        self.config.ui.skin_read_only.as_ref().unwrap().clone()
+                    } else if self.config.read_only {
+                        if let Some(ref skin) = self.config.ui.skin_read_only {
+                            skin.clone()
+                        } else {
+                            self.config.ui.skin.clone()
+                        }
                     } else {
                         self.config.ui.skin.clone()
                     };
@@ -955,8 +959,12 @@ impl App {
                     } else if let Some(context_skin) = self.config.context_skins.get(&self.context)
                     {
                         context_skin.clone()
-                    } else if self.config.read_only && self.config.ui.skin_read_only.is_some() {
-                        self.config.ui.skin_read_only.as_ref().unwrap().clone()
+                    } else if self.config.read_only {
+                        if let Some(ref skin) = self.config.ui.skin_read_only {
+                            skin.clone()
+                        } else {
+                            self.config.ui.skin.clone()
+                        }
                     } else {
                         self.config.ui.skin.clone()
                     };

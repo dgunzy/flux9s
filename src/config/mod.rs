@@ -24,6 +24,7 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
     match key {
         "readOnly" => Ok(config.read_only.to_string()),
         "defaultNamespace" => Ok(config.default_namespace.clone()),
+        "defaultControllerNamespace" => Ok(config.default_controller_namespace.clone()),
         "ui.enableMouse" => Ok(config.ui.enable_mouse.to_string()),
         "ui.headless" => Ok(config.ui.headless.to_string()),
         "ui.noIcons" => Ok(config.ui.no_icons.to_string()),
@@ -54,6 +55,9 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
         }
         "defaultNamespace" => {
             config.default_namespace = value.to_string();
+        }
+        "defaultControllerNamespace" => {
+            config.default_controller_namespace = value.to_string();
         }
         "ui.enableMouse" => {
             config.ui.enable_mouse = value
