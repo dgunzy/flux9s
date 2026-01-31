@@ -192,6 +192,8 @@ pub async fn run_tui_with_async_init(
     // Spawn async task to initialize Kubernetes and start watchers
     // This happens in the background while splash is showing
     let kubeconfig_path_clone = kubeconfig_path.map(|p| p.to_path_buf());
+    let controller_namespace = config.default_controller_namespace.clone();
+    let controller_namespace_for_init = controller_namespace.clone();
     let (kube_init_tx, mut kube_init_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         tracing::debug!("Starting async Kubernetes initialization");
@@ -268,8 +270,11 @@ pub async fn run_tui_with_async_init(
 
         // Create resource state and watcher
         tracing::debug!("Creating resource state and watcher");
-        let (mut watcher, event_rx) =
-            crate::watcher::ResourceWatcher::new(client.clone(), default_namespace.clone());
+        let (mut watcher, event_rx) = crate::watcher::ResourceWatcher::new(
+            client.clone(),
+            default_namespace.clone(),
+            controller_namespace_for_init,
+        );
 
         // Start watching all Flux resources
         if let Err(e) = watcher.watch_all() {
@@ -592,8 +597,11 @@ pub async fn run_tui_with_async_init(
                         // Create new watcher with new client
                         // ResourceWatcher::new returns a tuple (watcher, receiver), not a Result
                         let namespace = app.namespace().clone();
-                        let (mut new_watcher, new_event_rx) =
-                            crate::watcher::ResourceWatcher::new(new_client.clone(), namespace);
+                        let (mut new_watcher, new_event_rx) = crate::watcher::ResourceWatcher::new(
+                            new_client.clone(),
+                            namespace,
+                            controller_namespace.clone(),
+                        );
 
                         // Start watching all resources with the new watcher
                         if let Err(e) = new_watcher.watch_all() {

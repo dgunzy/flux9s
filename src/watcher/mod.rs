@@ -66,6 +66,7 @@ where
 pub struct ResourceWatcher {
     client: Client,
     current_namespace: Option<String>,
+    controller_namespace: String,
     event_tx: mpsc::UnboundedSender<WatchEvent>,
     handles: Vec<JoinHandle<()>>,
 }
@@ -78,12 +79,14 @@ impl ResourceWatcher {
     pub fn new(
         client: Client,
         namespace: Option<String>,
+        controller_namespace: String,
     ) -> (Self, mpsc::UnboundedReceiver<WatchEvent>) {
         let (tx, rx) = mpsc::unbounded_channel();
         (
             Self {
                 client,
                 current_namespace: namespace,
+                controller_namespace,
                 event_tx: tx,
                 handles: Vec::new(),
             },
@@ -270,10 +273,7 @@ impl ResourceWatcher {
     /// Watch Flux controller pods for status monitoring
     pub fn watch_flux_pods(&mut self) -> Result<()> {
         let client = self.client.clone();
-        let namespace = self
-            .current_namespace
-            .clone()
-            .unwrap_or_else(|| "flux-system".to_string());
+        let namespace = self.controller_namespace.clone();
         let event_tx = self.event_tx.clone();
 
         let handle = tokio::spawn(async move {
@@ -333,10 +333,7 @@ impl ResourceWatcher {
     /// Watch Flux controller deployments for bundle version tracking
     pub fn watch_flux_deployments(&mut self) -> Result<()> {
         let client = self.client.clone();
-        let namespace = self
-            .current_namespace
-            .clone()
-            .unwrap_or_else(|| "flux-system".to_string());
+        let namespace = self.controller_namespace.clone();
         let event_tx = self.event_tx.clone();
 
         let handle = tokio::spawn(async move {

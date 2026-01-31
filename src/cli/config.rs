@@ -232,29 +232,95 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
     Ok(())
 }
 
-/// Display configuration with all fields visible, indicating defaults
+/// Returns " # (default)" suffix when the value matches its default, empty string otherwise
+fn default_marker<T: PartialEq>(current: &T, default: &T) -> &'static str {
+    if current == default {
+        "  # (default)"
+    } else {
+        ""
+    }
+}
+
+/// Display configuration with all fields visible, annotating which values are defaults
 fn display_config_with_defaults(config: &Config) {
-    println!("readOnly: {}", config.read_only);
-    println!("defaultNamespace: {}", config.default_namespace);
+    let d = Config::default();
+
+    println!(
+        "readOnly: {}{}",
+        config.read_only,
+        default_marker(&config.read_only, &d.read_only)
+    );
+    println!(
+        "defaultNamespace: {}{}",
+        config.default_namespace,
+        default_marker(&config.default_namespace, &d.default_namespace)
+    );
+    println!(
+        "defaultControllerNamespace: {}{}",
+        config.default_controller_namespace,
+        default_marker(
+            &config.default_controller_namespace,
+            &d.default_controller_namespace
+        )
+    );
     println!();
+
     println!("ui:");
-    println!("  enableMouse: {}", config.ui.enable_mouse);
-    println!("  headless: {}", config.ui.headless);
-    println!("  noIcons: {}", config.ui.no_icons);
-    println!("  skin: {}", config.ui.skin);
+    println!(
+        "  enableMouse: {}{}",
+        config.ui.enable_mouse,
+        default_marker(&config.ui.enable_mouse, &d.ui.enable_mouse)
+    );
+    println!(
+        "  headless: {}{}",
+        config.ui.headless,
+        default_marker(&config.ui.headless, &d.ui.headless)
+    );
+    println!(
+        "  noIcons: {}{}",
+        config.ui.no_icons,
+        default_marker(&config.ui.no_icons, &d.ui.no_icons)
+    );
+    println!(
+        "  skin: {}{}",
+        config.ui.skin,
+        default_marker(&config.ui.skin, &d.ui.skin)
+    );
     if let Some(ref skin_ro) = config.ui.skin_read_only {
         println!("  skinReadOnly: {}", skin_ro);
     } else {
-        println!("  skinReadOnly: null  # (default: uses 'skin' when readOnly=true)");
+        println!("  skinReadOnly: ~  # (default: uses 'skin' when readOnly=true)");
     }
-    println!("  splashless: {}", config.ui.splashless);
+    println!(
+        "  splashless: {}{}",
+        config.ui.splashless,
+        default_marker(&config.ui.splashless, &d.ui.splashless)
+    );
     println!();
+
     println!("logger:");
-    println!("  tail: {}", config.logger.tail);
-    println!("  buffer: {}", config.logger.buffer);
-    println!("  sinceSeconds: {}", config.logger.since_seconds);
-    println!("  textWrap: {}", config.logger.text_wrap);
+    println!(
+        "  tail: {}{}",
+        config.logger.tail,
+        default_marker(&config.logger.tail, &d.logger.tail)
+    );
+    println!(
+        "  buffer: {}{}",
+        config.logger.buffer,
+        default_marker(&config.logger.buffer, &d.logger.buffer)
+    );
+    println!(
+        "  sinceSeconds: {}{}",
+        config.logger.since_seconds,
+        default_marker(&config.logger.since_seconds, &d.logger.since_seconds)
+    );
+    println!(
+        "  textWrap: {}{}",
+        config.logger.text_wrap,
+        default_marker(&config.logger.text_wrap, &d.logger.text_wrap)
+    );
     println!();
+
     if config.namespace_hotkeys.is_empty() {
         println!("namespaceHotkeys: []  # (default: auto-discover at startup)");
     } else {
@@ -264,6 +330,7 @@ fn display_config_with_defaults(config: &Config) {
         }
     }
     println!();
+
     if config.context_skins.is_empty() {
         println!("contextSkins: {{}}  # (default: empty, no context-specific skins)");
     } else {
@@ -274,9 +341,11 @@ fn display_config_with_defaults(config: &Config) {
     }
     println!();
     println!();
+
     println!("# Configuration Reference:");
     println!("#   readOnly - Disable modification operations (default: true)");
     println!("#   defaultNamespace - Starting namespace (default: flux-system)");
+    println!("#   defaultControllerNamespace - Flux controller namespace (default: flux-system)");
     println!("#   ui.enableMouse - Enable mouse support (default: false)");
     println!("#   ui.headless - Hide header (default: false)");
     println!("#   ui.noIcons - Disable Unicode icons (default: false)");

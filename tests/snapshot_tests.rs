@@ -25,6 +25,7 @@ fn create_test_config() -> Config {
     Config {
         read_only: false,
         default_namespace: "".to_string(),
+        default_controller_namespace: "".to_string(),
         namespace_hotkeys: vec![],
         ui: UiConfig {
             enable_mouse: false,
