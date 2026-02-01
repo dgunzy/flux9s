@@ -65,6 +65,8 @@ buildFuture = false
     # Keep TOC enabled (user requested to keep toc tree)
     # Hide page meta (edit links, etc.) - but keep TOC
     page_meta = false
+    # Content width - make it wider
+    content_width = "wide"
   
   # Dark mode support
   [params.ui.dark_mode]

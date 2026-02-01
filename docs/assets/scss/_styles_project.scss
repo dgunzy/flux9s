@@ -541,24 +541,28 @@ code:not(pre code) {
     }
   }
   
-  // Ensure container-fluid doesn't constrain content unnecessarily
+  // Use Docsy's native max-width system (.td-max-width-on-larger-screens)
+  // Docsy automatically applies max-width constraints for readability
+  // No need to override unless you have specific requirements
+  
+  // Container fluid should use full width
   .container-fluid {
-    max-width: 100%;
+    max-width: 100% !important;
     padding-left: 2rem;
     padding-right: 2rem;
     
-    // On larger screens, use more horizontal space
     @media (min-width: 1400px) {
       padding-left: 3rem;
       padding-right: 3rem;
     }
   }
   
-  [data-bs-theme="dark"] & {
+  // Dark/light theme backgrounds
+  &[data-bs-theme="dark"] {
     background-color: #{$dark-bg};
   }
   
-  [data-bs-theme="light"] & {
+  &[data-bs-theme="light"] {
     background-color: #{$light-bg};
   }
   
@@ -579,75 +583,6 @@ code:not(pre code) {
     }
   }
   
-  // Left-aligned headings
-  h1, h2, h3, h4, h5, h6 {
-    text-align: left;
-    margin-top: 2rem;
-    margin-bottom: 1rem;
-    color: var(--bs-body-color);
-    font-weight: 600;
-  }
-  
-  h1 {
-    font-size: 2.5rem;
-    font-weight: 700;
-    margin-top: 0;
-    margin-bottom: 1.5rem;
-    line-height: 1.2;
-  }
-  
-  h2 {
-    font-size: 2rem;
-    margin-top: 3rem;
-    margin-bottom: 1rem;
-    line-height: 1.3;
-  }
-  
-  h3 {
-    font-size: 1.5rem;
-    margin-top: 2rem;
-    margin-bottom: 0.75rem;
-  }
-  
-  // Left-aligned paragraphs and text
-  p {
-    text-align: left;
-    line-height: 1.7;
-    margin-bottom: 1rem;
-    color: var(--bs-body-color);
-  }
-  
-  // Tables - left-aligned, clean styling
-  table {
-    margin: 1.5rem 0;
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.95rem;
-    
-    th, td {
-      text-align: left;
-      padding: 0.75rem 1rem;
-      border-bottom: 1px solid #e0e0e0;
-    }
-    
-    th {
-      font-weight: 600;
-      background-color: #f8f8f8;
-      color: var(--bs-body-color);
-      
-      [data-bs-theme="dark"] & {
-        background-color: #2d2d2d;
-        border-bottom-color: #404040;
-      }
-    }
-    
-    [data-bs-theme="dark"] & {
-      th, td {
-        border-bottom-color: #404040;
-      }
-    }
-  }
-  
   // Code blocks - simple light grey (override Docsy's default dark theme)
   .highlight {
     margin: 1.5rem 0;
@@ -655,7 +590,6 @@ code:not(pre code) {
     overflow: hidden;
     
     pre {
-      text-align: left;
       background-color: #f5f5f5 !important;
       color: #333 !important;
       border: 1px solid #e0e0e0;
@@ -684,7 +618,7 @@ code:not(pre code) {
   code:not(pre code) {
     background-color: #f5f5f5;
     color: #d63384;
-    padding: 0.2rem 0.4rem;
+    padding: 0.2rem 0.4em;
     border-radius: $border-radius-sm;
     font-size: 0.9em;
     
@@ -694,72 +628,12 @@ code:not(pre code) {
     }
   }
   
-  // Alert blocks - left-aligned
-  .alert {
-    margin: 1.5rem 0;
-    text-align: left;
-    border-radius: $border-radius;
-    padding: 1rem 1.25rem;
-  }
-  
-  // Lists - left-aligned
-  ul, ol {
-    text-align: left;
-    margin: 1rem 0;
-    padding-left: 2rem;
-    
-    li {
-      margin-bottom: 0.5rem;
-      line-height: 1.7;
-      color: var(--bs-body-color);
-    }
-  }
-  
-  // Blockquotes
-  blockquote {
-    margin: 1.5rem 0;
-    padding-left: 1.5rem;
-    border-left: 4px solid var(--bs-primary);
-    text-align: left;
-    color: var(--bs-body-color);
-    opacity: 0.9;
-  }
-  
-  // Feature blocks - make screenshots larger
-  .feature {
-    text-align: left;
-    
-    .highlight {
-      text-align: left;
-    }
-  }
-  
-  // Make screenshots in feature blocks larger
-  // Feature blocks use col-lg-4 (3 columns), so we override to make screenshots bigger
-  // Target screenshots section specifically
-  section.td-box {
-    .col-lg-4 {
-      // Make feature blocks wider for screenshots
-      @media (min-width: 992px) {
-        flex: 0 0 auto;
-        width: 50% !important; // Change from 33.33% (col-lg-4) to 50% (2 columns)
-        max-width: 50% !important;
-      }
-      
-      img {
-        max-width: 100% !important;
-        width: 100% !important;
-        height: auto;
-        margin: 1.5rem auto;
-        display: block;
-        border-radius: $border-radius;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        
-        [data-bs-theme="dark"] & {
-          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-        }
-      }
-    }
+  // Ensure images in content area use full available width
+  img.img-fluid {
+    max-width: 100%;
+    width: 100%;
+    height: auto;
+    display: block;
   }
   
   // Breadcrumbs
@@ -774,18 +648,20 @@ code:not(pre code) {
   }
 }
 
-// Homepage specific - ensure it's centered and wide
-.home .td-content,
-.td-home .td-content {
-  max-width: 1200px !important;
-  margin: 0 auto !important;
-  text-align: center !important;
-  
-  h1, h2, h3, h4, h5, h6,
-  p, ul, ol, div {
-    text-align: center !important;
-  }
-}
+// Use Docsy's default layout system
+// Docsy handles main content width and sidebar layout automatically
+// Only override if you have specific layout requirements
+
+// Homepage specific styling (if needed)
+// Docsy handles homepage layout through blocks/cover shortcode
+// Use Docsy's native layout system for consistency
+
+// Docsy uses Bootstrap defaults for typography and spacing
+// Heading spacing follows Docsy's _content.scss:
+// - h1: margin-bottom: 1rem
+// - h2: margin-bottom: 1rem, margin-top: 3rem (if not first child)
+// - h3-h6: margin-bottom: 1rem, margin-top: 2rem
+// All content is left-aligned by default (Bootstrap standard)
 
 // Smooth transitions
 * {

@@ -9,47 +9,42 @@ type: docs
 
 ## Video Demos
 
-{{< blocks/section color="white" >}}
-{{% blocks/feature icon="fa-project-diagram" title="Graph View Demo" %}}
 {{< rawhtml >}}
 
-<div class="ratio ratio-16x9" style="background: transparent; margin-bottom: 1rem;">
-  <video autoplay loop muted playsinline class="w-100 h-100" style="object-fit: contain; background: transparent;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
-    <source src="/images/demo-graph.mp4" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-  <div style="display:none; padding: 2rem; text-align: center; background: #f8f9fa; color: #6c757d;">
-    <i class="fas fa-video fa-3x mb-3"></i>
-    <p class="mb-0"><strong>Graph View Demo</strong></p>
-    <p class="small mb-2">Visualize resource relationships and dependencies</p>
-    <p class="small text-muted">Video playback is not available. The demo shows how the graph view visualizes resource relationships and dependencies.</p>
+<div class="mb-4">
+  <h3>Graph View Demo</h3>
+  <div class="ratio ratio-16x9" style="background: transparent;">
+    <video autoplay loop muted playsinline class="w-100 h-100" style="object-fit: contain; background: transparent;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+      <source src="/images/demo-graph.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+    <div style="display:none; padding: 2rem; text-align: center; background: #f8f9fa; color: #6c757d;">
+      <i class="fas fa-video fa-3x mb-3"></i>
+      <p class="mb-0"><strong>Graph View Demo</strong></p>
+      <p class="small mb-2">Visualize resource relationships and dependencies</p>
+      <p class="small text-muted">Video playback is not available. The demo shows how the graph view visualizes resource relationships and dependencies.</p>
+    </div>
   </div>
+  <p>See how the graph view visualizes resource relationships and dependencies.</p>
+</div>
+
+<div class="mb-4">
+  <h3>Theme Selection Demo</h3>
+  <div class="ratio ratio-16x9" style="background: transparent;">
+    <video autoplay loop muted playsinline class="w-100 h-100" style="object-fit: contain; background: transparent;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+      <source src="/images/demo-skin.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+    <div style="display:none; padding: 2rem; text-align: center; background: #f8f9fa; color: #6c757d;">
+      <i class="fas fa-video fa-3x mb-3"></i>
+      <p class="mb-0"><strong>Theme Selection Demo</strong></p>
+      <p class="small mb-2">Interactive theme selection with live preview</p>
+      <p class="small text-muted">Video playback is not available. The demo shows the interactive theme selection submenu with live preview in action.</p>
+    </div>
+  </div>
+  <p>Watch the interactive theme selection with live preview in action.</p>
 </div>
 {{< /rawhtml >}}
-
-See how the graph view visualizes resource relationships and dependencies.
-{{% /blocks/feature %}}
-
-{{% blocks/feature icon="fa-palette" title="Theme Selection Demo" %}}
-{{< rawhtml >}}
-
-<div class="ratio ratio-16x9" style="background: transparent; margin-bottom: 1rem;">
-  <video autoplay loop muted playsinline class="w-100 h-100" style="object-fit: contain; background: transparent;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
-    <source src="/images/demo-skin.mp4" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-  <div style="display:none; padding: 2rem; text-align: center; background: #f8f9fa; color: #6c757d;">
-    <i class="fas fa-video fa-3x mb-3"></i>
-    <p class="mb-0"><strong>Theme Selection Demo</strong></p>
-    <p class="small mb-2">Interactive theme selection with live preview</p>
-    <p class="small text-muted">Video playback is not available. The demo shows the interactive theme selection submenu with live preview in action.</p>
-  </div>
-</div>
-{{< /rawhtml >}}
-
-Watch the interactive theme selection with live preview in action.
-{{% /blocks/feature %}}
-{{< /blocks/section >}}
 
 ## Navigation
 
@@ -298,49 +293,49 @@ flux9s supports all Flux CD resources from the official Flux controllers and Flu
 - **FluxReport** (v1) - Flux reports
 - **FluxInstance** (v1) - Flux instances
 
-## Screenshots and Demos
+## Screenshots
 
-{{< blocks/section color="white" >}}
-{{% blocks/feature icon="fa-image" title="Main View" %}}
-![flux9s screenshot](/images/screenshot.png)
+{{< rawhtml >}}
 
-The main resource view showing all Flux resources in your cluster with real-time updates.
-{{% /blocks/feature %}}
+<div class="mb-4">
+  <h3>Main View</h3>
+  <div class="mb-3">
+    <img src="/images/screenshot.png" alt="flux9s screenshot" class="img-fluid">
+  </div>
+  <p>The main resource view showing all Flux resources in your cluster with real-time updates.</p>
+</div>
 
-{{% blocks/feature icon="fa-video" title="Main Interface Demo" %}}
-![flux9s main demo](/images/demo-main.gif)
+<div class="mb-4">
+  <h3>Trace View</h3>
+  <div class="mb-3">
+    <img src="/images/trace-screenshot.png" alt="flux9s trace" class="img-fluid">
+  </div>
+  <p>Visualize resource relationships and ownership chains to understand dependencies.</p>
+</div>
 
-Watch flux9s in action - navigate resources, view details, and manage your Flux deployments.
+<div class="mb-4">
+  <h3>Filter View</h3>
+  <div class="mb-3">
+    <img src="/images/filter-screenshot.png" alt="flux9s filter" class="img-fluid">
+  </div>
+  <p>Quickly find resources by name using the filter feature. Press <code>/</code> to start filtering.</p>
+</div>
 
-_GIF placeholder - demonstrates main interface navigation and operations_
-{{% /blocks/feature %}}
+<div class="mb-4">
+  <h3>Graph View</h3>
+  <div class="mb-3">
+    <img src="/images/graph-screenshot.png" alt="flux9s graph" class="img-fluid">
+  </div>
+  <p>Visualize resource relationships and dependencies in a graph format.</p>
+  <p>Shows upstream sources and downstream managed resources for Kustomization, HelmRelease, ArtifactGenerator, FluxInstance, and ResourceSet.</p>
+</div>
 
-{{% blocks/feature icon="fa-sitemap" title="Trace View" %}}
-![flux9s trace](/images/trace-screenshot.png)
-
-Visualize resource relationships and ownership chains to understand dependencies.
-{{% /blocks/feature %}}
-
-{{% blocks/feature icon="fa-filter" title="Filter View" %}}
-![flux9s filter](/images/filter-screenshot.png)
-
-Quickly find resources by name using the filter feature. Press `/` to start filtering.
-{{% /blocks/feature %}}
-
-{{% blocks/feature icon="fa-project-diagram" title="Graph View" %}}
-![flux9s graph](/images/graph-screenshot.png)
-
-Visualize resource relationships and dependencies in a graph format.
-
-Shows upstream sources and downstream managed resources for Kustomization, HelmRelease, ArtifactGenerator, FluxInstance, and ResourceSet.
-{{% /blocks/feature %}}
-
-{{% blocks/feature icon="fa-palette" title="Theme Selection" %}}
-![flux9s theme submenu](/images/skin-submenu.png)
-
-Interactive theme selection with live preview. Choose from 17 built-in themes or your custom themes.
-
-Navigate with `j`/`k` to preview, press `Enter` to apply, or `s` to save to config.
-{{% /blocks/feature %}}
-
-{{< /blocks/section >}}
+<div class="mb-4">
+  <h3>Theme Selection</h3>
+  <div class="mb-3">
+    <img src="/images/skin-submenu.png" alt="flux9s theme submenu" class="img-fluid">
+  </div>
+  <p>Interactive theme selection with live preview. Choose from 17 built-in themes or your custom themes.</p>
+  <p>Navigate with <code>j</code>/<code>k</code> to preview, press <code>Enter</code> to apply, or <code>s</code> to save to config.</p>
+</div>
+{{< /rawhtml >}}
