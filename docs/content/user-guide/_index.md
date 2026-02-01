@@ -12,7 +12,7 @@ type: docs
 {{< rawhtml >}}
 
 <div class="mb-4">
-  <h3>Graph View Demo</h3>
+  <h3>Graph View / Favorite Demo</h3>
   <div class="ratio ratio-16x9" style="background: transparent;">
     <video autoplay loop muted playsinline class="w-100 h-100" style="object-fit: contain; background: transparent;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
       <source src="/images/demo-graph.mp4" type="video/mp4">
@@ -328,14 +328,5 @@ flux9s supports all Flux CD resources from the official Flux controllers and Flu
   </div>
   <p>Visualize resource relationships and dependencies in a graph format.</p>
   <p>Shows upstream sources and downstream managed resources for Kustomization, HelmRelease, ArtifactGenerator, FluxInstance, and ResourceSet.</p>
-</div>
-
-<div class="mb-4">
-  <h3>Theme Selection</h3>
-  <div class="mb-3">
-    <img src="/images/skin-submenu.png" alt="flux9s theme submenu" class="img-fluid">
-  </div>
-  <p>Interactive theme selection with live preview. Choose from 17 built-in themes or your custom themes.</p>
-  <p>Navigate with <code>j</code>/<code>k</code> to preview, press <code>Enter</code> to apply, or <code>s</code> to save to config.</p>
 </div>
 {{< /rawhtml >}}

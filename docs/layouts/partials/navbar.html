@@ -17,7 +17,7 @@
         {{ $p := . }}
         {{ range .Site.Menus.main }}
         <li class="nav-item">
-          <a class="nav-link {{ if $p.IsMenuCurrent "main" . }}active{{ end }}" href="{{ .URL }}">{{ .Name }}</a>
+          <a class="nav-link {{ if $p.IsMenuCurrent "main" . }}active{{ end }}" href="{{ .URL }}"{{ if .Params.external }} target="_blank" rel="noopener noreferrer"{{ end }}>{{ .Name }}{{ with .Post }}{{ . | safeHTML }}{{ end }}</a>
         </li>
         {{ end }}
       </ul>

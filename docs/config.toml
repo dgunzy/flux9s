@@ -45,6 +45,13 @@ buildFuture = false
     name = "Developer Guide"
     url = "/developer-guide/"
     weight = 5
+  [[menu.main]]
+    name = "Flux Docs"
+    url = "https://fluxcd.io/flux/"
+    weight = 6
+    post = ' <i class="fas fa-external-link-alt fa-xs"></i>'
+    [menu.main.params]
+      external = true
 
 # Parameters
 [params]
