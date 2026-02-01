@@ -11,23 +11,21 @@ type: docs
 
 flux9s follows a modified Elm Architecture pattern with async task spawning:
 
-{{< blocks/section color="white" >}}
-{{% blocks/feature icon="fa-database" title="Model" %}}
+### Model
+
 `App` struct holds all application state in a centralized location. State is organized into logical sub-structures for better maintainability.
-{{% /blocks/feature %}}
 
-{{% blocks/feature icon="fa-sync" title="Update" %}}
+### Update
+
 `handle_key()` processes events and updates state synchronously. Event handling is centralized in `src/tui/app/events.rs`.
-{{% /blocks/feature %}}
 
-{{% blocks/feature icon="fa-eye" title="View" %}}
+### View
+
 `render()` displays current state using stateless components. Views are organized in `src/tui/views/` and receive all needed data as parameters.
-{{% /blocks/feature %}}
 
-{{% blocks/feature icon="fa-bolt" title="Async Layer" %}}
+### Async Layer
+
 Spawned tasks + oneshot channels handle I/O operations without blocking the UI. Async operations are managed in `src/tui/app/async_ops.rs`.
-{{% /blocks/feature %}}
-{{< /blocks/section >}}
 
 ## Project Structure
 
@@ -101,7 +99,12 @@ This runs:
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! To contribute:
+
+1. **Fork the repository** on GitHub
+2. **Create a branch** in your fork for your changes
+3. **Make your changes** following the development guidelines
+4. **Submit a Pull Request** from your fork to the main repository
 
 {{% alert title="Development Guidelines" color="info" %}}
 For detailed development guidelines, see the [AGENTS.md](https://github.com/dgunzy/flux9s/blob/main/AGENTS.md) file in the repository.
