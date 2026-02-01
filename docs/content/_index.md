@@ -20,7 +20,7 @@ notoc: true
     </div>
     
     <!-- Tagline -->
-    <p class="lead mb-5">A K9s-inspired terminal UI for monitoring Flux GitOps resources</p>
+    <p class="lead mb-5">A <a href="https://github.com/derailed/k9s" target="_blank" rel="noopener noreferrer">K9s</a>-inspired terminal UI for monitoring Flux GitOps resources</p>
     
     <!-- Action Buttons -->
     <div class="d-flex flex-wrap justify-content-center gap-3 mb-5">
