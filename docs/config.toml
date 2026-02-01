@@ -1,5 +1,5 @@
 baseURL = 'https://flux9s.ca/'
-title = 'flux9s Documentation'
+title = 'flux9s'
 description = 'A K9s-inspired terminal UI for monitoring Flux GitOps resources in real-time'
 
 # Language settings
@@ -29,10 +29,6 @@ buildFuture = false
 
 # Menu configuration
 [menu]
-  [[menu.main]]
-    name = "Home"
-    url = "/"
-    weight = 1
   [[menu.main]]
     name = "Getting Started"
     url = "/getting-started/"

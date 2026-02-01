@@ -13,19 +13,19 @@ flux9s follows a modified Elm Architecture pattern with async task spawning:
 
 {{< blocks/section color="white" >}}
 {{% blocks/feature icon="fa-database" title="Model" %}}
-`App` struct holds all application state in a centralized location.
+`App` struct holds all application state in a centralized location. State is organized into logical sub-structures for better maintainability.
 {{% /blocks/feature %}}
 
 {{% blocks/feature icon="fa-sync" title="Update" %}}
-`handle_key()` processes events and updates state synchronously.
+`handle_key()` processes events and updates state synchronously. Event handling is centralized in `src/tui/app/events.rs`.
 {{% /blocks/feature %}}
 
 {{% blocks/feature icon="fa-eye" title="View" %}}
-`render()` displays current state using stateless components.
+`render()` displays current state using stateless components. Views are organized in `src/tui/views/` and receive all needed data as parameters.
 {{% /blocks/feature %}}
 
 {{% blocks/feature icon="fa-bolt" title="Async Layer" %}}
-Spawned tasks + oneshot channels handle I/O operations without blocking the UI.
+Spawned tasks + oneshot channels handle I/O operations without blocking the UI. Async operations are managed in `src/tui/app/async_ops.rs`.
 {{% /blocks/feature %}}
 {{< /blocks/section >}}
 
@@ -59,6 +59,7 @@ flux9s/
 ### Recent Architecture Changes
 
 **App Module Refactoring:** The application logic has been refactored from a single `app.rs` file into a modular structure under `src/tui/app/`:
+
 - **`core.rs`** - Main App struct and core logic
 - **`state.rs`** - Organized state structures (ViewState, SelectionState, UIState, AsyncOperationState)
 - **`events.rs`** - Event handling and input processing
@@ -67,7 +68,9 @@ flux9s/
 
 This separation improves code organization, maintainability, and makes the codebase easier to navigate.
 
-**Submenu System:** An interactive submenu system has been added for commands like `:ctx`, providing a user-friendly way to select from available options. The system is built using the `CommandSubmenu` trait and can be extended to other commands. See the main `DEVELOPER_GUIDE.md` for implementation details.
+**Submenu System:** An interactive submenu system has been added for commands like `:ctx` and `:skin`, providing a user-friendly way to select from available options. The system is built using the `CommandSubmenu` trait and can be extended to other commands. See the main `DEVELOPER_GUIDE.md` for implementation details.
+
+**Keybinding Centralization:** All keybindings are now centralized in `src/tui/keybindings.rs`, providing a single source of truth for footer rendering, help text, and layout calculations.
 
 ## Development Setup
 
