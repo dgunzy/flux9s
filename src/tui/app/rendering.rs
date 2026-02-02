@@ -45,7 +45,7 @@ impl App {
                     let chunks = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([Constraint::Min(0)])
-                        .split(f.size());
+                        .split(f.area());
                     render_splash(f, chunks[0], &self.theme);
                     return;
                 }
@@ -58,8 +58,8 @@ impl App {
             }
         }
 
-        let terminal_width = f.size().width;
-        let terminal_height = f.size().height;
+        let terminal_width = f.area().width;
+        let terminal_height = f.area().height;
         let current_size = (terminal_width, terminal_height);
 
         // Only recalculate layout dimensions when terminal size changes
@@ -157,7 +157,7 @@ impl App {
             ];
             let error_block = Block::default().title("Error").borders(Borders::ALL);
             let error_para = Paragraph::new(error_lines).block(error_block);
-            f.render_widget(error_para, f.size());
+            f.render_widget(error_para, f.area());
             return;
         }
 
@@ -172,7 +172,7 @@ impl App {
                 Constraint::Min(0),                    // Main content (flexible)
                 Constraint::Length(footer_constraint), // Cached footer height
             ])
-            .split(f.size());
+            .split(f.area());
 
         let resources = self.get_filtered_resources();
         // Only render header if not in headless mode

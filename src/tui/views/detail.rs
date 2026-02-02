@@ -1,5 +1,7 @@
 //! Resource detail view rendering
 
+use crate::models::FluxResourceKind;
+use crate::models::flux_resource_kind::field_names;
 use crate::tui::theme::Theme;
 use crate::watcher::ResourceState;
 use ratatui::{
@@ -10,6 +12,22 @@ use ratatui::{
     widgets::Paragraph,
 };
 use std::collections::HashMap;
+
+/// Capitalize the first letter of a field key for display
+/// Special case: "URL" stays all-caps
+fn capitalize_first(key: &str) -> String {
+    if key == "URL" {
+        "URL".to_string()
+    } else if let Some(first) = key.chars().next() {
+        format!(
+            "{}{}",
+            first.to_uppercase(),
+            &key[first.len_utf8()..].to_lowercase()
+        )
+    } else {
+        key.to_string()
+    }
+}
 
 /// Render the resource detail view
 pub fn render_resource_detail(
@@ -116,63 +134,35 @@ pub fn render_resource_detail(
             Style::default().fg(theme.text_label),
         )]));
 
-        if let Some(spec) = obj.get("spec").and_then(|s| s.as_object()) {
-            // Show key spec fields
-            if let Some(url) = spec.get("url").and_then(|u| u.as_str()) {
-                lines.push(Line::from(vec![
-                    Span::styled("URL: ", Style::default().fg(theme.text_label)),
-                    Span::raw(url),
-                ]));
-            }
-            if let Some(branch) = spec.get("branch").and_then(|b| b.as_str()) {
-                lines.push(Line::from(vec![
-                    Span::styled("Branch: ", Style::default().fg(theme.text_label)),
-                    Span::raw(branch),
-                ]));
-            }
-            if let Some(path) = spec.get("path").and_then(|p| p.as_str()) {
-                lines.push(Line::from(vec![
-                    Span::styled("Path: ", Style::default().fg(theme.text_label)),
-                    Span::raw(path),
-                ]));
-            }
-            if let Some(interval) = spec.get("interval").and_then(|i| i.as_str()) {
-                lines.push(Line::from(vec![
-                    Span::styled("Interval: ", Style::default().fg(theme.text_label)),
-                    Span::raw(interval),
-                ]));
-            }
-            // OCIRepository specific: semver from spec.ref.semver
-            if let Some(semver) = spec
-                .get("ref")
-                .and_then(|r| r.get("semver"))
-                .and_then(|s| s.as_str())
-            {
-                lines.push(Line::from(vec![
-                    Span::styled("Semver: ", Style::default().fg(theme.text_label)),
-                    Span::raw(semver),
-                ]));
-            }
-            // OCIRepository specific: tag from spec.ref.tag
-            if let Some(tag) = spec
-                .get("ref")
-                .and_then(|r| r.get("tag"))
-                .and_then(|t| t.as_str())
-            {
-                lines.push(Line::from(vec![
-                    Span::styled("Tag: ", Style::default().fg(theme.text_label)),
-                    Span::raw(tag),
-                ]));
-            }
-        }
+        // Extract fields using FluxResourceKind method
+        if let Some(kind) = FluxResourceKind::parse_optional(&resource.resource_type) {
+            let fields = kind.extract_fields(obj);
 
-        // Show status artifact info (digest for OCIRepository)
-        if let Some(status) = obj.get("status").and_then(|s| s.as_object()) {
-            if let Some(artifact) = status.get("artifact").and_then(|a| a.as_object()) {
-                if let Some(digest) = artifact.get("digest").and_then(|d| d.as_str()) {
+            // Display order: URL, BRANCH, PATH, CHART, VERSION, SOURCE, IMAGE, SEMVER, TAG, PRUNE, INTERVAL, DIGEST
+            let display_order = [
+                field_names::URL,
+                field_names::BRANCH,
+                field_names::PATH,
+                field_names::CHART,
+                field_names::VERSION,
+                field_names::SOURCE,
+                field_names::IMAGE,
+                field_names::SEMVER,
+                field_names::TAG,
+                field_names::PRUNE,
+                field_names::INTERVAL,
+                field_names::DIGEST,
+            ];
+
+            for &field_key in display_order.iter() {
+                if let Some(value) = fields.get(field_key) {
+                    let label = capitalize_first(field_key);
                     lines.push(Line::from(vec![
-                        Span::styled("Digest: ", Style::default().fg(theme.text_label)),
-                        Span::raw(digest),
+                        Span::styled(
+                            format!("{}: ", label),
+                            Style::default().fg(theme.text_label),
+                        ),
+                        Span::raw(value.clone()),
                     ]));
                 }
             }

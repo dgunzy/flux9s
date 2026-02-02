@@ -906,7 +906,7 @@ fn render_node_text(
     f.render_widget(block, node_area);
 
     // Get inner area (inside the border)
-    let inner = node_area.inner(&Margin {
+    let inner = node_area.inner(Margin {
         horizontal: 1,
         vertical: 1,
     });

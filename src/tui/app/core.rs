@@ -288,6 +288,7 @@ impl App {
         &mut self.state
     }
 
+    #[allow(dead_code)] // May be used by external code or future features
     pub fn resource_objects(&self) -> &HashMap<String, serde_json::Value> {
         &self.resource_objects
     }
