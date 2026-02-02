@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-02-02
+
+### Version 0.7.2
+
+#### Added
+- Added links for k9s and flux in the documentation
+- Added demo videos to the documentation
+
+#### Changed
+- Tweaked the wording and spacing in the documentation
+
+#### Fixed
+- Added configuration for the controller/operator namespace
+
 ## [0.7.1] - 2026-01-14
 
 ### Version 0.7.1
