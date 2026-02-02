@@ -12,6 +12,55 @@ documentation = "https://docs.rs/flux9s"
 keywords = ["kubernetes", "flux", "gitops", "tui", "k9s"]
 categories = ["command-line-utilities", "development-tools"]
 
+# Exclude large files and directories from crate package
+exclude = [
+    # Documentation site (52MB+ with videos and vendor files)
+    "docs/",
+    # Test resources
+    "test-resources/",
+    # CI/CD workflows
+    ".github/",
+    # Large media files
+    "*.mp4",
+    "*.mov",
+    "*.avi",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    # Build artifacts
+    "target/",
+    # IDE files
+    ".idea/",
+    ".vscode/",
+    "*.swp",
+    "*.swo",
+    # OS files
+    ".DS_Store",
+    "Thumbs.db",
+    # Scripts (not needed for crate)
+    "scripts/",
+    # Example configs (not needed for crate)
+    "examples/",
+    # Testing kubeconfig
+    "testing-kubeconfig",
+    # Review documents
+    "PLUGIN_REVIEW.md",
+    "PR_REVIEW.md",
+    # Developer documentation (not needed for crate users)
+    "AGENTS.md",
+    "CLAUDE.md",
+    # Theme files (examples, not needed)
+    "navy.yaml",
+    "rose-pine.yaml",
+    # Build artifacts
+    "*.rlib",
+    "manifest.json",
+    "Cargo.toml.orig",
+    # Backup files
+    "*.orig",
+]
+
 [features]
 # Vendor OpenSSL for static linking (needed for musl targets)
 vendored-openssl = ["openssl/vendored"]
@@ -36,7 +85,7 @@ tokio = { version = "1.48", features = ["full"] }
 futures = "0.3"
 
 # TUI framework
-ratatui = "0.26"
+ratatui = "0.29"
 crossterm = "0.29"
 
 # Error handling
