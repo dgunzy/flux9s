@@ -190,6 +190,7 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
 - Update DEVELOPER_GUIDE.md for architectural changes
 - Update README.md for user-facing changes
 - **Update docs site**: When making user-facing changes (features, commands, operations, configuration), update the documentation site in `docs/` as part of the same work
+- **Design documents**: Keep all markdown design docs (*.md) succinct and focused on high-level architecture, decisions, and rationale. Use pseudocode instead of actual code samples. Design docs should convey the "what" and "why", not the "how" in detail
 
 ## Performance
 

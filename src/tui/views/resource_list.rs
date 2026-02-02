@@ -25,6 +25,7 @@ pub fn render_resource_list(
     theme: &Theme,
     no_icons: bool,
     favorites: &HashSet<String>,
+    plugin_registry: Option<&crate::plugins::PluginRegistry>,
 ) {
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling
@@ -64,6 +65,16 @@ pub fn render_resource_list(
 
     // Determine if we're in unified view or resource-type-specific view
     let is_unified = selected_resource_type.is_none();
+
+    // Store header column names outside the if/else to keep them alive
+    let header_cols: Option<Vec<String>> = if !is_unified {
+        Some(get_resource_type_columns(
+            selected_resource_type.as_ref().unwrap(),
+            plugin_registry,
+        ))
+    } else {
+        None
+    };
 
     let (rows, header, constraints): (Vec<Row>, Row, Vec<Constraint>) = if is_unified {
         // Unified view: show common fields with status indicator
@@ -166,8 +177,17 @@ pub fn render_resource_list(
     } else {
         // Resource-type-specific view: show type-specific fields
         let resource_type = selected_resource_type.as_ref().unwrap();
-        let column_names = get_resource_type_columns(resource_type);
-        let header = Row::new(column_names.clone()).style(
+        let column_names = header_cols.as_ref().unwrap();
+
+        // Get plugin column config if this is a plugin resource
+        let plugin_column_config: Option<(
+            &crate::plugins::manifest::PluginManifest,
+            &crate::plugins::manifest::WatchedResourceConfig,
+        )> = plugin_registry
+            .and_then(|reg| reg.get_watched_resource_for_display_name(resource_type));
+
+        // Create header from column names (header_cols is kept alive in outer scope)
+        let header = Row::new(column_names.iter().map(|s| s.as_str()).collect::<Vec<_>>()).style(
             Style::default()
                 .fg(theme.table_header)
                 .add_modifier(Modifier::BOLD),
@@ -193,13 +213,15 @@ pub fn render_resource_list(
                 let key = crate::watcher::resource_key(&r.namespace, &r.name, &r.resource_type);
                 let specific_fields = resource_objects
                     .get(&key)
-                    .map(|obj| extract_resource_specific_fields(resource_type, obj))
+                    .map(|obj| {
+                        extract_resource_specific_fields(resource_type, obj, plugin_registry)
+                    })
                     .unwrap_or_default();
 
                 // Build row cells based on column names
                 let mut cells = Vec::new();
-                for col in &column_names {
-                    let cell = match *col {
+                for col in column_names.iter() {
+                    let cell = match col.as_str() {
                         "STATUS" => Cell::from(Span::styled(
                             status_indicator,
                             Style::default().fg(status_color),
@@ -261,12 +283,36 @@ pub fn render_resource_list(
                             };
                             Cell::from(display)
                         }
-                        _ => Cell::from(
-                            specific_fields
-                                .get(*col)
-                                .cloned()
-                                .unwrap_or("-".to_string()),
-                        ),
+                        _ => {
+                            // Check if this is a plugin column with a renderer
+                            if let Some((_, watched_config)) = plugin_column_config {
+                                if let Some(column_config) =
+                                    watched_config.columns.iter().find(|c| c.name == *col)
+                                {
+                                    let value = specific_fields
+                                        .get(col)
+                                        .cloned()
+                                        .unwrap_or("-".to_string());
+                                    let span = crate::plugins::render_column_value(
+                                        &value,
+                                        &column_config.renderer,
+                                        theme,
+                                    );
+                                    Cell::from(span)
+                                } else {
+                                    Cell::from(
+                                        specific_fields
+                                            .get(col)
+                                            .cloned()
+                                            .unwrap_or("-".to_string()),
+                                    )
+                                }
+                            } else {
+                                Cell::from(
+                                    specific_fields.get(col).cloned().unwrap_or("-".to_string()),
+                                )
+                            }
+                        }
                     };
                     cells.push(cell);
                 }
@@ -278,18 +324,29 @@ pub fn render_resource_list(
         // Build constraints based on column names
         let constraints: Vec<Constraint> = column_names
             .iter()
-            .map(|col| match *col {
-                "STATUS" => Constraint::Length(if no_icons { 6 } else { 3 }),
-                "NAMESPACE" => Constraint::Min(15),
-                "NAME" => Constraint::Min(30),
-                "TYPE" => Constraint::Min(20),
-                "SUSPENDED" | "READY" => Constraint::Length(10),
-                "REVISION" => Constraint::Min(20),
-                "URL" | "PATH" | "CHART" | "IMAGE" | "SOURCE" => Constraint::Min(30),
-                "BRANCH" | "VERSION" => Constraint::Min(15),
-                "PRUNE" => Constraint::Length(8),
-                "MESSAGE" => Constraint::Percentage(40),
-                _ => Constraint::Min(15),
+            .map(|col| {
+                // Check if this is a plugin column with width defined
+                if let Some((_, watched_config)) = plugin_column_config {
+                    if let Some(column_config) =
+                        watched_config.columns.iter().find(|c| c.name == *col)
+                    {
+                        return Constraint::Length(column_config.width);
+                    }
+                }
+                // Default constraints for known columns
+                match col.as_str() {
+                    "STATUS" => Constraint::Length(if no_icons { 6 } else { 3 }),
+                    "NAMESPACE" => Constraint::Min(15),
+                    "NAME" => Constraint::Min(30),
+                    "TYPE" => Constraint::Min(20),
+                    "SUSPENDED" | "READY" => Constraint::Length(10),
+                    "REVISION" => Constraint::Min(20),
+                    "URL" | "PATH" | "CHART" | "IMAGE" | "SOURCE" => Constraint::Min(30),
+                    "BRANCH" | "VERSION" => Constraint::Min(15),
+                    "PRUNE" => Constraint::Length(8),
+                    "MESSAGE" => Constraint::Percentage(40),
+                    _ => Constraint::Min(15),
+                }
             })
             .collect();
 

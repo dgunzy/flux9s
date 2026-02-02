@@ -586,6 +586,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirs"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
 name = "dirs-sys"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -755,6 +764,7 @@ dependencies = [
  "crossterm 0.29.0",
  "csscolorparser",
  "directories",
+ "dirs",
  "flate2",
  "futures",
  "insta",
@@ -763,6 +773,7 @@ dependencies = [
  "mockall",
  "openssl",
  "ratatui",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",

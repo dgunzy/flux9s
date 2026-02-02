@@ -98,6 +98,9 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 async-trait = "0.1"
 
+# HTTP client (for plugin data sources)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
 # Helm release decoding
 base64 = "0.22"
 flate2 = "1.0"
@@ -107,6 +110,7 @@ chrono = { version = "0.4", features = ["serde"] }
 url = "2.5"
 tempfile = "3.10"
 directories = "5.0"
+dirs = "5.0"
 csscolorparser = "0.8"
 
 # CLI argument parsing

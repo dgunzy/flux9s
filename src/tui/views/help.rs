@@ -11,7 +11,13 @@ use ratatui::{
 };
 
 /// Render the help view with columns (K9s-style)
-pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: &[String]) {
+pub fn render_help(
+    f: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    namespace_hotkeys: &[String],
+    plugin_registry: Option<&crate::plugins::PluginRegistry>,
+) {
     // Create inner area with padding for the border
     let inner_area = Rect {
         x: area.x + 1,
@@ -35,29 +41,50 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
     let resource_items = get_resource_help_commands();
     render_help_column(f, column_chunks[0], "RESOURCE", &resource_items, theme);
 
-    // GENERAL column
-    let general_items = vec![
-        ("<q>", "Quit"),
-        ("<Esc>", "Back/Quit"),
-        ("<?>", "Show/hide help"),
-        ("<:>", "Command mode"),
-        ("</>", "Filter resources"),
-        ("<Tab>", "Autocomplete command"),
-        (":help", "Show/hide help"),
-        (":readonly", "Toggle readonly mode"),
-        (":skin <n>", "Change theme/skin"),
-        (":ctx <n>", "Switch context"),
-        (":ctx", "Open context submenu"),
-        (":ns <n>", "Switch namespace"),
-        (":ns all", "Show all namespaces"),
-        (":all", "Show all resources"),
-        (":healthy", "Show healthy resources"),
-        (":unhealthy", "Show unhealthy resources"),
-        (":favorites", "View favorites"),
-        (":fav", "View favorites"),
-        (":q", "Quit application"),
+    // GENERAL column - build dynamically to include plugin commands
+    let mut general_items: Vec<(String, String)> = vec![
+        ("<q>".to_string(), "Quit".to_string()),
+        ("<Esc>".to_string(), "Back/Quit".to_string()),
+        ("<?>".to_string(), "Show/hide help".to_string()),
+        ("<:>".to_string(), "Command mode".to_string()),
+        ("</>".to_string(), "Filter resources".to_string()),
+        ("<Tab>".to_string(), "Autocomplete command".to_string()),
+        (":help".to_string(), "Show/hide help".to_string()),
+        (":readonly".to_string(), "Toggle readonly mode".to_string()),
+        (":skin <n>".to_string(), "Change theme/skin".to_string()),
+        (":ctx <n>".to_string(), "Switch context".to_string()),
+        (":ctx".to_string(), "Open context submenu".to_string()),
+        (":ns <n>".to_string(), "Switch namespace".to_string()),
+        (":ns all".to_string(), "Show all namespaces".to_string()),
+        (":all".to_string(), "Show all resources".to_string()),
+        (":healthy".to_string(), "Show healthy resources".to_string()),
+        (
+            ":unhealthy".to_string(),
+            "Show unhealthy resources".to_string(),
+        ),
+        (":favorites".to_string(), "View favorites".to_string()),
+        (":fav".to_string(), "View favorites".to_string()),
+        (":q".to_string(), "Quit application".to_string()),
     ];
-    render_help_column(f, column_chunks[1], "GENERAL", &general_items, theme);
+
+    // Add plugin watched resource commands dynamically
+    if let Some(registry) = plugin_registry {
+        for (cmd, display_name) in registry.get_watched_resource_commands() {
+            let cmd_with_colon = if cmd.starts_with(':') {
+                cmd.clone()
+            } else {
+                format!(":{}", cmd)
+            };
+            general_items.push((cmd_with_colon, format!("View {}", display_name)));
+        }
+    }
+
+    // Convert to &str slices for rendering
+    let general_items_ref: Vec<(&str, &str)> = general_items
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    render_help_column(f, column_chunks[1], "GENERAL", &general_items_ref, theme);
 
     // NAVIGATION column
     let nav_items = vec![

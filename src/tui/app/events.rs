@@ -767,8 +767,9 @@ impl App {
         }
 
         // Use centralized command registry to find matches
-        // This prioritizes CRD commands over app commands
-        let matches = crate::tui::commands::find_matching_commands(&cmd_lower);
+        // This prioritizes CRD commands over plugin commands over app commands
+        let plugin_registry = self.plugin_registry.as_ref();
+        let matches = crate::tui::commands::find_matching_commands(&cmd_lower, plugin_registry);
 
         if matches.is_empty() {
             return;
@@ -1091,11 +1092,25 @@ impl App {
             return None;
         }
 
+        // Check for CRD resource command first
         if let Some(display_name) = crate::watcher::get_display_name_for_command(&cmd_lower) {
             self.view_state.selected_resource_type = Some(display_name.to_string());
             self.view_state.selected_index = 0;
             self.view_state.scroll_offset = 0;
             self.invalidate_layout_cache(); // Resource type filter affects header display
+            return None;
+        }
+
+        // Check for plugin watched resource command
+        if let Some(display_name) = crate::tui::commands::get_plugin_display_name_for_command(
+            &cmd_lower,
+            self.plugin_registry.as_ref(),
+        ) {
+            self.view_state.selected_resource_type = Some(display_name);
+            self.view_state.selected_index = 0;
+            self.view_state.scroll_offset = 0;
+            self.invalidate_layout_cache(); // Resource type filter affects header display
+            return None;
         }
 
         None

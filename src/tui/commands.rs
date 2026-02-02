@@ -73,12 +73,16 @@ pub const APP_COMMANDS: &[Command] = &[
 
 /// Find all commands that match the given prefix
 ///
-/// Returns commands sorted by priority (CRD commands first, then App commands)
+/// Returns commands sorted by priority (CRD commands first, then Plugin commands, then App commands)
 /// and then alphabetically within each category.
 /// Commands that take arguments are returned with a trailing space (e.g., "skin ").
-pub fn find_matching_commands(prefix: &str) -> Vec<String> {
+pub fn find_matching_commands(
+    prefix: &str,
+    plugin_registry: Option<&crate::plugins::PluginRegistry>,
+) -> Vec<String> {
     let prefix_lower = prefix.to_lowercase();
     let mut crd_matches: Vec<String> = Vec::new();
+    let mut plugin_matches: Vec<String> = Vec::new();
     let mut app_matches: Vec<String> = Vec::new();
 
     // Get CRD commands from registry
@@ -87,6 +91,16 @@ pub fn find_matching_commands(prefix: &str) -> Vec<String> {
         for alias in aliases.iter() {
             if alias.starts_with(&prefix_lower) {
                 crd_matches.push((*alias).to_string());
+            }
+        }
+    }
+
+    // Get plugin watched resource commands
+    if let Some(registry) = plugin_registry {
+        for (cmd, _display_name) in registry.get_watched_resource_commands() {
+            let cmd_lower = cmd.to_lowercase();
+            if cmd_lower.starts_with(&prefix_lower) {
+                plugin_matches.push(cmd);
             }
         }
     }
@@ -116,10 +130,12 @@ pub fn find_matching_commands(prefix: &str) -> Vec<String> {
 
     // Sort matches alphabetically
     crd_matches.sort();
+    plugin_matches.sort();
     app_matches.sort();
 
-    // Combine: CRD commands first (higher priority), then app commands
+    // Combine: CRD commands first (higher priority), then plugin commands, then app commands
     let mut all_matches = crd_matches;
+    all_matches.extend(plugin_matches);
     all_matches.extend(app_matches);
     all_matches
 }
@@ -194,6 +210,18 @@ pub fn is_namespace_command(cmd: &str) -> bool {
 pub fn is_favorites_command(cmd: &str) -> bool {
     let cmd_lower = cmd.to_lowercase();
     cmd_lower == "favorites" || cmd_lower == "fav"
+}
+
+/// Get plugin watched resource display name for a command
+///
+/// Returns the display name if the command matches a plugin watched resource
+pub fn get_plugin_display_name_for_command(
+    cmd: &str,
+    plugin_registry: Option<&crate::plugins::PluginRegistry>,
+) -> Option<String> {
+    let registry = plugin_registry?;
+    let (_, watched) = registry.get_watched_resource_for_command(cmd)?;
+    Some(watched.display_name().to_string())
 }
 
 /// Extract argument from a command that takes arguments

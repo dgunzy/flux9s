@@ -28,6 +28,7 @@ use crossterm::{
 use kube::Api;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
+use std::sync::Arc;
 
 use crate::models::FluxResourceKind;
 use crate::watcher::ResourceKey;
@@ -292,6 +293,103 @@ pub async fn run_tui_with_async_init(
             Vec::new()
         };
 
+        // Load plugins
+        tracing::debug!("Loading plugins");
+        let (plugin_registry, plugin_cache, plugin_manifests) =
+            match crate::plugins::PluginLoader::new() {
+                Ok(loader) => match loader.load_all() {
+                    Ok(plugins) => {
+                        if !plugins.is_empty() {
+                            tracing::info!("Loaded {} plugin(s)", plugins.len());
+
+                            // Create plugin registry
+                            let mut registry = crate::plugins::PluginRegistry::new();
+                            for plugin in plugins.clone() {
+                                registry.register(plugin);
+                            }
+
+                            // Collect all watched_resources from all plugins
+                            let mut watched_resources = Vec::new();
+                            for plugin in &plugins {
+                                watched_resources.extend(plugin.watched_resources.clone());
+                            }
+
+                            // Start watching plugin resources
+                            if !watched_resources.is_empty() {
+                                tracing::debug!(
+                                    "Starting watchers for {} plugin resource(s)",
+                                    watched_resources.len()
+                                );
+                                if let Err(e) = watcher.watch_plugin_resources(&watched_resources) {
+                                    tracing::warn!(
+                                        "Failed to start plugin resource watchers: {}",
+                                        e
+                                    );
+                                } else {
+                                    tracing::info!(
+                                        "Started watchers for {} plugin resource(s)",
+                                        watched_resources.len()
+                                    );
+                                }
+                            }
+
+                            // Create plugin cache and load connectors
+                            let dns_suffix = config.plugin.kubernetes_dns_suffix.clone();
+                            let mut cache =
+                                crate::plugins::PluginCache::new(Some(client.clone()), dns_suffix);
+                            if let Err(e) = cache.load_plugins(plugins.clone()) {
+                                tracing::warn!("Failed to load plugin connectors: {}", e);
+                                (None, None, None)
+                            } else {
+                                (Some(registry), Some(Arc::new(cache)), Some(plugins))
+                            }
+                        } else {
+                            tracing::debug!("No plugins found");
+                            (None, None, None)
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load plugin manifests: {}", e);
+                        (None, None, None)
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("Failed to create plugin loader: {}", e);
+                    (None, None, None)
+                }
+            };
+
+        // Spawn background task to refresh plugin data
+        if let (Some(cache_arc), Some(manifests)) =
+            (plugin_cache.as_ref(), plugin_manifests.as_ref())
+        {
+            let cache_clone = Arc::clone(cache_arc);
+            let manifests_clone = manifests.clone();
+
+            tokio::spawn(async move {
+                tracing::debug!("Starting plugin data refresh background task");
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+
+                loop {
+                    interval.tick().await;
+
+                    if let Err(e) = cache_clone.refresh_expired(&manifests_clone).await {
+                        tracing::warn!("Plugin data refresh task error: {}", e);
+                    }
+                }
+            });
+
+            // Perform initial fetch for all plugins
+            let cache_clone = Arc::clone(cache_arc);
+            let manifests_clone = manifests.clone();
+            tokio::spawn(async move {
+                tracing::debug!("Performing initial plugin data fetch");
+                if let Err(e) = cache_clone.refresh_expired(&manifests_clone).await {
+                    tracing::warn!("Initial plugin data fetch failed: {}", e);
+                }
+            });
+        }
+
         let _ = kube_init_tx.send(Ok((
             client,
             context,
@@ -299,6 +397,8 @@ pub async fn run_tui_with_async_init(
             watcher,
             event_rx,
             namespace_hotkeys,
+            plugin_registry,
+            plugin_cache,
         )));
     });
 
@@ -313,7 +413,16 @@ pub async fn run_tui_with_async_init(
         if !kube_initialized {
             if let Ok(result) = kube_init_rx.try_recv() {
                 match result {
-                    Ok((client, context, namespace, w, rx, namespace_hotkeys)) => {
+                    Ok((
+                        client,
+                        context,
+                        namespace,
+                        w,
+                        rx,
+                        namespace_hotkeys,
+                        plugin_registry,
+                        plugin_cache,
+                    )) => {
                         tracing::debug!("Kubernetes initialization complete");
                         kube_client = Some(client.clone());
                         event_rx = Some(rx);
@@ -328,6 +437,19 @@ pub async fn run_tui_with_async_init(
                                 "Discovered {} namespaces for hotkeys",
                                 app.namespace_hotkeys().len()
                             );
+                        }
+
+                        // Set plugin registry and cache
+                        if let Some(registry) = plugin_registry {
+                            tracing::debug!(
+                                "Plugin registry initialized with {} plugin(s)",
+                                registry.len()
+                            );
+                            app.set_plugin_registry(registry);
+                        }
+                        if let Some(cache) = plugin_cache {
+                            tracing::debug!("Plugin cache initialized");
+                            app.set_plugin_cache(cache);
                         }
 
                         kube_initialized = true;
@@ -611,6 +733,24 @@ pub async fn run_tui_with_async_init(
                                 true,
                             ));
                             return Ok(());
+                        }
+
+                        // Restart plugin watchers if any plugins are loaded
+                        if let Some(ref registry) = app.plugin_registry {
+                            let mut watched_resources = Vec::new();
+                            for plugin in registry.all() {
+                                watched_resources.extend(plugin.watched_resources.clone());
+                            }
+                            if !watched_resources.is_empty() {
+                                if let Err(e) =
+                                    new_watcher.watch_plugin_resources(&watched_resources)
+                                {
+                                    tracing::warn!(
+                                        "Failed to restart plugin watchers after context switch: {}",
+                                        e
+                                    );
+                                }
+                            }
                         }
 
                         // Update app with new context and watcher

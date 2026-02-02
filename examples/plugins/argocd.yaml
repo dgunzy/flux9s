@@ -1,0 +1,102 @@
+name: argocd
+version: 1.0.0
+enabled: true
+description: "Argo CD plugin - Watch Applications and AppProjects"
+
+# Watch Argo CD CRDs and create new resource views
+watched_resources:
+  - type: kubernetes_crd
+    kind: Application
+    group: argoproj.io
+    version: v1alpha1
+    plural: applications
+    command: ":argo"
+    display_name: "Argo Apps"
+    
+    # View capabilities
+    supports_yaml: true
+    supports_describe: true
+    supports_logs: false
+    
+    # Column definitions for list view
+    columns:
+      - name: NAME
+        path: .metadata.name
+        width: 25
+        enabled: true
+        renderer: text
+      
+      - name: NAMESPACE
+        path: .metadata.namespace
+        width: 15
+        enabled: true
+        renderer: text
+      
+      - name: SYNC
+        path: .status.sync.status
+        width: 10
+        enabled: true
+        renderer: status_badge
+      
+      - name: HEALTH
+        path: .status.health.status
+        width: 10
+        enabled: true
+        renderer: status_badge
+      
+      - name: REPO
+        path: .spec.source.repoURL
+        width: 30
+        enabled: true
+        renderer: text
+      
+      - name: PATH
+        path: .spec.source.path
+        width: 20
+        enabled: true
+        renderer: text
+    
+    # Status extraction for ready/suspended indicators
+    status:
+      ready_path: .status.health.status
+      ready_value: "Healthy"
+      suspended_path: .spec.syncPolicy.automated
+      suspended_when_missing: true
+      message_path: .status.conditions[0].message
+
+  - type: kubernetes_crd
+    kind: AppProject
+    group: argoproj.io
+    version: v1alpha1
+    plural: appprojects
+    command: ":argoproj"
+    display_name: "Argo Projects"
+    
+    supports_yaml: true
+    supports_describe: true
+    supports_logs: false
+    
+    columns:
+      - name: NAME
+        path: .metadata.name
+        width: 20
+        enabled: true
+        renderer: text
+      
+      - name: DESCRIPTION
+        path: .spec.description
+        width: 40
+        enabled: true
+        renderer: text
+      
+      - name: SOURCES
+        path: .spec.sourceRepos
+        width: 30
+        enabled: true
+        renderer: text
+      
+      - name: DESTINATIONS
+        path: .spec.destinations
+        width: 30
+        enabled: true
+        renderer: text

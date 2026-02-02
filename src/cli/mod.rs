@@ -4,8 +4,10 @@
 
 mod config;
 mod logging;
+mod plugin;
 mod version;
 
 pub use config::{ConfigSubcommand, handle_config_command};
 pub use logging::*;
+pub use plugin::{PluginSubcommand, handle_plugin_command};
 pub use version::{check_for_updates_blocking, display_version};

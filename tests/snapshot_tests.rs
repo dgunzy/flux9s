@@ -3,6 +3,7 @@
 //! These tests use insta to capture and compare the rendered output of the TUI views.
 //! Run `cargo insta review` to review and accept snapshot changes.
 
+use flux9s::config::schema::PluginConfig;
 use flux9s::config::{Config, LoggerConfig, UiConfig};
 use flux9s::tui::Theme;
 use flux9s::tui::app::state::ControllerPodState;
@@ -40,6 +41,9 @@ fn create_test_config() -> Config {
             buffer: 1000,
             since_seconds: 3600,
             text_wrap: false,
+        },
+        plugin: PluginConfig {
+            kubernetes_dns_suffix: ".svc.cluster.local".to_string(),
         },
         context_skins: HashMap::new(),
         cluster: HashMap::new(),
@@ -240,6 +244,7 @@ fn test_render_footer_navigation() {
                 &theme,
                 &[],
                 &None,
+                None,
             );
         })
         .unwrap();
@@ -273,6 +278,7 @@ fn test_render_footer_command_mode() {
                 &theme,
                 &[],
                 &None,
+                None,
             );
         })
         .unwrap();
@@ -306,6 +312,7 @@ fn test_render_footer_filter_mode() {
                 &theme,
                 &[],
                 &None,
+                None,
             );
         })
         .unwrap();
@@ -346,6 +353,7 @@ fn test_render_resource_list() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                None,
             );
         })
         .unwrap();
@@ -386,6 +394,7 @@ fn test_render_resource_list_with_selection() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                None,
             );
         })
         .unwrap();
@@ -423,6 +432,7 @@ fn test_render_resource_list_with_resource_type_filter() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                None,
             );
         })
         .unwrap();
@@ -453,6 +463,7 @@ fn test_render_resource_list_empty() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                None,
             );
         })
         .unwrap();

@@ -7,6 +7,7 @@ use crate::tui::{OperationRegistry, Theme};
 use crate::watcher::ResourceState;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Main application state
 pub struct App {
@@ -31,6 +32,10 @@ pub struct App {
     pub(crate) namespace_hotkeys: Vec<String>,
     pub(crate) pending_context_switch: Option<String>,
     pub(crate) controller_pods: ControllerPodState,
+
+    // Plugins
+    pub(crate) plugin_registry: Option<crate::plugins::PluginRegistry>,
+    pub(crate) plugin_cache: Option<Arc<crate::plugins::PluginCache>>,
 }
 
 impl App {
@@ -75,6 +80,10 @@ impl App {
             namespace_hotkeys: Self::build_namespace_hotkeys(&config, Vec::new()),
             pending_context_switch: None,
             controller_pods: ControllerPodState::default(),
+
+            // Plugins
+            plugin_registry: None,
+            plugin_cache: None,
         }
     }
 
@@ -266,6 +275,14 @@ impl App {
 
     pub fn namespace(&self) -> &Option<String> {
         &self.namespace
+    }
+
+    pub fn set_plugin_registry(&mut self, registry: crate::plugins::PluginRegistry) {
+        self.plugin_registry = Some(registry);
+    }
+
+    pub fn set_plugin_cache(&mut self, cache: Arc<crate::plugins::PluginCache>) {
+        self.plugin_cache = Some(cache);
     }
 
     /// Check if there's a pending context switch and return the context name
@@ -593,6 +610,7 @@ impl std::fmt::Debug for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::schema::PluginConfig;
     use crate::config::{Config, LoggerConfig, UiConfig};
     use crate::watcher::ResourceState;
     use std::collections::HashMap;
@@ -617,6 +635,9 @@ mod tests {
                 buffer: 1000,
                 since_seconds: 3600,
                 text_wrap: false,
+            },
+            plugin: PluginConfig {
+                kubernetes_dns_suffix: ".svc.cluster.local".to_string(),
             },
             context_skins: HashMap::new(),
             cluster: HashMap::new(),

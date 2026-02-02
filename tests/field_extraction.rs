@@ -17,7 +17,7 @@ fn test_extract_gitrepository_fields() {
         }
     });
 
-    let fields = extract_resource_specific_fields("GitRepository", &obj);
+    let fields = extract_resource_specific_fields("GitRepository", &obj, None);
     assert_eq!(
         fields.get("URL"),
         Some(&"https://github.com/fluxcd/flux2".to_string())
@@ -35,7 +35,7 @@ fn test_extract_kustomization_fields() {
         }
     });
 
-    let fields = extract_resource_specific_fields("Kustomization", &obj);
+    let fields = extract_resource_specific_fields("Kustomization", &obj, None);
     assert_eq!(fields.get("PATH"), Some(&"./clusters/prod".to_string()));
     assert_eq!(fields.get("PRUNE"), Some(&"True".to_string()));
 }
@@ -53,32 +53,32 @@ fn test_extract_helmrelease_fields() {
         }
     });
 
-    let fields = extract_resource_specific_fields("HelmRelease", &obj);
+    let fields = extract_resource_specific_fields("HelmRelease", &obj, None);
     assert_eq!(fields.get("CHART"), Some(&"cert-manager".to_string()));
     assert_eq!(fields.get("VERSION"), Some(&"v1.13.6".to_string()));
 }
 
 #[test]
 fn test_get_resource_type_columns() {
-    let columns = get_resource_type_columns("Kustomization");
-    assert!(columns.contains(&"PATH"));
-    assert!(columns.contains(&"PRUNE"));
-    assert!(columns.contains(&"REVISION"));
+    let columns = get_resource_type_columns("Kustomization", None);
+    assert!(columns.iter().any(|c| c == "PATH"));
+    assert!(columns.iter().any(|c| c == "PRUNE"));
+    assert!(columns.iter().any(|c| c == "REVISION"));
 
-    let gitrepo_columns = get_resource_type_columns("GitRepository");
-    assert!(gitrepo_columns.contains(&"URL"));
-    assert!(gitrepo_columns.contains(&"BRANCH"));
+    let gitrepo_columns = get_resource_type_columns("GitRepository", None);
+    assert!(gitrepo_columns.iter().any(|c| c == "URL"));
+    assert!(gitrepo_columns.iter().any(|c| c == "BRANCH"));
 
-    let helm_columns = get_resource_type_columns("HelmRelease");
-    assert!(helm_columns.contains(&"CHART"));
-    assert!(helm_columns.contains(&"VERSION"));
+    let helm_columns = get_resource_type_columns("HelmRelease", None);
+    assert!(helm_columns.iter().any(|c| c == "CHART"));
+    assert!(helm_columns.iter().any(|c| c == "VERSION"));
 }
 
 #[test]
 fn test_extract_fields_missing_spec() {
     let obj = json!({});
 
-    let fields = extract_resource_specific_fields("Kustomization", &obj);
+    let fields = extract_resource_specific_fields("Kustomization", &obj, None);
     assert!(fields.is_empty());
 }
 
@@ -90,6 +90,6 @@ fn test_extract_fields_unknown_type() {
         }
     });
 
-    let fields = extract_resource_specific_fields("UnknownType", &obj);
+    let fields = extract_resource_specific_fields("UnknownType", &obj, None);
     assert!(fields.is_empty());
 }
