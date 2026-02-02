@@ -212,18 +212,26 @@ impl App {
                     context_skin
                 );
                 context_skin.clone()
-            } else if self.config.read_only && self.config.ui.skin_read_only.is_some() {
-                let skin = self.config.ui.skin_read_only.as_ref().unwrap();
+            } else if self.config.read_only {
+                if let Some(ref skin) = self.config.ui.skin_read_only {
+                    tracing::debug!("Using readonly-specific skin: {}", skin);
+                    skin.clone()
+                } else {
+                    tracing::debug!("Using default skin: {}", self.config.ui.skin);
+                    self.config.ui.skin.clone()
+                }
+            } else {
+                tracing::debug!("Using default skin: {}", self.config.ui.skin);
+                self.config.ui.skin.clone()
+            }
+        } else if self.config.read_only {
+            if let Some(ref skin) = self.config.ui.skin_read_only {
                 tracing::debug!("Using readonly-specific skin: {}", skin);
                 skin.clone()
             } else {
                 tracing::debug!("Using default skin: {}", self.config.ui.skin);
                 self.config.ui.skin.clone()
             }
-        } else if self.config.read_only && self.config.ui.skin_read_only.is_some() {
-            let skin = self.config.ui.skin_read_only.as_ref().unwrap();
-            tracing::debug!("Using readonly-specific skin: {}", skin);
-            skin.clone()
         } else {
             tracing::debug!("Using default skin: {}", self.config.ui.skin);
             self.config.ui.skin.clone()
@@ -297,6 +305,7 @@ impl App {
         &mut self.state
     }
 
+    #[allow(dead_code)] // May be used by external code or future features
     pub fn resource_objects(&self) -> &HashMap<String, serde_json::Value> {
         &self.resource_objects
     }
@@ -611,6 +620,7 @@ mod tests {
         let config = Config {
             read_only: false,
             default_namespace: "".to_string(),
+            default_controller_namespace: "".to_string(),
             namespace_hotkeys: vec![],
             ui: UiConfig {
                 enable_mouse: false,

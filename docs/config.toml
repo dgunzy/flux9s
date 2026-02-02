@@ -1,5 +1,5 @@
 baseURL = 'https://flux9s.ca/'
-title = 'flux9s Documentation'
+title = 'flux9s'
 description = 'A K9s-inspired terminal UI for monitoring Flux GitOps resources in real-time'
 
 # Language settings
@@ -30,10 +30,6 @@ buildFuture = false
 # Menu configuration
 [menu]
   [[menu.main]]
-    name = "Home"
-    url = "/"
-    weight = 1
-  [[menu.main]]
     name = "Getting Started"
     url = "/getting-started/"
     weight = 2
@@ -49,6 +45,13 @@ buildFuture = false
     name = "Developer Guide"
     url = "/developer-guide/"
     weight = 5
+  [[menu.main]]
+    name = "Flux Docs"
+    url = "https://fluxcd.io/flux/"
+    weight = 6
+    post = ' <i class="fas fa-external-link-alt fa-xs"></i>'
+    [menu.main.params]
+      external = true
 
 # Parameters
 [params]
@@ -69,6 +72,8 @@ buildFuture = false
     # Keep TOC enabled (user requested to keep toc tree)
     # Hide page meta (edit links, etc.) - but keep TOC
     page_meta = false
+    # Content width - make it wider
+    content_width = "wide"
   
   # Dark mode support
   [params.ui.dark_mode]

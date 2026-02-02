@@ -115,6 +115,7 @@ impl ConfigLoader {
         Config {
             read_only: other.read_only,
             default_namespace: other.default_namespace.clone(),
+            default_controller_namespace: other.default_controller_namespace.clone(),
             ui: UiConfig {
                 enable_mouse: other.ui.enable_mouse,
                 headless: other.ui.headless,

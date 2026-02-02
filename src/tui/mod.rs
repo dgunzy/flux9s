@@ -30,6 +30,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::sync::Arc;
 
+use crate::models::FluxResourceKind;
 use crate::watcher::ResourceKey;
 
 // Helper function to fetch resource YAML from API
@@ -40,7 +41,6 @@ pub async fn fetch_resource_yaml(
     name: &str,
 ) -> anyhow::Result<serde_json::Value> {
     // Import resource types - use the public re-exports from watcher module
-    use crate::models::FluxResourceKind;
     use crate::watcher::{
         Alert, ArtifactGenerator, Bucket, ExternalArtifact, FluxInstance, FluxReport,
         GitRepository, HelmChart, HelmRelease, HelmRepository, ImagePolicy, ImageRepository,
@@ -193,6 +193,8 @@ pub async fn run_tui_with_async_init(
     // Spawn async task to initialize Kubernetes and start watchers
     // This happens in the background while splash is showing
     let kubeconfig_path_clone = kubeconfig_path.map(|p| p.to_path_buf());
+    let controller_namespace = config.default_controller_namespace.clone();
+    let controller_namespace_for_init = controller_namespace.clone();
     let (kube_init_tx, mut kube_init_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         tracing::debug!("Starting async Kubernetes initialization");
@@ -269,8 +271,11 @@ pub async fn run_tui_with_async_init(
 
         // Create resource state and watcher
         tracing::debug!("Creating resource state and watcher");
-        let (mut watcher, event_rx) =
-            crate::watcher::ResourceWatcher::new(client.clone(), default_namespace.clone());
+        let (mut watcher, event_rx) = crate::watcher::ResourceWatcher::new(
+            client.clone(),
+            default_namespace.clone(),
+            controller_namespace_for_init,
+        );
 
         // Start watching all Flux resources
         if let Err(e) = watcher.watch_all() {
@@ -714,8 +719,11 @@ pub async fn run_tui_with_async_init(
                         // Create new watcher with new client
                         // ResourceWatcher::new returns a tuple (watcher, receiver), not a Result
                         let namespace = app.namespace().clone();
-                        let (mut new_watcher, new_event_rx) =
-                            crate::watcher::ResourceWatcher::new(new_client.clone(), namespace);
+                        let (mut new_watcher, new_event_rx) = crate::watcher::ResourceWatcher::new(
+                            new_client.clone(),
+                            namespace,
+                            controller_namespace.clone(),
+                        );
 
                         // Start watching all resources with the new watcher
                         if let Err(e) = new_watcher.watch_all() {
@@ -818,6 +826,23 @@ pub async fn run_tui_with_async_init(
 
                         let (suspended, ready, message, revision) =
                             crate::watcher::extract_status_fields(&obj_json);
+
+                        // Stateless resources (e.g., Alert, Provider) have no status.conditions,
+                        // so ready is None. Mark them as ready since they are configuration-only.
+                        let ready = if ready.is_none() {
+                            if let Some(kind) = FluxResourceKind::parse_optional(&resource_type) {
+                                if kind.is_stateless() {
+                                    Some(true)
+                                } else {
+                                    ready
+                                }
+                            } else {
+                                ready
+                            }
+                        } else {
+                            ready
+                        };
+
                         let labels = crate::watcher::extract_labels(&obj_json);
                         let annotations = crate::watcher::extract_annotations(&obj_json);
 

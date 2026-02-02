@@ -11,23 +11,21 @@ type: docs
 
 flux9s follows a modified Elm Architecture pattern with async task spawning:
 
-{{< blocks/section color="white" >}}
-{{% blocks/feature icon="fa-database" title="Model" %}}
-`App` struct holds all application state in a centralized location.
-{{% /blocks/feature %}}
+### Model
 
-{{% blocks/feature icon="fa-sync" title="Update" %}}
-`handle_key()` processes events and updates state synchronously.
-{{% /blocks/feature %}}
+`App` struct holds all application state in a centralized location. State is organized into logical sub-structures for better maintainability.
 
-{{% blocks/feature icon="fa-eye" title="View" %}}
-`render()` displays current state using stateless components.
-{{% /blocks/feature %}}
+### Update
 
-{{% blocks/feature icon="fa-bolt" title="Async Layer" %}}
-Spawned tasks + oneshot channels handle I/O operations without blocking the UI.
-{{% /blocks/feature %}}
-{{< /blocks/section >}}
+`handle_key()` processes events and updates state synchronously. Event handling is centralized in `src/tui/app/events.rs`.
+
+### View
+
+`render()` displays current state using stateless components. Views are organized in `src/tui/views/` and receive all needed data as parameters.
+
+### Async Layer
+
+Spawned tasks + oneshot channels handle I/O operations without blocking the UI. Async operations are managed in `src/tui/app/async_ops.rs`.
 
 ## Project Structure
 
@@ -59,6 +57,7 @@ flux9s/
 ### Recent Architecture Changes
 
 **App Module Refactoring:** The application logic has been refactored from a single `app.rs` file into a modular structure under `src/tui/app/`:
+
 - **`core.rs`** - Main App struct and core logic
 - **`state.rs`** - Organized state structures (ViewState, SelectionState, UIState, AsyncOperationState)
 - **`events.rs`** - Event handling and input processing
@@ -67,7 +66,9 @@ flux9s/
 
 This separation improves code organization, maintainability, and makes the codebase easier to navigate.
 
-**Submenu System:** An interactive submenu system has been added for commands like `:ctx`, providing a user-friendly way to select from available options. The system is built using the `CommandSubmenu` trait and can be extended to other commands. See the main `DEVELOPER_GUIDE.md` for implementation details.
+**Submenu System:** An interactive submenu system has been added for commands like `:ctx` and `:skin`, providing a user-friendly way to select from available options. The system is built using the `CommandSubmenu` trait and can be extended to other commands. See the main `DEVELOPER_GUIDE.md` for implementation details.
+
+**Keybinding Centralization:** All keybindings are now centralized in `src/tui/keybindings.rs`, providing a single source of truth for footer rendering, help text, and layout calculations.
 
 ## Development Setup
 
@@ -98,7 +99,12 @@ This runs:
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! To contribute:
+
+1. **Fork the repository** on GitHub
+2. **Create a branch** in your fork for your changes
+3. **Make your changes** following the development guidelines
+4. **Submit a Pull Request** from your fork to the main repository
 
 {{% alert title="Development Guidelines" color="info" %}}
 For detailed development guidelines, see the [AGENTS.md](https://github.com/dgunzy/flux9s/blob/main/AGENTS.md) file in the repository.

@@ -42,6 +42,7 @@ Readonly mode is enabled by default to prevent accidental modifications to your 
 flux9s allows you to mark resources as favorites for quick access. Favorites are stored in your configuration file and persist across sessions.
 
 **During a session:**
+
 - Press `f` on a resource to toggle favorite status
 - Use `:favorites` or `:fav` command to view all favorites
 
@@ -63,6 +64,7 @@ flux9s supports custom skins to personalize the interface. Skins follow a simila
 **Built-in Themes:**
 
 flux9s includes 17 popular themes embedded in the binary, including:
+
 - Dark themes: dracula, nord, solarized-dark, monokai, gruvbox-dark, catppuccin-mocha, rose-pine-moon, one-dark, tokyo-night, and more
 - Light themes: default-light, kiss
 
@@ -107,40 +109,34 @@ Not all K9s skins are compatible with flux9s. flux9s skins follow a similar form
 
 ## Command Reference
 
-{{< blocks/section color="white" >}}
-{{% blocks/feature icon="fa-question-circle" title="Show Help" %}}
+### Show Help
 
 ```bash
 flux9s config --help
 ```
 
 Show all available configuration options.
-{{% /blocks/feature %}}
 
-{{% blocks/feature icon="fa-edit" title="Set Value" %}}
+### Set Value
 
 ```bash
 flux9s config set {KEY} {VALUE}
 ```
 
 Set a configuration value.
-{{% /blocks/feature %}}
 
-{{% blocks/feature icon="fa-eye" title="Get Value" %}}
+### Get Value
 
 ```bash
 flux9s config get {KEY}
 ```
 
 Get a configuration value.
-{{% /blocks/feature %}}
 
-{{% blocks/feature icon="fa-palette" title="Set Skin" %}}
+### Set Skin
 
 ```bash
 flux9s config skins set {skin-file}
 ```
 
 Import and set a skin from a YAML file.
-{{% /blocks/feature %}}
-{{< /blocks/section >}}

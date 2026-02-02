@@ -17,6 +17,10 @@ pub struct Config {
     #[serde(default = "default_namespace")]
     pub default_namespace: String,
 
+    /// Flux Controllers namespace
+    #[serde(default = "default_namespace")]
+    pub default_controller_namespace: String,
+
     /// UI configuration
     #[serde(default)]
     pub ui: UiConfig,
@@ -155,6 +159,7 @@ impl Default for Config {
         Self {
             read_only: default_read_only(),
             default_namespace: default_namespace(),
+            default_controller_namespace: default_namespace(),
             ui: UiConfig::default(),
             logger: LoggerConfig::default(),
             plugin: PluginConfig::default(),
@@ -207,6 +212,7 @@ mod tests {
         let config = Config::default();
         assert!(config.read_only);
         assert_eq!(config.default_namespace, "flux-system");
+        assert_eq!(config.default_controller_namespace, "flux-system");
         assert_eq!(config.ui.skin, "default");
     }
 

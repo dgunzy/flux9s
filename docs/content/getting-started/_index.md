@@ -45,16 +45,6 @@ You can change this with `flux9s config set readOnly false` or toggle it in a se
 
 ## Next Steps
 
-{{< blocks/section color="white" >}}
-{{% blocks/feature icon="fa-download" title="Installation Guide" url="/getting-started/installation/" %}}
-Detailed installation instructions for all platforms and methods.
-{{% /blocks/feature %}}
-
-{{% blocks/feature icon="fa-book" title="User Guide" url="/user-guide/" %}}
-Learn how to navigate and use flux9s effectively.
-{{% /blocks/feature %}}
-
-{{% blocks/feature icon="fa-cog" title="Configuration" url="/configuration/" %}}
-Customize flux9s to suit your workflow and preferences.
-{{% /blocks/feature %}}
-{{< /blocks/section >}}
+- **[Installation Guide](/getting-started/installation/)** - Detailed installation instructions for all platforms and methods
+- **[User Guide](/user-guide/)** - Learn how to navigate and use flux9s effectively
+- **[Configuration](/configuration/)** - Customize flux9s to suit your workflow and preferences

@@ -26,6 +26,7 @@ fn create_test_config() -> Config {
     Config {
         read_only: false,
         default_namespace: "".to_string(),
+        default_controller_namespace: "".to_string(),
         namespace_hotkeys: vec![],
         ui: UiConfig {
             enable_mouse: false,
@@ -122,7 +123,7 @@ fn test_render_header() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             render_header(
                 frame,
                 area,
@@ -157,7 +158,7 @@ fn test_render_header_with_namespace() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             render_header(
                 frame,
                 area,
@@ -192,7 +193,7 @@ fn test_render_header_with_filter() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             render_header(
                 frame,
                 area,
@@ -226,7 +227,7 @@ fn test_render_footer_navigation() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let operation_registry = flux9s::tui::operations::OperationRegistry::new();
             render_footer(
                 frame,
@@ -260,7 +261,7 @@ fn test_render_footer_command_mode() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let operation_registry = flux9s::tui::operations::OperationRegistry::new();
             render_footer(
                 frame,
@@ -294,7 +295,7 @@ fn test_render_footer_filter_mode() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let operation_registry = flux9s::tui::operations::OperationRegistry::new();
             render_footer(
                 frame,
@@ -339,7 +340,7 @@ fn test_render_resource_list() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
@@ -380,7 +381,7 @@ fn test_render_resource_list_with_selection() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
@@ -418,7 +419,7 @@ fn test_render_resource_list_with_resource_type_filter() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
@@ -449,7 +450,7 @@ fn test_render_resource_list_empty() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let resource_objects = HashMap::new();
             render_resource_list(
                 frame,
@@ -479,7 +480,7 @@ fn test_render_resource_detail() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let resource_objects = HashMap::new();
             render_resource_detail(
                 frame,
@@ -504,7 +505,7 @@ fn test_render_resource_detail_no_selection() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let resource_objects = HashMap::new();
             render_resource_detail(frame, area, &None, &state, &resource_objects, &theme);
         })
@@ -523,7 +524,7 @@ fn test_render_resource_yaml_no_selection() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let resource_objects = HashMap::new();
             render_resource_yaml(
                 frame,
@@ -552,7 +553,7 @@ fn test_render_resource_yaml_pending() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let resource_objects = HashMap::new();
             render_resource_yaml(
                 frame,
@@ -607,7 +608,7 @@ fn test_render_resource_yaml_with_data() {
 
     terminal
         .draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             let resource_objects = HashMap::new();
             render_resource_yaml(
                 frame,
