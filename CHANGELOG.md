@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-02-02
+
+### Version 0.7.2
+
+#### Added
+- Support for marking stateless resources as ready (#113)
+- New configuration options for controller/operator namespace (#107)
+
+#### Changed
+- Reduced Cargo package size and refactored column code (#116)
+- Updated documentation with new links and minor formatting changes (#111, #109, #108)
+
+#### Fixed
+- Reverted an accidental version bump to 0.7.2 (#115)
+
 ## [0.7.1] - 2026-01-14
 
 ### Version 0.7.1
