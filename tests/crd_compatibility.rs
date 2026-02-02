@@ -3,6 +3,7 @@
 //! These tests ensure that when Flux CRDs are updated, the code remains compatible.
 //! They test status field extraction, resource type detection, and model compatibility.
 
+use flux9s::models::FluxResourceKind;
 use flux9s::{extract_status_fields, resource_key};
 use serde_json::json;
 
@@ -339,4 +340,40 @@ fn test_resource_key_format() {
     // Test that keys are unique
     let key3 = resource_key("default", "my-resource", "GitRepository");
     assert_ne!(key, key3); // Different resource types should produce different keys
+}
+
+#[test]
+fn test_stateless_resources_identified() {
+    // Alert and Provider are stateless (no status.conditions in CRD)
+    assert!(FluxResourceKind::Alert.is_stateless());
+    assert!(FluxResourceKind::Provider.is_stateless());
+
+    // All other resources should not be stateless
+    for kind in FluxResourceKind::all() {
+        if !matches!(kind, FluxResourceKind::Alert | FluxResourceKind::Provider) {
+            assert!(!kind.is_stateless(), "{} should not be stateless", kind);
+        }
+    }
+}
+
+#[test]
+fn test_stateless_resource_override_logic() {
+    // Simulate what happens for a stateless resource with no status
+    let obj = json!({
+        "spec": {
+            "eventSources": [{"kind": "GitRepository", "name": "flux-system"}]
+        }
+    });
+    let (_suspended, ready, _message, _revision) = extract_status_fields(&obj);
+    assert_eq!(ready, None); // extract_status_fields returns None
+
+    // The override in the WatchEvent handler would set ready = Some(true)
+    let kind = FluxResourceKind::parse_optional("Alert").unwrap();
+    assert!(kind.is_stateless());
+    let overridden_ready = if ready.is_none() && kind.is_stateless() {
+        Some(true)
+    } else {
+        ready
+    };
+    assert_eq!(overridden_ready, Some(true));
 }

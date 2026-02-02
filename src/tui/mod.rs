@@ -29,6 +29,7 @@ use kube::Api;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 
+use crate::models::FluxResourceKind;
 use crate::watcher::ResourceKey;
 
 // Helper function to fetch resource YAML from API
@@ -39,7 +40,6 @@ pub async fn fetch_resource_yaml(
     name: &str,
 ) -> anyhow::Result<serde_json::Value> {
     // Import resource types - use the public re-exports from watcher module
-    use crate::models::FluxResourceKind;
     use crate::watcher::{
         Alert, ArtifactGenerator, Bucket, ExternalArtifact, FluxInstance, FluxReport,
         GitRepository, HelmChart, HelmRelease, HelmRepository, ImagePolicy, ImageRepository,
@@ -686,6 +686,23 @@ pub async fn run_tui_with_async_init(
 
                         let (suspended, ready, message, revision) =
                             crate::watcher::extract_status_fields(&obj_json);
+
+                        // Stateless resources (e.g., Alert, Provider) have no status.conditions,
+                        // so ready is None. Mark them as ready since they are configuration-only.
+                        let ready = if ready.is_none() {
+                            if let Some(kind) = FluxResourceKind::parse_optional(&resource_type) {
+                                if kind.is_stateless() {
+                                    Some(true)
+                                } else {
+                                    ready
+                                }
+                            } else {
+                                ready
+                            }
+                        } else {
+                            ready
+                        };
+
                         let labels = crate::watcher::extract_labels(&obj_json);
                         let annotations = crate::watcher::extract_annotations(&obj_json);
 

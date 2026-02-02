@@ -172,6 +172,14 @@ impl FluxResourceKind {
         )
     }
 
+    /// Check if this resource type is stateless (has no status.conditions in its CRD)
+    ///
+    /// Stateless resources are treated as always ready since they are
+    /// configuration-only resources with no reconciliation status.
+    pub fn is_stateless(&self) -> bool {
+        matches!(self, FluxResourceKind::Alert | FluxResourceKind::Provider)
+    }
+
     /// Get all resource types that support graph view
     pub fn graph_supported_types() -> &'static [Self] {
         &[
@@ -295,5 +303,15 @@ mod tests {
     fn test_into_string() {
         let s: String = FluxResourceKind::HelmRelease.into();
         assert_eq!(s, "HelmRelease");
+    }
+
+    #[test]
+    fn test_is_stateless() {
+        assert!(FluxResourceKind::Alert.is_stateless());
+        assert!(FluxResourceKind::Provider.is_stateless());
+        assert!(!FluxResourceKind::Receiver.is_stateless());
+        assert!(!FluxResourceKind::Kustomization.is_stateless());
+        assert!(!FluxResourceKind::HelmRelease.is_stateless());
+        assert!(!FluxResourceKind::GitRepository.is_stateless());
     }
 }
