@@ -4,10 +4,12 @@
 //! supporting multiple configuration layers, theme management, and persistent settings.
 
 mod defaults;
+#[cfg(feature = "tui")]
 pub mod embedded_themes;
 pub mod loader;
 pub mod paths;
 pub mod schema;
+#[cfg(feature = "tui")]
 pub mod theme_loader;
 
 pub use loader::ConfigLoader;
@@ -17,6 +19,7 @@ pub use schema::Config;
 pub use schema::LoggerConfig;
 #[allow(unused_imports)] // Public API exports - may be used by external code
 pub use schema::UiConfig;
+#[cfg(feature = "tui")]
 pub use theme_loader::ThemeLoader;
 
 /// Get a configuration value by key (dot notation)

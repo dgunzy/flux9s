@@ -3,8 +3,8 @@
 //! This service abstracts all Kubernetes API interactions away from the TUI layer.
 //! It handles fetching resources, executing operations, and tracing ownership chains.
 
+use crate::operations::FluxOperation;
 use crate::trace::{ResourceGraph, TraceResult};
-use crate::tui::operations::FluxOperation;
 use crate::watcher::ResourceKey;
 use anyhow::{Context, Result};
 
@@ -25,7 +25,7 @@ impl ResourceService {
         namespace: &str,
         name: &str,
     ) -> Result<serde_json::Value> {
-        crate::tui::fetch_resource_yaml(&self.client, resource_type, namespace, name)
+        crate::kube::fetch_resource_yaml(&self.client, resource_type, namespace, name)
             .await
             .context("Failed to fetch resource YAML")
     }

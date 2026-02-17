@@ -3,7 +3,6 @@
 //! Provides the terminal user interface for Flux TUI.
 //! Built with ratatui for a K9s-inspired experience.
 
-mod api;
 pub mod app;
 mod commands;
 pub mod constants;
@@ -14,7 +13,8 @@ mod theme;
 pub mod trace;
 pub mod views;
 
-pub use api::{get_api_resource_with_fallback, get_gvk_for_resource_type};
+#[allow(unused_imports)] // Re-exported for backward compatibility
+pub use crate::kube::api::{get_api_resource_with_fallback, get_gvk_for_resource_type};
 pub use app::App;
 pub use operations::*;
 pub use theme::*;
@@ -25,68 +25,13 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use kube::Api;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 
 use crate::models::FluxResourceKind;
 use crate::watcher::ResourceKey;
 
-// Helper function to fetch resource YAML from API
-pub async fn fetch_resource_yaml(
-    client: &kube::Client,
-    resource_type: &str,
-    namespace: &str,
-    name: &str,
-) -> anyhow::Result<serde_json::Value> {
-    // Import resource types - use the public re-exports from watcher module
-    use crate::watcher::{
-        Alert, ArtifactGenerator, Bucket, ExternalArtifact, FluxInstance, FluxReport,
-        GitRepository, HelmChart, HelmRelease, HelmRepository, ImagePolicy, ImageRepository,
-        ImageUpdateAutomation, Kustomization, OCIRepository, Provider, Receiver, ResourceSet,
-        ResourceSetInputProvider,
-    };
-
-    // Match resource type and fetch using appropriate API
-    macro_rules! fetch_resource {
-        ($type:ty) => {{
-            let api: Api<$type> = Api::namespaced(client.clone(), namespace);
-            match api.get(name).await {
-                Ok(obj) => {
-                    return Ok(serde_json::to_value(&obj)?);
-                }
-                Err(e) => {
-                    return Err(anyhow::anyhow!("Failed to fetch {}: {}", resource_type, e));
-                }
-            }
-        }};
-    }
-
-    match FluxResourceKind::parse_optional(resource_type) {
-        Some(FluxResourceKind::GitRepository) => fetch_resource!(GitRepository),
-        Some(FluxResourceKind::OCIRepository) => fetch_resource!(OCIRepository),
-        Some(FluxResourceKind::HelmRepository) => fetch_resource!(HelmRepository),
-        Some(FluxResourceKind::Bucket) => fetch_resource!(Bucket),
-        Some(FluxResourceKind::HelmChart) => fetch_resource!(HelmChart),
-        Some(FluxResourceKind::ExternalArtifact) => fetch_resource!(ExternalArtifact),
-        Some(FluxResourceKind::ArtifactGenerator) => fetch_resource!(ArtifactGenerator),
-        Some(FluxResourceKind::Kustomization) => fetch_resource!(Kustomization),
-        Some(FluxResourceKind::HelmRelease) => fetch_resource!(HelmRelease),
-        Some(FluxResourceKind::ImageRepository) => fetch_resource!(ImageRepository),
-        Some(FluxResourceKind::ImagePolicy) => fetch_resource!(ImagePolicy),
-        Some(FluxResourceKind::ImageUpdateAutomation) => fetch_resource!(ImageUpdateAutomation),
-        Some(FluxResourceKind::Alert) => fetch_resource!(Alert),
-        Some(FluxResourceKind::Provider) => fetch_resource!(Provider),
-        Some(FluxResourceKind::Receiver) => fetch_resource!(Receiver),
-        Some(FluxResourceKind::ResourceSet) => fetch_resource!(ResourceSet),
-        Some(FluxResourceKind::ResourceSetInputProvider) => {
-            fetch_resource!(ResourceSetInputProvider)
-        }
-        Some(FluxResourceKind::FluxReport) => fetch_resource!(FluxReport),
-        Some(FluxResourceKind::FluxInstance) => fetch_resource!(FluxInstance),
-        None => Err(anyhow::anyhow!("Unknown resource type: {}", resource_type)),
-    }
-}
+pub use crate::kube::fetch::fetch_resource_yaml;
 
 /// Extract Flux bundle version from deployment metadata labels
 /// Returns the app.kubernetes.io/version label if present (e.g., "v2.7.5")

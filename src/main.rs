@@ -5,8 +5,10 @@
 
 mod cli;
 mod config;
+mod constants;
 mod kube;
 mod models;
+mod operations;
 mod trace;
 mod tui;
 mod watcher;
