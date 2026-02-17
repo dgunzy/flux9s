@@ -4,10 +4,10 @@
 //! including upstream sources and downstream child resources (workloads, etc.).
 //! Based on Flux Operator Web UI graph implementation patterns.
 
+use crate::kube::get_api_resource_with_fallback;
 use crate::kube::inventory::{extract_inventory, extract_upstream, group_inventory};
 use crate::models::FluxResourceKind;
 use crate::trace::graph::{GraphEdge, GraphNode, NodeType, RelationshipType, ResourceGraph};
-use crate::tui::get_api_resource_with_fallback;
 use anyhow::{Context, Result};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::api::batch::v1::{CronJob, Job};

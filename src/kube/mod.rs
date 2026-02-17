@@ -11,7 +11,14 @@
 //! Automatically detects internal cluster hosts and adds them to NO_PROXY
 //! to prevent proxy issues with corporate environments.
 
+pub mod api;
+pub mod fetch;
 pub mod inventory;
+
+#[allow(unused_imports)] // Public API re-exports used by lib consumers
+pub use api::{get_api_resource_with_fallback, get_gvk_for_resource_type};
+#[allow(unused_imports)] // Public API re-exports used by lib consumers
+pub use fetch::fetch_resource_yaml;
 
 use anyhow::Result;
 use kube::config::Kubeconfig;
@@ -472,8 +479,8 @@ pub async fn get_default_namespace() -> Option<String> {
 /// Uses FluxResourceKind enum to query all Flux resource types dynamically,
 /// avoiding hardcoded resource types and API versions.
 pub async fn discover_namespaces_with_flux_resources(client: &Client) -> Result<Vec<String>> {
+    use crate::kube::api::get_gvk_for_resource_type;
     use crate::models::FluxResourceKind;
-    use crate::tui::get_gvk_for_resource_type;
     use kube::api::{Api, ListParams};
     use kube::core::{ApiResource, DynamicObject};
 

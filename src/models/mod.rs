@@ -16,5 +16,8 @@ pub mod extensions;
 // Flux resource kind definitions
 pub mod flux_resource_kind;
 
+// Resource field extraction
+pub mod resource_fields;
+
 // Re-export commonly used types
 pub use flux_resource_kind::FluxResourceKind;

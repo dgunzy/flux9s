@@ -48,7 +48,7 @@ impl ResourceKey {
             tracing::warn!(
                 "Failed to parse resource key '{}': expected format '{}'",
                 key,
-                crate::tui::constants::RESOURCE_KEY_FORMAT
+                crate::constants::RESOURCE_KEY_FORMAT
             );
             None
         }

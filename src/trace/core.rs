@@ -3,9 +3,9 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::kube::get_api_resource_with_fallback;
 use crate::models::FluxResourceKind;
 use crate::trace::models::{SourceRef, TraceNode, TraceResult, TraceSpec, TraceStatus};
-use crate::tui::get_api_resource_with_fallback;
 
 /// Trace a Kubernetes object to find its Flux source
 pub async fn trace_object(
