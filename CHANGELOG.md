@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-02-22
+
+### Version 0.7.4
+
+#### Added
+- Page up and page down scrolling functionality for line display
+
 ## [0.7.3] - 2026-02-17
 
 ## Version 0.7.3
