@@ -63,6 +63,8 @@ pub struct ViewState {
     pub submenu_state: Option<SubmenuState>,
     /// Original theme name when previewing themes in submenu (for restoration on cancel)
     pub preview_original_theme: Option<String>,
+    /// Cached page size for PageUp/PageDown navigation (updated each render from content area height)
+    pub page_size: usize,
 }
 
 impl Default for ViewState {
@@ -82,6 +84,7 @@ impl Default for ViewState {
             previous_list_view: View::ResourceList,
             submenu_state: None,
             preview_original_theme: None,
+            page_size: 10,
         }
     }
 }

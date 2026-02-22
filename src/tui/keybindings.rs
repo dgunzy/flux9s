@@ -26,6 +26,7 @@ pub fn get_navigation_commands() -> Vec<NavigationCommand> {
     // Order matches original footer.rs to maintain snapshot compatibility
     vec![
         NavigationCommand::new("j/k ", "Navigate"),
+        NavigationCommand::new("^f/^b", "PgDn/Up"),
         NavigationCommand::new(":", "Command"),
         NavigationCommand::new("Enter", "Details"),
         NavigationCommand::new("/", "Filter(Name)"),
