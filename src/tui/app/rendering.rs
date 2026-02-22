@@ -183,6 +183,7 @@ impl App {
                 HealthFilter::Unhealthy => Some("unhealthy"),
                 HealthFilter::All => None,
             };
+
             render_header(
                 f,
                 chunks[0],
@@ -290,6 +291,9 @@ impl App {
     }
 
     fn render_main(&mut self, f: &mut Frame, area: Rect) {
+        // Cache page size for PageUp/PageDown: visible rows = area height minus top/bottom borders
+        self.view_state.page_size = (area.height as usize).saturating_sub(2).max(1);
+
         if self.async_state.confirmation_pending.is_some() {
             if let Some(ref confirmation) = self.async_state.confirmation_pending {
                 render_confirmation(

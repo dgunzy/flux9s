@@ -3,8 +3,8 @@ source: tests/snapshot_tests.rs
 expression: terminal.backend()
 ---
 "┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
-"│j/k Navigate | : Command | Enter Details | / Filter(Name) | s Suspend | r Resume | R Reconcile | y YAML | f Favorite  │"
-"│| g Graph | h History | t Trace | W Reconcile+Source | d Delete | ? Help | Esc Back/Quit                              │"
+"│j/k Navigate | ^f/^b PgDn/Up | : Command | Enter Details | / Filter(Name) | s Suspend | r Resume | R Reconcile        │"
+"│| y YAML | f Favorite | g Graph | h History | t Trace | W Reconcile+Source | d Delete | ? Help | Esc Back/Quit        │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"

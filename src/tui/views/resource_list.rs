@@ -296,10 +296,21 @@ pub fn render_resource_list(
         (rows, header, constraints)
     };
 
-    let title = if let Some(rt) = selected_resource_type {
-        format!("{} ({})", rt, resources.len())
+    let total = resources.len();
+    // Show visible row range in the title when the list is larger than one page.
+    // scroll_offset is already updated by update_scroll_offset above.
+    let range_suffix = if total > visible_height {
+        let first = *scroll_offset + 1;
+        let last = (*scroll_offset + visible_height).min(total);
+        format!(" ─── {}-{}", first, last)
     } else {
-        format!("All Resources ({})", resources.len())
+        String::new()
+    };
+
+    let title = if let Some(rt) = selected_resource_type {
+        format!("{} ({}){}", rt, total, range_suffix)
+    } else {
+        format!("All Resources ({}){}", total, range_suffix)
     };
 
     let table = Table::new(rows, constraints)

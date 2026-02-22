@@ -61,8 +61,10 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
 
     // NAVIGATION column
     let nav_items = vec![
-        ("<j>", "Navigate down"),
-        ("<k>", "Navigate up"),
+        ("<j>/<Down>", "Navigate down"),
+        ("<k>/<Up>", "Navigate up"),
+        ("<Ctrl+f>", "Page down"),
+        ("<Ctrl+b>", "Page up"),
         ("<Enter>", "View details"),
         ("<Esc>", "Back/Quit"),
     ];
