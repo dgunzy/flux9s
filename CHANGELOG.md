@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-02-23
+
+### Version 0.7.5
+
+#### Added
+- Support for page up and page down scrolling keys (#125)
+
+#### Changed
+- Updated Flux CRDs to the latest versions (#126)
+
 ## [0.7.4] - 2026-02-22
 
 ### Version 0.7.4
