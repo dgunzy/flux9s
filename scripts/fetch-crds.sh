@@ -3,117 +3,138 @@ set -eo pipefail
 
 # fetch-crds.sh - Download Flux CRDs from GitHub releases
 #
-# Downloads CRD YAML files from official Flux controller releases.
-# Version pinning is managed here for reproducible builds.
+# Fetches the latest release of each Flux controller by querying the GitHub API.
+# Any version can be pinned by setting the corresponding environment variable:
+#
+#   SOURCE_CONTROLLER_VERSION=v1.7.3 ./scripts/fetch-crds.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CRDS_DIR="$PROJECT_ROOT/crds"
-MANIFEST_FILE="$PROJECT_ROOT/manifest.json"
 
-# Ensure crds directory exists
 mkdir -p "$CRDS_DIR"
 
-# Flux controller versions (pinned for reproducibility)
-# Format: controller:version (one per line)
-CONTROLLERS="source-controller:v1.7.3
-kustomize-controller:v1.7.2
-helm-controller:v1.4.3
-notification-controller:v1.7.4
-image-reflector-controller:v1.0.3
-image-automation-controller:v1.0.3
-source-watcher:v2.0.2"
-
-# Base URL for Flux releases
-BASE_URL="https://github.com/fluxcd"
-
-echo "Fetching Flux CRDs..."
-echo ""
-
-# Count controllers for final message
-count=0
-
-# Download each CRD file
-echo "$CONTROLLERS" | while IFS=':' read -r controller version; do
-    url="${BASE_URL}/${controller}/releases/download/${version}/${controller}.crds.yaml"
-    output_file="${CRDS_DIR}/${controller}.crds.yaml"
-    
-    echo "  → ${controller} (${version})"
-    if curl -sSLf "$url" -o "$output_file"; then
-        count=$((count + 1))
-    else
-        echo "Error: Failed to download ${controller} CRD" >&2
+# Fetch the latest release tag for a fluxcd GitHub repo
+latest_release() {
+    local repo="$1"
+    local tag
+    tag=$(curl -sSf "https://api.github.com/repos/fluxcd/${repo}/releases/latest" \
+        | jq -r '.tag_name')
+    if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+        echo "Error: Could not fetch latest release for fluxcd/${repo}" >&2
         exit 1
     fi
-done
+    echo "$tag"
+}
 
-# Count for final message (need to do separately due to subshell)
-count=$(echo "$CONTROLLERS" | wc -l | tr -d ' ')
+# Download a single controller's CRD file from a GitHub release
+fetch_controller_crd() {
+    local controller="$1"
+    local version="$2"
+    local url="https://github.com/fluxcd/${controller}/releases/download/${version}/${controller}.crds.yaml"
+    local output="${CRDS_DIR}/${controller}.crds.yaml"
+
+    echo "  → ${controller} (${version})"
+    if ! curl -sSLf "$url" -o "$output"; then
+        echo "Error: Failed to download ${controller} CRD from ${url}" >&2
+        exit 1
+    fi
+}
+
+# Download a Flux Operator CRD from the main branch
+fetch_operator_crd() {
+    local name="$1"
+    local filename="$2"
+    local url="https://raw.githubusercontent.com/controlplaneio-fluxcd/flux-operator/main/config/crd/bases/${filename}"
+    local output="${CRDS_DIR}/${name}.crds.yaml"
+
+    echo "  → ${name}"
+    if ! curl -sSLf "$url" -o "$output"; then
+        echo "Error: Failed to download ${name} CRD from ${url}" >&2
+        exit 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Resolve versions — use env var overrides or fetch latest from GitHub API
+# ---------------------------------------------------------------------------
+echo "Resolving Flux controller versions..."
 echo ""
-echo "✓ Successfully downloaded ${count} CRD files from Flux releases"
 
-# Flux Operator CRDs (from main branch, not releases)
-# Format: filename:url (one per line)
-FLUX_OPERATOR_CRDS="flux-operator-resourcesets:https://raw.githubusercontent.com/controlplaneio-fluxcd/flux-operator/main/config/crd/bases/fluxcd.controlplane.io_resourcesets.yaml
-flux-operator-resourcesetinputproviders:https://raw.githubusercontent.com/controlplaneio-fluxcd/flux-operator/main/config/crd/bases/fluxcd.controlplane.io_resourcesetinputproviders.yaml
-flux-operator-fluxreports:https://raw.githubusercontent.com/controlplaneio-fluxcd/flux-operator/main/config/crd/bases/fluxcd.controlplane.io_fluxreports.yaml
-flux-operator-fluxinstances:https://raw.githubusercontent.com/controlplaneio-fluxcd/flux-operator/main/config/crd/bases/fluxcd.controlplane.io_fluxinstances.yaml"
+SOURCE_CONTROLLER_VERSION="${SOURCE_CONTROLLER_VERSION:-$(latest_release source-controller)}"
+KUSTOMIZE_CONTROLLER_VERSION="${KUSTOMIZE_CONTROLLER_VERSION:-$(latest_release kustomize-controller)}"
+HELM_CONTROLLER_VERSION="${HELM_CONTROLLER_VERSION:-$(latest_release helm-controller)}"
+NOTIFICATION_CONTROLLER_VERSION="${NOTIFICATION_CONTROLLER_VERSION:-$(latest_release notification-controller)}"
+IMAGE_REFLECTOR_CONTROLLER_VERSION="${IMAGE_REFLECTOR_CONTROLLER_VERSION:-$(latest_release image-reflector-controller)}"
+IMAGE_AUTOMATION_CONTROLLER_VERSION="${IMAGE_AUTOMATION_CONTROLLER_VERSION:-$(latest_release image-automation-controller)}"
+SOURCE_WATCHER_VERSION="${SOURCE_WATCHER_VERSION:-$(latest_release source-watcher)}"
 
+echo "  source-controller:           ${SOURCE_CONTROLLER_VERSION}"
+echo "  kustomize-controller:        ${KUSTOMIZE_CONTROLLER_VERSION}"
+echo "  helm-controller:             ${HELM_CONTROLLER_VERSION}"
+echo "  notification-controller:     ${NOTIFICATION_CONTROLLER_VERSION}"
+echo "  image-reflector-controller:  ${IMAGE_REFLECTOR_CONTROLLER_VERSION}"
+echo "  image-automation-controller: ${IMAGE_AUTOMATION_CONTROLLER_VERSION}"
+echo "  source-watcher:              ${SOURCE_WATCHER_VERSION}"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Download Flux controller CRDs
+# ---------------------------------------------------------------------------
+echo "Fetching Flux controller CRDs..."
+echo ""
+
+fetch_controller_crd source-controller          "$SOURCE_CONTROLLER_VERSION"
+fetch_controller_crd kustomize-controller       "$KUSTOMIZE_CONTROLLER_VERSION"
+fetch_controller_crd helm-controller            "$HELM_CONTROLLER_VERSION"
+fetch_controller_crd notification-controller    "$NOTIFICATION_CONTROLLER_VERSION"
+fetch_controller_crd image-reflector-controller "$IMAGE_REFLECTOR_CONTROLLER_VERSION"
+fetch_controller_crd image-automation-controller "$IMAGE_AUTOMATION_CONTROLLER_VERSION"
+fetch_controller_crd source-watcher             "$SOURCE_WATCHER_VERSION"
+
+echo ""
+echo "✓ Downloaded 7 Flux controller CRD files"
+
+# ---------------------------------------------------------------------------
+# Download Flux Operator CRDs (always from main branch)
+# ---------------------------------------------------------------------------
 echo ""
 echo "Fetching Flux Operator CRDs..."
 echo ""
 
-flux_operator_count=0
-echo "$FLUX_OPERATOR_CRDS" | while IFS=':' read -r filename url; do
-    output_file="${CRDS_DIR}/${filename}.crds.yaml"
-    
-    echo "  → ${filename}"
-    if curl -sSLf "$url" -o "$output_file"; then
-        flux_operator_count=$((flux_operator_count + 1))
-    else
-        echo "Error: Failed to download ${filename} CRD" >&2
-        exit 1
-    fi
-done
+fetch_operator_crd flux-operator-resourcesets              "fluxcd.controlplane.io_resourcesets.yaml"
+fetch_operator_crd flux-operator-resourcesetinputproviders "fluxcd.controlplane.io_resourcesetinputproviders.yaml"
+fetch_operator_crd flux-operator-fluxreports               "fluxcd.controlplane.io_fluxreports.yaml"
+fetch_operator_crd flux-operator-fluxinstances             "fluxcd.controlplane.io_fluxinstances.yaml"
 
-flux_operator_count=$(echo "$FLUX_OPERATOR_CRDS" | wc -l | tr -d ' ')
 echo ""
-echo "✓ Successfully downloaded ${flux_operator_count} Flux Operator CRD files"
+echo "✓ Downloaded 4 Flux Operator CRD files"
 
-total_count=$((count + flux_operator_count))
-echo ""
-echo "✓ Total: ${total_count} CRD files downloaded to ${CRDS_DIR}"
-
-# Create/update manifest.json with version info
+# ---------------------------------------------------------------------------
+# Write manifest.json
+# ---------------------------------------------------------------------------
+cat > "$PROJECT_ROOT/manifest.json" <<EOF
 {
-    echo "{"
-    echo "  \"generated_at\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
-    echo "  \"flux_versions\": {"
-    first=true
-    echo "$CONTROLLERS" | while IFS=':' read -r controller version; do
-        if [ "$first" = true ]; then
-            first=false
-        else
-            echo ","
-        fi
-        printf "    \"%s\": \"%s\"" "$controller" "$version"
-    done
-    echo ""
-    echo "  },"
-    echo "  \"flux_operator_crds\": ["
-    first=true
-    echo "$FLUX_OPERATOR_CRDS" | while IFS=':' read -r filename url; do
-        if [ "$first" = true ]; then
-            first=false
-        else
-            echo ","
-        fi
-        printf "    \"%s\"" "$filename"
-    done
-    echo ""
-    echo "  ]"
-    echo "}"
-} > "$MANIFEST_FILE"
+  "generated_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "flux_versions": {
+    "source-controller": "${SOURCE_CONTROLLER_VERSION}",
+    "kustomize-controller": "${KUSTOMIZE_CONTROLLER_VERSION}",
+    "helm-controller": "${HELM_CONTROLLER_VERSION}",
+    "notification-controller": "${NOTIFICATION_CONTROLLER_VERSION}",
+    "image-reflector-controller": "${IMAGE_REFLECTOR_CONTROLLER_VERSION}",
+    "image-automation-controller": "${IMAGE_AUTOMATION_CONTROLLER_VERSION}",
+    "source-watcher": "${SOURCE_WATCHER_VERSION}"
+  },
+  "flux_operator_crds": [
+    "flux-operator-resourcesets",
+    "flux-operator-resourcesetinputproviders",
+    "flux-operator-fluxreports",
+    "flux-operator-fluxinstances"
+  ]
+}
+EOF
 
+echo ""
 echo "✓ Updated manifest.json"
-
+echo ""
+echo "✓ Total: 11 CRD files downloaded to ${CRDS_DIR}"

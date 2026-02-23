@@ -175,6 +175,59 @@ impl App {
             }
         }
 
+        // Handle PageDown / PageUp keys (no modifiers required).
+        if key.modifiers == crossterm::event::KeyModifiers::NONE {
+            let page_size = self.view_state.page_size;
+            match key.code {
+                crossterm::event::KeyCode::PageDown => {
+                    if self.view_state.current_view == View::ResourceYAML {
+                        self.view_state.yaml_scroll_offset += page_size;
+                    } else if self.view_state.current_view == View::ResourceTrace {
+                        self.view_state.trace_scroll_offset += page_size;
+                    } else if self.view_state.current_view == View::ResourceHistory {
+                        self.view_state.history_scroll_offset += page_size;
+                    } else if self.view_state.current_view == View::ResourceGraph {
+                        self.view_state.graph_scroll_offset += page_size;
+                    } else {
+                        let resources = self.get_filtered_resources();
+                        let max_index = resources.len().saturating_sub(1);
+                        self.view_state.selected_index =
+                            (self.view_state.selected_index + page_size).min(max_index);
+                    }
+                    return None;
+                }
+                crossterm::event::KeyCode::PageUp => {
+                    if self.view_state.current_view == View::ResourceYAML {
+                        self.view_state.yaml_scroll_offset =
+                            self.view_state.yaml_scroll_offset.saturating_sub(page_size);
+                    } else if self.view_state.current_view == View::ResourceTrace {
+                        self.view_state.trace_scroll_offset = self
+                            .view_state
+                            .trace_scroll_offset
+                            .saturating_sub(page_size);
+                    } else if self.view_state.current_view == View::ResourceHistory {
+                        self.view_state.history_scroll_offset = self
+                            .view_state
+                            .history_scroll_offset
+                            .saturating_sub(page_size);
+                    } else if self.view_state.current_view == View::ResourceGraph {
+                        self.view_state.graph_scroll_offset = self
+                            .view_state
+                            .graph_scroll_offset
+                            .saturating_sub(page_size);
+                    } else {
+                        self.view_state.selected_index =
+                            self.view_state.selected_index.saturating_sub(page_size);
+                        if self.view_state.selected_index < self.view_state.scroll_offset {
+                            self.view_state.scroll_offset = self.view_state.selected_index;
+                        }
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             crossterm::event::KeyCode::Char('q') => {
                 // Always quit on 'q'

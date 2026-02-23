@@ -14,155 +14,65 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl jq
-      
-      - name: Check latest Flux versions
-        id: check_versions
-        run: |
-          echo "Checking latest Flux component versions..."
-          
-          # Check source-controller
-          SOURCE_VERSION=$(curl -s https://api.github.com/repos/fluxcd/source-controller/releases/latest | jq -r '.tag_name' | sed 's/v//')
-          echo "source_controller_latest=$SOURCE_VERSION" >> $GITHUB_OUTPUT
-          
-          # Check kustomize-controller
-          KUSTOMIZE_VERSION=$(curl -s https://api.github.com/repos/fluxcd/kustomize-controller/releases/latest | jq -r '.tag_name' | sed 's/v//')
-          echo "kustomize_controller_latest=$KUSTOMIZE_VERSION" >> $GITHUB_OUTPUT
-          
-          # Check helm-controller
-          HELM_VERSION=$(curl -s https://api.github.com/repos/fluxcd/helm-controller/releases/latest | jq -r '.tag_name' | sed 's/v//')
-          echo "helm_controller_latest=$HELM_VERSION" >> $GITHUB_OUTPUT
-          
-          # Check notification-controller
-          NOTIFICATION_VERSION=$(curl -s https://api.github.com/repos/fluxcd/notification-controller/releases/latest | jq -r '.tag_name' | sed 's/v//')
-          echo "notification_controller_latest=$NOTIFICATION_VERSION" >> $GITHUB_OUTPUT
-          
-          # Check image-reflector-controller
-          IMAGE_REFLECTOR_VERSION=$(curl -s https://api.github.com/repos/fluxcd/image-reflector-controller/releases/latest | jq -r '.tag_name' | sed 's/v//')
-          echo "image_reflector_controller_latest=$IMAGE_REFLECTOR_VERSION" >> $GITHUB_OUTPUT
-          
-          # Check image-automation-controller
-          IMAGE_AUTOMATION_VERSION=$(curl -s https://api.github.com/repos/fluxcd/image-automation-controller/releases/latest | jq -r '.tag_name' | sed 's/v//')
-          echo "image_automation_controller_latest=$IMAGE_AUTOMATION_VERSION" >> $GITHUB_OUTPUT
-          
-          # Check source-watcher
-          SOURCE_WATCHER_VERSION=$(curl -s https://api.github.com/repos/fluxcd/source-watcher/releases/latest | jq -r '.tag_name' | sed 's/v//')
-          echo "source_watcher_latest=$SOURCE_WATCHER_VERSION" >> $GITHUB_OUTPUT
-          
-          echo "Latest versions:"
-          echo "  source-controller: $SOURCE_VERSION"
-          echo "  kustomize-controller: $KUSTOMIZE_VERSION"
-          echo "  helm-controller: $HELM_VERSION"
-          echo "  notification-controller: $NOTIFICATION_VERSION"
-          echo "  image-reflector-controller: $IMAGE_REFLECTOR_VERSION"
-          echo "  image-automation-controller: $IMAGE_AUTOMATION_VERSION"
-          echo "  source-watcher: $SOURCE_WATCHER_VERSION"
-      
-      - name: Download latest CRDs
-        run: |
-          mkdir -p crds_new
-          
-          # Download source-controller CRDs
-          curl -L "https://github.com/fluxcd/source-controller/releases/download/v${{ steps.check_versions.outputs.source_controller_latest }}/source-controller.crds.yaml" -o crds_new/source-controller.crds.yaml
-          
-          # Download kustomize-controller CRDs
-          curl -L "https://github.com/fluxcd/kustomize-controller/releases/download/v${{ steps.check_versions.outputs.kustomize_controller_latest }}/kustomize-controller.crds.yaml" -o crds_new/kustomize-controller.crds.yaml
-          
-          # Download helm-controller CRDs
-          curl -L "https://github.com/fluxcd/helm-controller/releases/download/v${{ steps.check_versions.outputs.helm_controller_latest }}/helm-controller.crds.yaml" -o crds_new/helm-controller.crds.yaml
-          
-          # Download notification-controller CRDs
-          curl -L "https://github.com/fluxcd/notification-controller/releases/download/v${{ steps.check_versions.outputs.notification_controller_latest }}/notification-controller.crds.yaml" -o crds_new/notification-controller.crds.yaml
-          
-          # Download image-reflector-controller CRDs
-          curl -L "https://github.com/fluxcd/image-reflector-controller/releases/download/v${{ steps.check_versions.outputs.image_reflector_controller_latest }}/image-reflector-controller.crds.yaml" -o crds_new/image-reflector-controller.crds.yaml
-          
-          # Download image-automation-controller CRDs
-          curl -L "https://github.com/fluxcd/image-automation-controller/releases/download/v${{ steps.check_versions.outputs.image_automation_controller_latest }}/image-automation-controller.crds.yaml" -o crds_new/image-automation-controller.crds.yaml
-          
-          # Download source-watcher CRDs
-          curl -L "https://github.com/fluxcd/source-watcher/releases/download/v${{ steps.check_versions.outputs.source_watcher_latest }}/source-watcher.crds.yaml" -o crds_new/source-watcher.crds.yaml
-      
-      - name: Compare CRDs
-        id: compare
-        run: |
-          CHANGED=false
-          
-          for file in crds_new/*.yaml; do
-            filename=$(basename "$file")
-            if [ ! -f "crds/$filename" ] || ! diff -q "crds/$filename" "$file" > /dev/null 2>&1; then
-              echo "CRD changed: $filename"
-              CHANGED=true
-            fi
-          done
-          
-          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
-      
+
       - name: Install kopium
-        if: steps.compare.outputs.changed == 'true'
         run: cargo install kopium
-      
-      - name: Update CRDs and regenerate models
-        if: steps.compare.outputs.changed == 'true'
+
+      - name: Fetch latest CRDs and regenerate models
+        run: make update-flux
+
+      - name: Run integration tests
+        run: make test-integration
+
+      - name: Check for changes
+        id: changes
         run: |
-          # Backup current CRDs
-          cp -r crds crds_backup
-          
-          # Replace with new CRDs
-          cp crds_new/*.yaml crds/
-          
-          # Regenerate models
-          # Note: This assumes you have a script or Makefile target for regeneration
-          # Adjust based on your actual setup
-          echo "Regenerating models..."
-          # Add your model regeneration command here
-          # Example: make regenerate-models
-      
-      - name: Run tests
-        if: steps.compare.outputs.changed == 'true'
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No CRD or model changes detected."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Changed files:"
+            git diff --name-only
+          fi
+
+      - name: Read updated versions from manifest
+        if: steps.changes.outputs.changed == 'true'
+        id: manifest
         run: |
-          cargo test --lib --tests --test crd_compatibility --test resource_registry --test model_compatibility
-      
+          {
+            echo "versions<<EOF"
+            jq -r '.flux_versions | to_entries[] | "- \(.key): \(.value)"' manifest.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create Pull Request
-        if: steps.compare.outputs.changed == 'true'
+        if: steps.changes.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: |
-            chore: update Flux CRDs to latest versions
-            
-            - source-controller: v${{ steps.check_versions.outputs.source_controller_latest }}
-            - kustomize-controller: v${{ steps.check_versions.outputs.kustomize_controller_latest }}
-            - helm-controller: v${{ steps.check_versions.outputs.helm_controller_latest }}
-            - notification-controller: v${{ steps.check_versions.outputs.notification_controller_latest }}
-            - image-reflector-controller: v${{ steps.check_versions.outputs.image_reflector_controller_latest }}
-            - image-automation-controller: v${{ steps.check_versions.outputs.image_automation_controller_latest }}
-            - source-watcher: v${{ steps.check_versions.outputs.source_watcher_latest }}
-          title: "chore: Update Flux CRDs to latest versions"
+          commit-message: "chore: update Flux CRDs to latest versions"
+          title: "chore: update Flux CRDs to latest versions"
           body: |
-            This PR updates Flux CRDs to the latest versions.
-            
-            **Updated Components:**
-            - source-controller: v${{ steps.check_versions.outputs.source_controller_latest }}
-            - kustomize-controller: v${{ steps.check_versions.outputs.kustomize_controller_latest }}
-            - helm-controller: v${{ steps.check_versions.outputs.helm_controller_latest }}
-            - notification-controller: v${{ steps.check_versions.outputs.notification_controller_latest }}
-            - image-reflector-controller: v${{ steps.check_versions.outputs.image_reflector_controller_latest }}
-            - image-automation-controller: v${{ steps.check_versions.outputs.image_automation_controller_latest }}
-            - source-watcher: v${{ steps.check_versions.outputs.source_watcher_latest }}
-            
-            **Changes:**
-            - Updated CRD files
-            - Regenerated models with kopium
-            - All tests passing
-            
-            **Auto-generated by GitHub Actions**
+            This PR updates Flux CRDs to the latest versions and regenerates Rust models.
+
+            **Updated components:**
+            ${{ steps.manifest.outputs.versions }}
+
+            **Files changed:**
+            - `scripts/fetch-crds.sh` — updated version manifest
+            - `crds/*.yaml` — updated CRD definitions
+            - `src/models/_generated/` — regenerated Rust models
+            - `manifest.json` — updated version manifest
+
+            **Validation:**
+            - ✅ CRDs fetched and models regenerated via `make update-flux`
+            - ✅ Build verified via `cargo check`
+            - ✅ Integration tests passing via `make test-integration`
+
+            > Auto-generated by GitHub Actions
           branch: update-flux-crds
           delete-branch: true
