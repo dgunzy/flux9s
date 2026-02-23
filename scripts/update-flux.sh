@@ -6,7 +6,8 @@ set -eo pipefail
 # This script coordinates the full update process:
 # 1. Fetch latest CRDs from Flux releases
 # 2. Generate Rust models using kopium
-# 3. Verify the build compiles
+# 3. Format generated code with cargo fmt
+# 4. Verify the build compiles
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -26,9 +27,15 @@ echo "Step 2: Generating Rust models..."
 "${SCRIPT_DIR}/generate-models.sh"
 echo ""
 
-# Step 3: Verify build
-echo "Step 3: Verifying build..."
+# Step 3: Format generated code
+echo "Step 3: Formatting generated code..."
 cd "$PROJECT_ROOT"
+cargo fmt
+echo "✓ Formatting complete"
+echo ""
+
+# Step 4: Verify build
+echo "Step 4: Verifying build..."
 if cargo check --quiet 2>&1; then
     echo "✓ Build verification passed"
 else

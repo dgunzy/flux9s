@@ -3,11 +3,6 @@
 //! This module contains Rust structs generated from Flux CRD definitions.
 //! All files in this directory are auto-generated and should not be edited manually.
 
-#![allow(clippy::all)]
-#![allow(unknown_lints)]
-#![allow(clippy::doc_markdown)]
-#![allow(clippy::doc_overindented_list_items)]
-
 pub mod flux_operator_fluxinstances;
 pub mod flux_operator_fluxreports;
 pub mod flux_operator_resourcesetinputproviders;
