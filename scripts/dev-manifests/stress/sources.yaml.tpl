@@ -1,0 +1,58 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: flux-system${SUFFIX}
+  namespace: ${NS}
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  interval: 5m
+  url: https://github.com/fluxcd/flux2-kustomize-helm-example
+  ref:
+    branch: main
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: podinfo${SUFFIX}
+  namespace: ${NS}
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  interval: 1h
+  url: https://stefanprodan.github.io/podinfo
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: bitnami${SUFFIX}
+  namespace: ${NS}
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  type: oci
+  interval: 1h
+  url: oci://registry-1.docker.io/bitnamicharts
+---
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: OCIRepository
+metadata:
+  name: podinfo-oci${SUFFIX}
+  namespace: ${NS}
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  interval: 5m
+  url: oci://ghcr.io/stefanprodan/charts/podinfo
+  ref:
+    semver: ">=6.0.0"
+---
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: Bucket
+metadata:
+  name: terraform-state${SUFFIX}
+  namespace: ${NS}
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  interval: 5m
+  provider: generic
+  bucketName: tf-state${SUFFIX}
+  endpoint: minio.flux-system.svc.cluster.local
+  secretRef:
+    name: minio-credentials

@@ -290,8 +290,9 @@ pub fn render_resource_list(
                 "TYPE" => Constraint::Min(20),
                 "SUSPENDED" | "READY" => Constraint::Length(10),
                 "REVISION" => Constraint::Min(20),
-                "URL" | "PATH" | "CHART" | "IMAGE" | "SOURCE" => Constraint::Min(30),
-                "BRANCH" | "VERSION" => Constraint::Min(15),
+                "URL" | "PATH" | "CHART" | "IMAGE" | "SOURCE" | "ENDPOINT" | "ADDRESS"
+                | "WEBHOOK" | "INPUTS" => Constraint::Min(30),
+                "BRANCH" | "VERSION" | "PROVIDER" | "CHANNEL" => Constraint::Min(15),
                 "PRUNE" => Constraint::Length(8),
                 "MESSAGE" => Constraint::Percentage(40),
                 _ => Constraint::Min(15),

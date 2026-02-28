@@ -36,6 +36,12 @@ pub mod field_names {
     pub const TAG: &str = "TAG";
     pub const INTERVAL: &str = "INTERVAL";
     pub const SECRET: &str = "SECRET";
+    pub const ENDPOINT: &str = "ENDPOINT";
+    pub const PROVIDER: &str = "PROVIDER";
+    pub const CHANNEL: &str = "CHANNEL";
+    pub const ADDRESS: &str = "ADDRESS";
+    pub const WEBHOOK: &str = "WEBHOOK";
+    pub const INPUTS: &str = "INPUTS";
 }
 
 /// Enumeration of all Flux CRD resource kinds
@@ -269,9 +275,36 @@ impl FluxResourceKind {
             FluxResourceKind::ImageUpdateAutomation => {
                 vec![STATUS, NAMESPACE, NAME, IMAGE, BRANCH, SUSPENDED, READY]
             }
+            FluxResourceKind::Bucket => {
+                vec![
+                    STATUS, NAMESPACE, NAME, ENDPOINT, PROVIDER, INTERVAL, SUSPENDED, READY,
+                ]
+            }
+            FluxResourceKind::ExternalArtifact => {
+                vec![STATUS, NAMESPACE, NAME, SOURCE, TYPE, READY, MESSAGE]
+            }
+            FluxResourceKind::Alert => {
+                vec![STATUS, NAMESPACE, NAME, PROVIDER, SUSPENDED, READY, MESSAGE]
+            }
+            FluxResourceKind::Provider => {
+                vec![
+                    STATUS, NAMESPACE, NAME, TYPE, ADDRESS, CHANNEL, SUSPENDED, READY, MESSAGE,
+                ]
+            }
+            FluxResourceKind::Receiver => {
+                vec![
+                    STATUS, NAMESPACE, NAME, TYPE, WEBHOOK, SUSPENDED, READY, MESSAGE,
+                ]
+            }
+            FluxResourceKind::ResourceSet => {
+                vec![STATUS, NAMESPACE, NAME, INPUTS, READY, MESSAGE]
+            }
             FluxResourceKind::ResourceSetInputProvider => vec![
                 STATUS, NAMESPACE, NAME, TYPE, URL, SECRET, INTERVAL, READY, MESSAGE,
             ],
+            FluxResourceKind::FluxInstance => {
+                vec![STATUS, NAMESPACE, NAME, VERSION, READY, MESSAGE]
+            }
             _ => vec![STATUS, NAMESPACE, NAME, TYPE, SUSPENDED, READY, MESSAGE],
         }
     }
@@ -414,6 +447,87 @@ impl FluxResourceKind {
                         fields.insert(INTERVAL.to_string(), interval.to_string());
                     }
                 }
+                FluxResourceKind::Bucket => {
+                    if let Some(endpoint) = spec.get("endpoint").and_then(|e| e.as_str()) {
+                        fields.insert(ENDPOINT.to_string(), endpoint.to_string());
+                    }
+                    if let Some(provider) = spec.get("provider").and_then(|p| p.as_str()) {
+                        fields.insert(PROVIDER.to_string(), provider.to_string());
+                    }
+                    if let Some(secret_name) = spec
+                        .get("secretRef")
+                        .and_then(|s| s.get("name"))
+                        .and_then(|n| n.as_str())
+                    {
+                        fields.insert(SECRET.to_string(), secret_name.to_string());
+                    }
+                    if let Some(interval) = spec.get("interval").and_then(|i| i.as_str()) {
+                        fields.insert(INTERVAL.to_string(), interval.to_string());
+                    }
+                }
+                FluxResourceKind::ExternalArtifact => {
+                    if let Some(source_ref) = spec.get("sourceRef") {
+                        if let Some(name) = source_ref.get("name").and_then(|n| n.as_str()) {
+                            fields.insert(SOURCE.to_string(), name.to_string());
+                        }
+                        if let Some(kind) = source_ref.get("kind").and_then(|k| k.as_str()) {
+                            fields.insert(TYPE.to_string(), kind.to_string());
+                        }
+                    }
+                }
+                FluxResourceKind::Alert => {
+                    if let Some(provider_name) = spec
+                        .get("providerRef")
+                        .and_then(|p| p.get("name"))
+                        .and_then(|n| n.as_str())
+                    {
+                        fields.insert(PROVIDER.to_string(), provider_name.to_string());
+                    }
+                }
+                FluxResourceKind::Provider => {
+                    if let Some(provider_type) = spec.get("type").and_then(|t| t.as_str()) {
+                        fields.insert(TYPE.to_string(), provider_type.to_string());
+                    }
+                    if let Some(address) = spec.get("address").and_then(|a| a.as_str()) {
+                        fields.insert(ADDRESS.to_string(), address.to_string());
+                    }
+                    if let Some(channel) = spec.get("channel").and_then(|c| c.as_str()) {
+                        fields.insert(CHANNEL.to_string(), channel.to_string());
+                    }
+                    if let Some(secret_name) = spec
+                        .get("secretRef")
+                        .and_then(|s| s.get("name"))
+                        .and_then(|n| n.as_str())
+                    {
+                        fields.insert(SECRET.to_string(), secret_name.to_string());
+                    }
+                }
+                FluxResourceKind::Receiver => {
+                    if let Some(receiver_type) = spec.get("type").and_then(|t| t.as_str()) {
+                        fields.insert(TYPE.to_string(), receiver_type.to_string());
+                    }
+                    if let Some(secret_name) = spec
+                        .get("secretRef")
+                        .and_then(|s| s.get("name"))
+                        .and_then(|n| n.as_str())
+                    {
+                        fields.insert(SECRET.to_string(), secret_name.to_string());
+                    }
+                    if let Some(interval) = spec.get("interval").and_then(|i| i.as_str()) {
+                        fields.insert(INTERVAL.to_string(), interval.to_string());
+                    }
+                }
+                FluxResourceKind::ResourceSet => {
+                    if let Some(inputs_from) = spec.get("inputsFrom").and_then(|i| i.as_array()) {
+                        let names: Vec<&str> = inputs_from
+                            .iter()
+                            .filter_map(|item| item.get("name").and_then(|n| n.as_str()))
+                            .collect();
+                        if !names.is_empty() {
+                            fields.insert(INPUTS.to_string(), names.join(", "));
+                        }
+                    }
+                }
                 FluxResourceKind::ResourceSetInputProvider => {
                     if let Some(input_type) = spec.get("type").and_then(|t| t.as_str()) {
                         fields.insert(TYPE.to_string(), input_type.to_string());
@@ -435,6 +549,15 @@ impl FluxResourceKind {
                         .and_then(|v| v.as_str())
                     {
                         fields.insert(INTERVAL.to_string(), reconcile_every.to_string());
+                    }
+                }
+                FluxResourceKind::FluxInstance => {
+                    if let Some(version) = spec
+                        .get("distribution")
+                        .and_then(|d| d.get("version"))
+                        .and_then(|v| v.as_str())
+                    {
+                        fields.insert(VERSION.to_string(), version.to_string());
                     }
                 }
                 _ => {
@@ -463,6 +586,11 @@ impl FluxResourceKind {
                     .and_then(|s| s.as_str())
                 {
                     fields.insert(STATUS.to_string(), release_status.to_string());
+                }
+            }
+            if matches!(self, FluxResourceKind::Receiver) {
+                if let Some(webhook) = status.get("webhookPath").and_then(|w| w.as_str()) {
+                    fields.insert(WEBHOOK.to_string(), webhook.to_string());
                 }
             }
             if matches!(self, FluxResourceKind::OCIRepository) {
@@ -615,7 +743,29 @@ mod tests {
         assert!(helmrelease_cols.contains(&"CHART"));
         assert!(helmrelease_cols.contains(&"VERSION"));
 
-        let default_cols = FluxResourceKind::Alert.columns();
+        let alert_cols = FluxResourceKind::Alert.columns();
+        assert!(alert_cols.contains(&"STATUS"));
+        assert!(alert_cols.contains(&"PROVIDER"));
+
+        let provider_cols = FluxResourceKind::Provider.columns();
+        assert!(provider_cols.contains(&"TYPE"));
+        assert!(provider_cols.contains(&"ADDRESS"));
+        assert!(provider_cols.contains(&"CHANNEL"));
+
+        let bucket_cols = FluxResourceKind::Bucket.columns();
+        assert!(bucket_cols.contains(&"ENDPOINT"));
+        assert!(bucket_cols.contains(&"PROVIDER"));
+
+        let receiver_cols = FluxResourceKind::Receiver.columns();
+        assert!(receiver_cols.contains(&"TYPE"));
+        assert!(receiver_cols.contains(&"WEBHOOK"));
+
+        let resourceset_cols = FluxResourceKind::ResourceSet.columns();
+        assert!(resourceset_cols.contains(&"STATUS"));
+        assert!(resourceset_cols.contains(&"INPUTS"));
+
+        // Default columns for types without custom columns
+        let default_cols = FluxResourceKind::ArtifactGenerator.columns();
         assert!(default_cols.contains(&"STATUS"));
         assert!(default_cols.contains(&"TYPE"));
     }
@@ -740,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_fields_unknown_type() {
+    fn test_extract_fields_default_type() {
         let obj = json!({
             "spec": {
                 "someField": "value",
@@ -748,9 +898,157 @@ mod tests {
             }
         });
 
-        let fields = FluxResourceKind::Alert.extract_fields(&obj);
-        // Should only extract INTERVAL for unknown types
+        // ArtifactGenerator falls through to the default arm
+        let fields = FluxResourceKind::ArtifactGenerator.extract_fields(&obj);
+        // Should only extract INTERVAL for default types
         assert_eq!(fields.get("INTERVAL"), Some(&"5m".to_string()));
         assert_eq!(fields.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_fields_alert() {
+        let obj = json!({
+            "spec": {
+                "providerRef": {
+                    "name": "slack-bot"
+                },
+                "eventSeverity": "error"
+            }
+        });
+
+        let fields = FluxResourceKind::Alert.extract_fields(&obj);
+        assert_eq!(fields.get("PROVIDER"), Some(&"slack-bot".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fields_provider() {
+        let obj = json!({
+            "spec": {
+                "type": "slack",
+                "address": "https://hooks.slack.com/services/xxx",
+                "channel": "#alerts",
+                "secretRef": {
+                    "name": "slack-webhook"
+                }
+            }
+        });
+
+        let fields = FluxResourceKind::Provider.extract_fields(&obj);
+        assert_eq!(fields.get("TYPE"), Some(&"slack".to_string()));
+        assert_eq!(
+            fields.get("ADDRESS"),
+            Some(&"https://hooks.slack.com/services/xxx".to_string())
+        );
+        assert_eq!(fields.get("CHANNEL"), Some(&"#alerts".to_string()));
+        assert_eq!(fields.get("SECRET"), Some(&"slack-webhook".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fields_bucket() {
+        let obj = json!({
+            "spec": {
+                "endpoint": "minio.example.com",
+                "provider": "generic",
+                "bucketName": "my-bucket",
+                "interval": "5m",
+                "secretRef": {
+                    "name": "minio-credentials"
+                }
+            }
+        });
+
+        let fields = FluxResourceKind::Bucket.extract_fields(&obj);
+        assert_eq!(
+            fields.get("ENDPOINT"),
+            Some(&"minio.example.com".to_string())
+        );
+        assert_eq!(fields.get("PROVIDER"), Some(&"generic".to_string()));
+        assert_eq!(fields.get("INTERVAL"), Some(&"5m".to_string()));
+        assert_eq!(fields.get("SECRET"), Some(&"minio-credentials".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fields_receiver() {
+        let obj = json!({
+            "spec": {
+                "type": "github",
+                "secretRef": {
+                    "name": "webhook-token"
+                },
+                "interval": "10m"
+            },
+            "status": {
+                "webhookPath": "/hook/abc123"
+            }
+        });
+
+        let fields = FluxResourceKind::Receiver.extract_fields(&obj);
+        assert_eq!(fields.get("TYPE"), Some(&"github".to_string()));
+        assert_eq!(fields.get("SECRET"), Some(&"webhook-token".to_string()));
+        assert_eq!(fields.get("INTERVAL"), Some(&"10m".to_string()));
+        assert_eq!(fields.get("WEBHOOK"), Some(&"/hook/abc123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fields_flux_instance() {
+        let obj = json!({
+            "spec": {
+                "distribution": {
+                    "version": "2.3.0",
+                    "registry": "ghcr.io/fluxcd"
+                }
+            }
+        });
+
+        let fields = FluxResourceKind::FluxInstance.extract_fields(&obj);
+        assert_eq!(fields.get("VERSION"), Some(&"2.3.0".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fields_external_artifact() {
+        let obj = json!({
+            "spec": {
+                "sourceRef": {
+                    "kind": "ConfigMap",
+                    "name": "my-config"
+                }
+            }
+        });
+
+        let fields = FluxResourceKind::ExternalArtifact.extract_fields(&obj);
+        assert_eq!(fields.get("SOURCE"), Some(&"my-config".to_string()));
+        assert_eq!(fields.get("TYPE"), Some(&"ConfigMap".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fields_resource_set() {
+        let obj = json!({
+            "spec": {
+                "inputsFrom": [
+                    {"name": "namespaces"},
+                    {"name": "clusters"}
+                ],
+                "resources": [{}]
+            }
+        });
+
+        let fields = FluxResourceKind::ResourceSet.extract_fields(&obj);
+        assert_eq!(
+            fields.get("INPUTS"),
+            Some(&"namespaces, clusters".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_fields_resource_set_no_inputs_from() {
+        let obj = json!({
+            "spec": {
+                "inputs": [{"name": "test"}],
+                "resources": [{}]
+            }
+        });
+
+        let fields = FluxResourceKind::ResourceSet.extract_fields(&obj);
+        assert!(!fields.contains_key("INPUTS"));
     }
 }
