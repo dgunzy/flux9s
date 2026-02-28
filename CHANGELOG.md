@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-02-28
+
+### Version 0.7.6
+
+#### Added
+- Added a new external service `rscinptprvdr`
+
+#### Changed
+- Shortened the CI configuration in pull request #131
+
 ## [0.7.5] - 2026-02-23
 
 ### Version 0.7.5
