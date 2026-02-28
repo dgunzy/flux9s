@@ -14,6 +14,10 @@ on:
       - "docs/**"
       - "CHANGELOG.md"
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test Suite
@@ -57,9 +61,6 @@ jobs:
       - name: Run tests
         run: cargo test --lib --tests
 
-      - name: Run integration tests
-        run: cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests
-
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -77,10 +78,6 @@ jobs:
           - os: macos-latest
             name: macOS
             target: aarch64-apple-darwin
-
-          - os: windows-latest
-            name: Windows
-            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
 
@@ -95,13 +92,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev
 
-      - name: Install OpenSSL (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          vcpkg install openssl:x64-windows-static-md
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
-          echo "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\packages\openssl_x64-windows-static-md" >> $env:GITHUB_ENV
-
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -111,7 +101,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ github.sha }}
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
@@ -130,3 +120,43 @@ jobs:
           path: |
             target/${{ matrix.target }}/release/flux9s
             target/${{ matrix.target }}/release/flux9s.exe
+
+  build-windows:
+    name: Build Windows
+    if: ${{ github.event_name == 'push' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install OpenSSL (Windows)
+        run: |
+          vcpkg install openssl:x64-windows-static-md
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          echo "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\packages\openssl_x64-windows-static-md" >> $env:GITHUB_ENV
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-x86_64-pc-windows-msvc-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-x86_64-pc-windows-msvc-cargo-
+
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flux9s-Windows
+          path: target/x86_64-pc-windows-msvc/release/flux9s.exe

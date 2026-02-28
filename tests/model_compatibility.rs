@@ -6,8 +6,9 @@
 use flux9s::watcher::{
     Alert, Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRelease, HelmRepository,
     ImagePolicy, ImageRepository, ImageUpdateAutomation, Kustomization, OCIRepository, Provider,
-    Receiver, WatchableResource,
+    Receiver, ResourceSetInputProvider, WatchableResource,
 };
+use serde_json::json;
 
 #[test]
 fn test_generated_models_compile() {
@@ -86,4 +87,26 @@ fn test_resource_type_api_consistency() {
     assert_eq!(Provider::api_version(), "v1beta3");
     assert_eq!(Receiver::api_group(), "notification.toolkit.fluxcd.io");
     assert_eq!(Receiver::api_version(), "v1beta3");
+}
+
+#[test]
+fn test_resourcesetinputprovider_externalservice_deserializes() {
+    let obj = json!({
+        "apiVersion": "fluxcd.controlplane.io/v1",
+        "kind": "ResourceSetInputProvider",
+        "metadata": {
+            "name": "namespaces",
+            "namespace": "flux-system"
+        },
+        "spec": {
+            "type": "ExternalService",
+            "url": "http://flux-api.flux-system.svc.cluster.local:8080/api/v2/input"
+        }
+    });
+
+    let parsed: Result<ResourceSetInputProvider, _> = serde_json::from_value(obj);
+    assert!(
+        parsed.is_ok(),
+        "ResourceSetInputProvider with type=ExternalService should deserialize"
+    );
 }

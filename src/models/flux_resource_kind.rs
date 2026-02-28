@@ -35,6 +35,7 @@ pub mod field_names {
     pub const IMAGE: &str = "IMAGE";
     pub const TAG: &str = "TAG";
     pub const INTERVAL: &str = "INTERVAL";
+    pub const SECRET: &str = "SECRET";
 }
 
 /// Enumeration of all Flux CRD resource kinds
@@ -268,6 +269,9 @@ impl FluxResourceKind {
             FluxResourceKind::ImageUpdateAutomation => {
                 vec![STATUS, NAMESPACE, NAME, IMAGE, BRANCH, SUSPENDED, READY]
             }
+            FluxResourceKind::ResourceSetInputProvider => vec![
+                STATUS, NAMESPACE, NAME, TYPE, URL, SECRET, INTERVAL, READY, MESSAGE,
+            ],
             _ => vec![STATUS, NAMESPACE, NAME, TYPE, SUSPENDED, READY, MESSAGE],
         }
     }
@@ -408,6 +412,29 @@ impl FluxResourceKind {
                     // Extract INTERVAL (common across types)
                     if let Some(interval) = spec.get("interval").and_then(|i| i.as_str()) {
                         fields.insert(INTERVAL.to_string(), interval.to_string());
+                    }
+                }
+                FluxResourceKind::ResourceSetInputProvider => {
+                    if let Some(input_type) = spec.get("type").and_then(|t| t.as_str()) {
+                        fields.insert(TYPE.to_string(), input_type.to_string());
+                    }
+                    if let Some(url) = spec.get("url").and_then(|u| u.as_str()) {
+                        fields.insert(URL.to_string(), url.to_string());
+                    }
+                    if let Some(secret_name) = spec
+                        .get("secretRef")
+                        .and_then(|s| s.get("name"))
+                        .and_then(|n| n.as_str())
+                    {
+                        fields.insert(SECRET.to_string(), secret_name.to_string());
+                    }
+                    if let Some(reconcile_every) = obj
+                        .get("metadata")
+                        .and_then(|m| m.get("annotations"))
+                        .and_then(|a| a.get("fluxcd.controlplane.io/reconcileEvery"))
+                        .and_then(|v| v.as_str())
+                    {
+                        fields.insert(INTERVAL.to_string(), reconcile_every.to_string());
                     }
                 }
                 _ => {
@@ -672,6 +699,36 @@ mod tests {
         assert_eq!(fields.get("INTERVAL"), Some(&"5m".to_string()));
         assert_eq!(fields.get("DIGEST"), Some(&"sha256:abc123".to_string()));
         assert_eq!(fields.get("REVISION"), Some(&"v1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fields_resourcesetinputprovider() {
+        let obj = json!({
+            "metadata": {
+                "annotations": {
+                    "fluxcd.controlplane.io/reconcileEvery": "30s"
+                }
+            },
+            "spec": {
+                "type": "ExternalService",
+                "url": "http://flux-api.flux-system.svc.cluster.local:8080/api/v2/flux/clusters/demo-cluster-01.k8s.example.com/platform-components",
+                "secretRef": {
+                    "name": "internal-api-token"
+                }
+            }
+        });
+
+        let fields = FluxResourceKind::ResourceSetInputProvider.extract_fields(&obj);
+        assert_eq!(fields.get("TYPE"), Some(&"ExternalService".to_string()));
+        assert_eq!(
+            fields.get("URL"),
+            Some(&"http://flux-api.flux-system.svc.cluster.local:8080/api/v2/flux/clusters/demo-cluster-01.k8s.example.com/platform-components".to_string())
+        );
+        assert_eq!(
+            fields.get("SECRET"),
+            Some(&"internal-api-token".to_string())
+        );
+        assert_eq!(fields.get("INTERVAL"), Some(&"30s".to_string()));
     }
 
     #[test]

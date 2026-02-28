@@ -140,7 +140,9 @@ pub fn render_resource_detail(
 
             // Display order: URL, BRANCH, PATH, CHART, VERSION, SOURCE, IMAGE, SEMVER, TAG, PRUNE, INTERVAL, DIGEST
             let display_order = [
+                field_names::TYPE,
                 field_names::URL,
+                field_names::SECRET,
                 field_names::BRANCH,
                 field_names::PATH,
                 field_names::CHART,
