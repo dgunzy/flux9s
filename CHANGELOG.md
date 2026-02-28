@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-02-28
+
+### Changes in version 0.7.7:
+
+#### Added
+- Added more fields to the Flux CRD to improve the functionality of the Flux resource.
+
+#### Changed
+- Improved the development kind cluster to better support the Flux resource.
+
 ## [0.7.6] - 2026-02-28
 
 ### Version 0.7.6
