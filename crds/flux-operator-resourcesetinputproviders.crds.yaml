@@ -198,6 +198,7 @@ spec:
                 description: Type specifies the type of the input provider.
                 enum:
                 - Static
+                - ExternalService
                 - GitHubBranch
                 - GitHubTag
                 - GitHubPullRequest

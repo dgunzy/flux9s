@@ -228,7 +228,12 @@ pub fn render_resource_list(
                                 Cell::from(name_display)
                             }
                         }
-                        "TYPE" => Cell::from(r.resource_type.clone()),
+                        "TYPE" => Cell::from(
+                            specific_fields
+                                .get("TYPE")
+                                .cloned()
+                                .unwrap_or_else(|| r.resource_type.clone()),
+                        ),
                         "SUSPENDED" => Cell::from(
                             r.suspended
                                 .map(|s| {

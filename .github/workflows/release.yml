@@ -38,9 +38,9 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run tests
-        run: cargo test --lib --tests --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction
+        run: cargo test --lib --tests
 
-  build:
+  build-unix:
     name: Build ${{ matrix.target }}
     needs: test
     runs-on: ${{ matrix.os }}
@@ -71,12 +71,6 @@ jobs:
             asset_name: flux9s-macos-x86_64.tar.gz
             use_tar: true
 
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: flux9s.exe
-            asset_name: flux9s-windows-x86_64.zip
-            use_tar: false
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,13 +88,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev
 
-      - name: Install OpenSSL (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          vcpkg install openssl:x64-windows-static-md
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
-          echo "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\packages\openssl_x64-windows-static-md" >> $env:GITHUB_ENV
-
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -110,7 +97,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ github.sha }}
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
@@ -127,20 +114,63 @@ jobs:
         run: |
           tar -czf ${{ matrix.asset_name }} -C target/${{ matrix.target }}/release ${{ matrix.artifact_name }}
 
-      - name: Create archive (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.artifact_name }} -DestinationPath ${{ matrix.asset_name }}
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.asset_name }}
 
+  build-windows:
+    name: Build x86_64-pc-windows-msvc (non-blocking)
+    needs: test
+    continue-on-error: true
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install OpenSSL (Windows)
+        run: |
+          vcpkg install openssl:x64-windows-static-md
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          echo "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\packages\openssl_x64-windows-static-md" >> $env:GITHUB_ENV
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-x86_64-pc-windows-msvc-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-x86_64-pc-windows-msvc-cargo-
+
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Create archive
+        run: |
+          Compress-Archive -Path target/x86_64-pc-windows-msvc/release/flux9s.exe -DestinationPath flux9s-windows-x86_64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flux9s-windows-x86_64.zip
+          path: flux9s-windows-x86_64.zip
+
   publish:
     name: Publish to crates.io
-    needs: build
+    needs: build-unix
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -159,7 +189,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build, publish]
+    needs: [build-unix, build-windows, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -201,7 +231,7 @@ jobs:
 
   update-homebrew:
     name: Update Homebrew Formula
-    needs: [build, release]
+    needs: [build-unix, release]
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
