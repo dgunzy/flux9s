@@ -1,0 +1,107 @@
+# Notification controller resources — Providers, Alerts watching resources, Receivers triggering sources
+# Provider/slack   ← Alert/on-error (watches Kustomization/*, HelmRelease/*)
+# Provider/webhook ← Alert/all-events (watches GitRepo/*, Kustomization/*, HelmRelease/*)
+# Provider/grafana (standalone)
+# Receiver/github-push → triggers GitRepository/flux-system
+# Receiver/dockerhub   → triggers ImageRepository/podinfo
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: slack
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  type: slack
+  channel: flux-alerts
+  address: https://hooks.slack.com/services/EXAMPLE
+  secretRef:
+    name: slack-token
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: webhook
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  type: generic
+  address: https://webhook.example.com/flux
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: grafana
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  type: grafana
+  address: https://grafana.example.com/api/annotations
+  secretRef:
+    name: grafana-token
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: on-error
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  providerRef:
+    name: slack
+  eventSeverity: error
+  eventSources:
+    - kind: Kustomization
+      name: "*"
+    - kind: HelmRelease
+      name: "*"
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: all-events
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  providerRef:
+    name: webhook
+  eventSeverity: info
+  eventSources:
+    - kind: GitRepository
+      name: "*"
+    - kind: Kustomization
+      name: "*"
+    - kind: HelmRelease
+      name: "*"
+---
+apiVersion: notification.toolkit.fluxcd.io/v1
+kind: Receiver
+metadata:
+  name: github-push
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  type: github
+  events:
+    - ping
+    - push
+  resources:
+    - kind: GitRepository
+      name: flux-system
+  secretRef:
+    name: webhook-token
+---
+apiVersion: notification.toolkit.fluxcd.io/v1
+kind: Receiver
+metadata:
+  name: dockerhub
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  type: dockerhub
+  events:
+    - push
+  resources:
+    - kind: ImageRepository
+      name: podinfo
+  secretRef:
+    name: dockerhub-token
