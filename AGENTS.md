@@ -9,7 +9,7 @@
 
 ## Before You Start
 
-1. Run `make ci` after all changes (formats, lints, tests)
+1. Run `just ci` after all changes (formats, lints, tests)
 2. Large changes require accompanying tests
 3. Command/keybinding changes must update help text (`src/tui/views/help.rs` and footer)
 4. **Git operations**: User manages their own git workflow. Only use git to restore a single file when explicitly requested (e.g., `git restore path/to/file`). Never commit, push, create branches, or perform any other git operations
@@ -178,7 +178,7 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
 
 ## CI/CD
 
-- `make ci` runs: `cargo fmt`, `cargo clippy`, `cargo test`
+- `just ci` runs: `cargo fmt`, `cargo clippy`, `cargo test`
 - All CI checks must pass before merge
 - Clippy warnings are treated as errors
 - Generated code in `src/models/_generated/` has clippy suppressed

@@ -13,11 +13,15 @@ on:
           - minor
           - major
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   prepare-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
@@ -134,7 +138,7 @@ jobs:
           sed -i "/^## \[Unreleased\]/r /tmp/changelog_entry.txt" CHANGELOG.md
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v5
+        uses: peter-evans/create-pull-request@4e1beaa7521e8b457b572c090b25bd3db56bf1c5 # v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore: bump version to ${{ steps.version.outputs.new_version }}"
