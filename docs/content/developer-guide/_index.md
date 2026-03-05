@@ -88,7 +88,7 @@ cargo build
 ### 3. Run Tests
 
 ```bash
-make ci
+just ci
 ```
 
 This runs:

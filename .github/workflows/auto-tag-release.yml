@@ -5,6 +5,9 @@ on:
     types: [closed]
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   auto-tag:
     # Only run on merged PRs with 'release' label
@@ -13,7 +16,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
           fetch-depth: 0
