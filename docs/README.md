@@ -11,12 +11,13 @@ This directory contains the Hugo-based documentation site for flux9s, using the 
 
 ### Running Locally
 
-1. Install Hugo dependencies:
+1. Install local docs dependencies:
 
 ```bash
-cd docs
-hugo mod get
+just docs-deps
 ```
+
+This installs the Node/PostCSS packages from `package-lock.json` and refreshes Hugo modules.
 
 2. Fetch metadata (optional, for local testing):
 
@@ -30,6 +31,12 @@ hugo mod get
 hugo server
 ```
 
+Or from the repository root after `just docs-deps`:
+
+```bash
+just docs-serve
+```
+
 The site will be available at `http://localhost:1313/flux9s/`
 
 ### Building
@@ -38,6 +45,12 @@ To build the site:
 
 ```bash
 hugo --minify
+```
+
+Or from the repository root after `just docs-deps`:
+
+```bash
+just docs-build
 ```
 
 The built site will be in the `public/` directory.

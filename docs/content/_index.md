@@ -20,7 +20,7 @@ notoc: true
     </div>
     
     <!-- Tagline -->
-    <p class="lead mb-5">A <a href="https://github.com/derailed/k9s" target="_blank" rel="noopener noreferrer">K9s</a>-inspired terminal UI for monitoring Flux GitOps resources</p>
+    <p class="lead mb-5">A <a href="https://github.com/derailed/k9s" target="_blank" rel="noopener noreferrer">K9s</a>-inspired terminal UI for Flux resources, controller health, and GitOps state</p>
     
     <!-- Action Buttons -->
     <div class="d-flex flex-wrap justify-content-center gap-3 mb-5">
@@ -69,6 +69,37 @@ notoc: true
         <h3 id="github-releases" class="mb-2">-</h3>
         <p class="text-muted mb-0">Releases</p>
       </div>
+    </div>
+  </div>
+</div>
+{{< /rawhtml >}}
+
+{{< rawhtml >}}
+<div class="container py-5">
+  <div class="row justify-content-center">
+    <div class="col-lg-10 col-xl-9">
+      <h2>What flux9s is</h2>
+      <p><code>flux9s</code> is a terminal UI for operators who want live visibility into Flux resources and the cluster state around them without leaving the shell. It watches Flux resources in real time, keeps a local in-memory view of their current state, and lets you move quickly between lists, details, YAML, traces, graphs, and reconciliation history.</p>
+      <p>The project is intentionally keyboard-first and closely follows familiar <a href="https://github.com/derailed/k9s" target="_blank" rel="noopener noreferrer">K9s</a> patterns: <code>j</code>/<code>k</code> navigation, <code>:</code> command mode, context and namespace switching, footer help, and k9s-style skins.</p>
+
+      <h2>The problem it solves</h2>
+      <p>Flux already provides strong controller APIs, and the <a href="https://fluxoperator.dev/web-ui/" target="_blank" rel="noopener noreferrer">Flux Operator Web UI</a> is an excellent browser-based experience for dashboards and cluster-wide visibility. <code>flux9s</code> was built to complement that workflow, not replace it.</p>
+      <p>Use <code>flux9s</code> when you want to stay in the terminal and:</p>
+      <ul>
+        <li>see Flux reconciliation state update live</li>
+        <li>inspect Kustomizations, HelmReleases, sources, and Flux Operator resources in one place</li>
+        <li>trace ownership chains and visualize managed workloads</li>
+        <li>check controller readiness and Flux bundle version from the same interface</li>
+        <li>run quick actions such as suspend, resume, reconcile, reconcile-with-source, and delete</li>
+      </ul>
+
+      <h2>Why it stays fast</h2>
+      <p><code>flux9s</code> uses the Kubernetes Watch API for supported Flux resource types instead of repeatedly polling. By default it starts scoped to a namespace, with the default configuration targeting <code>flux-system</code>, and only switches to cluster-wide watches when you explicitly choose <code>all</code>. That keeps API usage and terminal updates lighter on larger clusters.</p>
+      <p>The same watch-driven model is also used to surface Flux controller pod state and deployment metadata in the header, which is how the UI can show controller readiness and the detected Flux bundle version alongside resource health.</p>
+
+      <h2>Built for Flux and Flux Operator</h2>
+      <p>Beyond core Flux controller resources, <code>flux9s</code> also understands Flux Operator resources such as <code>FluxInstance</code>, <code>ResourceSet</code>, <code>ResourceSetInputProvider</code>, and <code>FluxReport</code>. That support shows up in practical features, not just extra rows in a table: graph and history views extend to operator-managed resources, and the graph builder follows the same relationship-discovery patterns used by the Flux Operator Web UI.</p>
+      <p>For a deeper code-level walkthrough, see the <a href="{{< relref "developer-guide/" >}}">Developer Guide</a>. If you want to get running quickly, jump to <a href="{{< relref "getting-started/" >}}">Getting Started</a>.</p>
     </div>
   </div>
 </div>

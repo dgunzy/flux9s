@@ -37,6 +37,18 @@ build:
 build-release:
     cargo build --release
 
+# Install local dependencies for the Hugo docs site
+docs-deps:
+    cd docs && npm ci && hugo mod get
+
+# Build the Hugo docs site
+docs-build:
+    cd docs && hugo --minify
+
+# Serve the Hugo docs site locally
+docs-serve:
+    cd docs && hugo server
+
 # Check the project (without building)
 check:
     cargo check

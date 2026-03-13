@@ -12,9 +12,8 @@ This documentation site is built with [Hugo](https://gohugo.io/) and the [Docsy]
 ### Local Development
 
 ```bash
-cd docs
-hugo mod get  # Install Hugo modules
-hugo server   # Start local server
+just docs-deps   # Install Node/PostCSS packages and Hugo modules
+just docs-serve  # Start local server from the repo root
 ```
 
 Visit `http://localhost:1313/flux9s/`
@@ -22,8 +21,7 @@ Visit `http://localhost:1313/flux9s/`
 ### Building
 
 ```bash
-cd docs
-hugo --minify
+just docs-build
 ```
 
 Output will be in `docs/public/`
