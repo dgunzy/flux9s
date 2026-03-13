@@ -7,6 +7,16 @@ toc: true
 type: docs
 ---
 
+## What Is flux9s?
+
+`flux9s` is a terminal UI for watching Flux resources and the cluster state around them in real time. It is designed for operators who already live in a shell and want fast visibility into what Flux is doing, how resources relate to each other, and whether quick intervention is needed.
+
+That includes core Flux resources such as `Kustomization`, `HelmRelease`, and source objects, plus Flux Operator resources such as `FluxInstance` and `ResourceSet`. From the same interface you can inspect YAML, trace ownership, open graph and history views, and run common actions like suspend, resume, and reconcile.
+
+## Why Use It If Flux Operator Has a Web UI?
+
+The [Flux Operator Web UI](https://fluxoperator.dev/web-ui/) is excellent for browser-based visibility. `flux9s` complements it with a terminal-first workflow: keyboard navigation, quick context switching, namespace-scoped live watches, and operational actions without leaving your current shell session.
+
 ## Quick Start
 
 Follow these steps to get started with flux9s:

@@ -1,103 +1,62 @@
 # Testing Guide
 
-This directory contains tests for the flux9s project.
+This directory contains the repository's test binaries and snapshot artifacts.
 
-## Test Organization
+## Current Layout
 
-```
+```text
 tests/
-├── unit/              # Unit tests for individual components
-│   ├── models/        # Model layer tests
-│   ├── watcher/       # Watcher layer tests
-│   ├── tui/           # TUI layer tests
-│   └── operations/    # Operations tests
-├── integration/       # Integration tests
-│   ├── api/           # Kubernetes API integration tests
-│   ├── watcher/       # End-to-end watcher tests
-│   └── tui/           # End-to-end TUI tests
-└── fixtures/          # Test data and fixtures
-    ├── crds/          # Sample CRD definitions
-    └── resources/     # Sample resource JSON responses
+├── crd_compatibility.rs
+├── favorites_tests.rs
+├── field_extraction.rs
+├── graph_tests.rs
+├── model_compatibility.rs
+├── navigation_tests.rs
+├── reconciliation_history_tests.rs
+├── resource_registry.rs
+├── snapshot_tests.rs
+├── trace_tests.rs
+├── snapshots/
+│   └── *.snap
+└── unit/
+    └── mod.rs
 ```
+
+Most tests are top-level integration-style Rust test binaries, not nested `tests/unit/...` or `tests/integration/...` trees.
+
+## What Each Test Covers
+
+- `crd_compatibility.rs`: status extraction and CRD compatibility expectations
+- `model_compatibility.rs`: generated model deserialization compatibility
+- `resource_registry.rs`: watcher/resource registry completeness
+- `field_extraction.rs`: per-resource field extraction behavior
+- `trace_tests.rs`: trace chain discovery
+- `graph_tests.rs`: graph building and graph support rules
+- `reconciliation_history_tests.rs`: `status.history` extraction behavior
+- `favorites_tests.rs`: favorites persistence behavior
+- `navigation_tests.rs`: view transitions and keyboard navigation
+- `snapshot_tests.rs`: rendered TUI snapshots
 
 ## Running Tests
 
+Common commands from the repository root:
+
 ```bash
-# Run all tests
-cargo test
+# Default contributor check
+just ci
 
-# Run unit tests only
-cargo test --test unit
+# Library + unit-style tests
+just test
 
-# Run integration tests only
-cargo test --test integration
+# Selected integration-style tests used in CI
+just test-integration
 
-# Run tests with output
-cargo test -- --nocapture
-
-# Run specific test
-cargo test test_name
+# All test binaries directly
+cargo test --lib --tests
 ```
 
-## Test Infrastructure
+TUI-specific tests such as `snapshot_tests` and `navigation_tests` are feature-gated in `Cargo.toml` and require the default `tui` feature.
 
-### Mocking
+## Snapshots
 
-We use `mockall` for trait mocking in unit tests. See `Cargo.toml` for dependencies.
-
-### Test Fixtures
-
-Test fixtures are stored in `tests/fixtures/` and include:
-- Sample CRD definitions
-- Sample Kubernetes resource JSON responses
-- Mock watch events
-
-### Kubernetes API Testing
-
-For integration tests that require Kubernetes API access:
-- Use `kube::Client` with test fixtures
-- Test against kind/minikube clusters
-- Mock API responses where possible
-
-## Writing Tests
-
-### Unit Test Example
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_resource_key_generation() {
-        let key = resource_key("default", "my-resource", "Kustomization");
-        assert_eq!(key, "default/my-resource/Kustomization");
-    }
-}
-```
-
-### Integration Test Example
-
-```rust
-#[tokio::test]
-async fn test_watch_stream() {
-    // Setup mock Kubernetes client
-    // Test watch stream handling
-    // Verify state updates
-}
-```
-
-## Test Coverage Goals
-
-- **Models:** 80%+ coverage
-- **Watcher:** 70%+ coverage
-- **TUI:** 60%+ coverage (UI is harder to test)
-- **Operations:** 80%+ coverage
-
-## CI/CD Testing
-
-Tests run automatically on:
-- Every PR (unit tests)
-- Every merge (unit + integration tests)
-- Nightly builds (full test suite)
-
+Snapshot files are stored under `tests/snapshots/` and are validated by `snapshot_tests.rs`. When intentional rendering changes occur, review the updated snapshots carefully before accepting them.

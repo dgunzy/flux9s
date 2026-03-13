@@ -34,7 +34,10 @@ jobs:
       - name: Check for changes
         id: changes
         run: |
-          if git diff --quiet; then
+          # Ignore lines that change every run regardless of CRD content:
+          #   - kopium command: comment (contains random /tmp/tmp.XXXXX path)
+          #   - generated_at timestamp in manifest.json
+          if git diff -I 'kopium command:' -I '"generated_at":' --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No CRD or model changes detected."
           else
