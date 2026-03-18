@@ -491,7 +491,8 @@ spec:
                   strategy:
                     description: |-
                       Strategy defines the install strategy to use for this HelmRelease.
-                      Defaults to 'RemediateOnFailure'.
+                      Defaults to 'RemediateOnFailure', or 'RetryOnFailure' when the
+                      DefaultToRetryOnFailure feature gate is enabled.
                     properties:
                       name:
                         description: Name of the install strategy.
@@ -1012,7 +1013,8 @@ spec:
                   strategy:
                     description: |-
                       Strategy defines the upgrade strategy to use for this HelmRelease.
-                      Defaults to 'RemediateOnFailure'.
+                      Defaults to 'RemediateOnFailure', or 'RetryOnFailure' when the
+                      DefaultToRetryOnFailure feature gate is enabled.
                     properties:
                       name:
                         description: Name of the upgrade strategy.
