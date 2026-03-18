@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-03-18
+
+### Version 0.8.0
+
+#### Added
+- Updated Flux CRDs to the latest versions (#146, #135)
+- Added quit warning when using `q` or `esc` commands (#143)
+
+#### Changed
+- Tweaked CRD workflow permissions (#137)
+- Switched from `make` to `just` in CI (#136)
+
+#### Fixed
+- Addressed a vulnerability found by cargo audit (#138)
+- Updated documentation and README (#140)
+- Adjusted release workflow permissions (#144)
+
 ## [0.7.7] - 2026-02-28
 
 ### Changes in version 0.7.7:
