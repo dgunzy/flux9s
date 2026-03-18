@@ -211,6 +211,7 @@ impl App {
             self.view_state.filter_mode,
             &self.view_state.filter,
             self.ui_state.show_help,
+            self.ui_state.show_quit_confirm,
             &self.async_state.confirmation_pending,
             &self.ui_state.status_message,
             &self.operation_registry,
@@ -468,6 +469,12 @@ impl App {
                     render_help(f, area, &self.theme, self.namespace_hotkeys());
                 }
             }
+        }
+
+        // Quit confirm renders as a popup overlay on top of the current view,
+        // so it must come last — after the background view has been drawn.
+        if self.ui_state.show_quit_confirm {
+            render_quit_confirm(f, area, &self.theme);
         }
     }
 }

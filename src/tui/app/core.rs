@@ -316,6 +316,11 @@ impl App {
         self.view_state.current_view
     }
 
+    #[allow(dead_code)] // Used in tests
+    pub fn show_quit_confirm(&self) -> bool {
+        self.ui_state.show_quit_confirm
+    }
+
     /// Initialize the splash screen timer - call this when TUI actually starts rendering
     /// This ensures the timer starts when rendering begins, not during async initialization
     pub fn init_splash_timer(&mut self) {

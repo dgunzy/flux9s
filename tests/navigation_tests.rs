@@ -3,13 +3,45 @@
 //! Ensures that navigation between views is consistent and users never get stuck.
 //! Tests that Esc always returns to the correct list view, regardless of navigation path.
 
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use flux9s::tui::App;
 use flux9s::tui::app::state::View;
 use flux9s::watcher::ResourceState;
 
+fn make_key(code: KeyCode) -> KeyEvent {
+    KeyEvent {
+        code,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    }
+}
+
+fn make_ctrl_key(code: KeyCode) -> KeyEvent {
+    KeyEvent {
+        code,
+        modifiers: KeyModifiers::CONTROL,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    }
+}
+
 fn create_test_app() -> App {
     let state = ResourceState::new();
     let config = flux9s::config::Config::default();
+    let theme = flux9s::tui::Theme::default();
+    App::new(state, "test-context".to_string(), None, config, theme)
+}
+
+/// Creates a test app with the splash screen disabled.
+///
+/// Required for tests that call `handle_key` directly: the default app starts
+/// with `show_splash = true`, so the first key press would be consumed by the
+/// splash dismissal logic rather than reaching the handler under test.
+fn create_test_app_no_splash() -> App {
+    let state = ResourceState::new();
+    let mut config = flux9s::config::Config::default();
+    config.ui.splashless = true;
     let theme = flux9s::tui::Theme::default();
     App::new(state, "test-context".to_string(), None, config, theme)
 }
@@ -131,6 +163,141 @@ fn test_navigation_from_list_to_detail_to_yaml_to_esc() {
         "previous_list_view should remain unchanged when navigating between detail views"
     );
 }
+
+// ── q / Esc / quit-confirm key handling ──────────────────────────────────────
+
+#[test]
+fn test_q_at_top_level_shows_quit_confirm() {
+    let mut app = create_test_app_no_splash();
+    app.set_view(View::ResourceList);
+
+    let result = app.handle_key(make_key(KeyCode::Char('q')));
+
+    assert_eq!(result, None, "q at top level should not quit the app");
+    assert!(
+        app.show_quit_confirm(),
+        "q at top level should open the quit confirm dialog"
+    );
+}
+
+#[test]
+fn test_esc_at_top_level_shows_quit_confirm() {
+    let mut app = create_test_app_no_splash();
+    app.set_view(View::ResourceList);
+
+    let result = app.handle_key(make_key(KeyCode::Esc));
+
+    assert_eq!(result, None, "Esc at top level should not quit the app");
+    assert!(
+        app.show_quit_confirm(),
+        "Esc at top level should open the quit confirm dialog"
+    );
+}
+
+#[test]
+fn test_q_at_nested_view_navigates_back() {
+    let mut app = create_test_app_no_splash();
+    app.set_view(View::ResourceDetail);
+
+    let result = app.handle_key(make_key(KeyCode::Char('q')));
+
+    assert_eq!(result, None, "q at a nested view should not quit");
+    assert_eq!(
+        app.current_view(),
+        View::ResourceList,
+        "q should navigate back to the list"
+    );
+    assert!(
+        !app.show_quit_confirm(),
+        "quit confirm should not appear when navigating back"
+    );
+}
+
+#[test]
+fn test_quit_confirm_y_confirms_quit() {
+    let mut app = create_test_app_no_splash();
+    app.set_view(View::ResourceList);
+    app.handle_key(make_key(KeyCode::Char('q'))); // open dialog
+
+    let result = app.handle_key(make_key(KeyCode::Char('y')));
+
+    assert_eq!(result, Some(true), "y in the quit dialog should quit");
+}
+
+#[test]
+fn test_quit_confirm_n_cancels() {
+    let mut app = create_test_app_no_splash();
+    app.set_view(View::ResourceList);
+    app.handle_key(make_key(KeyCode::Char('q'))); // open dialog
+
+    let result = app.handle_key(make_key(KeyCode::Char('n')));
+
+    assert_eq!(result, None, "n in the quit dialog should not quit");
+    assert!(
+        !app.show_quit_confirm(),
+        "n should dismiss the quit confirm dialog"
+    );
+}
+
+#[test]
+fn test_quit_confirm_q_cancels() {
+    let mut app = create_test_app_no_splash();
+    app.set_view(View::ResourceList);
+    app.handle_key(make_key(KeyCode::Char('q'))); // open dialog
+
+    let result = app.handle_key(make_key(KeyCode::Char('q')));
+
+    assert_eq!(result, None, "q inside the dialog should cancel, not quit");
+    assert!(
+        !app.show_quit_confirm(),
+        "q inside the dialog should dismiss it"
+    );
+}
+
+#[test]
+fn test_quit_confirm_esc_cancels() {
+    let mut app = create_test_app_no_splash();
+    app.set_view(View::ResourceList);
+    app.handle_key(make_key(KeyCode::Char('q'))); // open dialog
+
+    let result = app.handle_key(make_key(KeyCode::Esc));
+
+    assert_eq!(result, None, "Esc inside the dialog should not quit");
+    assert!(
+        !app.show_quit_confirm(),
+        "Esc inside the dialog should dismiss it"
+    );
+}
+
+#[test]
+fn test_uppercase_q_quits_immediately() {
+    let mut app = create_test_app_no_splash();
+    app.set_view(View::ResourceList);
+
+    let result = app.handle_key(make_key(KeyCode::Char('Q')));
+
+    assert_eq!(
+        result,
+        Some(true),
+        "Q should quit immediately without a dialog"
+    );
+    assert!(
+        !app.show_quit_confirm(),
+        "Q should not open the quit confirm dialog"
+    );
+}
+
+#[test]
+fn test_ctrl_c_quits_immediately() {
+    let mut app = create_test_app_no_splash();
+    app.set_view(View::ResourceList);
+
+    let result = app.handle_key(make_ctrl_key(KeyCode::Char('c')));
+
+    assert_eq!(result, Some(true), "Ctrl+C should quit immediately");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_navigation_esc_from_detail_views() {

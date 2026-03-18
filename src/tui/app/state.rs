@@ -109,6 +109,12 @@ pub struct UIState {
     pub command_buffer: String,
     /// Whether to show help overlay
     pub show_help: bool,
+    /// Whether to show quit confirmation dialog.
+    ///
+    /// Shown when `q` or `Esc` is pressed at the top-level view. This is
+    /// closer to k9s behaviour, where neither key exits directly. Use `Q`,
+    /// `:q`, or `Ctrl+C` to exit without going through this dialog.
+    pub show_quit_confirm: bool,
     /// Status message to display (message, is_error)
     pub status_message: Option<(String, bool)>,
     /// When status message was set (for auto-clearing)
@@ -131,6 +137,7 @@ impl UIState {
             command_mode: false,
             command_buffer: String::new(),
             show_help: false,
+            show_quit_confirm: false,
             status_message: None,
             status_message_time: None,
             show_splash,
