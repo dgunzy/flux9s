@@ -37,8 +37,8 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
 
     // GENERAL column
     let general_items = vec![
-        ("<q>", "Quit"),
-        ("<Esc>", "Back/Quit"),
+        ("<q>/<Esc>", "Back (confirm quit at root)"),
+        ("<Q>", "Quit immediately"),
         ("<?>", "Show/hide help"),
         ("<:>", "Command mode"),
         ("</>", "Filter resources"),
@@ -66,7 +66,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         ("<Ctrl+f>/<PgDn>", "Page down"),
         ("<Ctrl+b>/<PgUp>", "Page up"),
         ("<Enter>", "View details"),
-        ("<Esc>", "Back/Quit"),
+        ("<q>/<Esc>", "Back / quit at root"),
     ];
     render_help_column(f, column_chunks[2], "NAVIGATION", &nav_items, theme);
 

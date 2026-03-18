@@ -29,6 +29,11 @@ impl App {
             return self.handle_confirmation_key(key);
         }
 
+        // Handle quit confirmation dialog (shown when q/Esc is pressed at top level)
+        if self.ui_state.show_quit_confirm {
+            return self.handle_quit_confirm_key(key);
+        }
+
         // Handle submenu navigation if a submenu is active
         if self.view_state.submenu_state.is_some() {
             return self.handle_submenu_key(key);
@@ -121,11 +126,17 @@ impl App {
             }
         }
 
-        // Handle Ctrl+F (page down) and Ctrl+B (page up) before main key dispatch.
+        // Handle Ctrl+F (page down), Ctrl+B (page up), and Ctrl+C (quit) before main key dispatch.
         // These must be checked here so they don't collide with the plain 'f' / 'b' handlers below.
+        //
+        // Note: in raw mode the OS no longer converts Ctrl+C into SIGINT — it arrives as a
+        // regular key event that the application must handle explicitly.
         if key.modifiers == crossterm::event::KeyModifiers::CONTROL {
             let page_size = self.view_state.page_size;
             match key.code {
+                crossterm::event::KeyCode::Char('c') => {
+                    return Some(true); // Unconditional quit, matching terminal convention
+                }
                 crossterm::event::KeyCode::Char('f') => {
                     if self.view_state.current_view == View::ResourceYAML {
                         self.view_state.yaml_scroll_offset += page_size;
@@ -230,44 +241,21 @@ impl App {
 
         match key.code {
             crossterm::event::KeyCode::Char('q') => {
-                // Always quit on 'q'
-                return Some(true);
+                // Navigate back a level, closer to k9s behaviour where q never
+                // exits directly. At the top-level view a confirmation dialog is shown
+                // instead. Use Q, :q, or Ctrl+C to exit without the dialog.
+                return self.navigate_back_or_confirm_quit();
             }
             crossterm::event::KeyCode::Char('Q') => {
-                // Force quit on 'Q' or 'q!'
+                // Immediate unconditional quit (uppercase, intentional).
+                // Provides a direct exit for users who do not want the confirmation
+                // dialog that q/Esc shows at the top-level view.
                 return Some(true);
             }
             crossterm::event::KeyCode::Esc => {
-                // Escape navigation: go back a level or exit
-                if self.ui_state.show_help {
-                    self.ui_state.show_help = false;
-                    return None;
-                }
-                match self.view_state.current_view {
-                    View::ResourceList => {
-                        // At main menu - exit program
-                        return Some(true);
-                    }
-                    View::ResourceDetail
-                    | View::ResourceYAML
-                    | View::ResourceTrace
-                    | View::ResourceHistory
-                    | View::ResourceGraph => {
-                        // Go back to previous list view (favorites if we came from there, otherwise list)
-                        self.view_state.current_view = self.view_state.previous_list_view;
-                        self.selection_state.selected_resource_key = None;
-                        return None;
-                    }
-                    View::ResourceFavorites => {
-                        // Go back to resource list
-                        self.view_state.current_view = View::ResourceList;
-                        return None;
-                    }
-                    View::Help => {
-                        self.view_state.current_view = View::ResourceList;
-                        return None;
-                    }
-                }
+                // Navigate back a level, closer to k9s behaviour where Esc never
+                // exits directly. At the top-level view a confirmation dialog is shown.
+                return self.navigate_back_or_confirm_quit();
             }
             crossterm::event::KeyCode::Char('?') => {
                 self.ui_state.show_help = !self.ui_state.show_help;
@@ -759,6 +747,66 @@ impl App {
                     let _ = self.preview_theme(&theme_name);
                 }
             }
+        }
+    }
+
+    /// Navigate back one level, or show the quit confirmation dialog at the top level.
+    ///
+    /// Shared implementation for `q` and `Esc`, matching k9s behaviour where
+    /// neither key exits the application directly. The help overlay is treated as
+    /// a navigable layer and is dismissed first before any view transition occurs.
+    fn navigate_back_or_confirm_quit(&mut self) -> Option<bool> {
+        if self.ui_state.show_help {
+            self.ui_state.show_help = false;
+            return None;
+        }
+        match self.view_state.current_view {
+            View::ResourceList => {
+                // At the top-level view there is nowhere to go back to, so ask
+                // for confirmation rather than exiting immediately (k9s convention).
+                self.ui_state.show_quit_confirm = true;
+                None
+            }
+            View::ResourceDetail
+            | View::ResourceYAML
+            | View::ResourceTrace
+            | View::ResourceHistory
+            | View::ResourceGraph => {
+                // Go back to the previous list view (favourites if we came from
+                // there, otherwise the main resource list).
+                self.view_state.current_view = self.view_state.previous_list_view;
+                self.selection_state.selected_resource_key = None;
+                None
+            }
+            View::ResourceFavorites => {
+                self.view_state.current_view = View::ResourceList;
+                None
+            }
+            View::Help => {
+                self.view_state.current_view = View::ResourceList;
+                None
+            }
+        }
+    }
+
+    /// Handle a key press while the quit confirmation dialog is visible.
+    ///
+    /// `y`/`Y` confirms and exits. `n`/`N`/`q`/`Esc` all cancel — `q` is
+    /// included so the footer hint is consistent with what actually works.
+    /// All other keys are ignored while the dialog is open.
+    fn handle_quit_confirm_key(&mut self, key: KeyEvent) -> Option<bool> {
+        match key.code {
+            crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => {
+                Some(true) // Confirmed — exit the application
+            }
+            crossterm::event::KeyCode::Char('n')
+            | crossterm::event::KeyCode::Char('N')
+            | crossterm::event::KeyCode::Char('q')
+            | crossterm::event::KeyCode::Esc => {
+                self.ui_state.show_quit_confirm = false;
+                None // Cancelled — return to normal view
+            }
+            _ => None, // Ignore all other keys while the dialog is open
         }
     }
 

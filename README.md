@@ -127,7 +127,9 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `W` - Reconcile with source (Kustomization, HelmRelease)
 - `d` - Delete resource (with confirmation)
 - `?` - Show/hide help
-- `Esc` - Go back / Quit
+- `q` / `Esc` - Go back; shows a quit prompt when at the root view
+- `Q` - Quit immediately (no prompt)
+- `Ctrl+C` / `:q` - Quit (also skips the prompt)
 
 ### Commands
 

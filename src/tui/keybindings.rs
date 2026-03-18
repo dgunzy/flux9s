@@ -41,7 +41,7 @@ pub fn get_navigation_commands() -> Vec<NavigationCommand> {
         NavigationCommand::new("W", "Reconcile+Source"),
         NavigationCommand::new("d", "Delete"),
         NavigationCommand::new("?", "Help"),
-        NavigationCommand::new("Esc", "Back/Quit"),
+        NavigationCommand::new("Esc/q", "Back"),
     ]
 }
 

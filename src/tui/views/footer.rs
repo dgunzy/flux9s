@@ -23,6 +23,7 @@ pub fn render_footer(
     filter_mode: bool,
     filter: &str,
     show_help: bool,
+    show_quit_confirm: bool,
     confirmation_pending: &Option<PendingOperation>,
     status_message: &Option<(String, bool)>,
     operation_registry: &OperationRegistry,
@@ -37,6 +38,12 @@ pub fn render_footer(
 
     if filter_mode {
         return render_filter_footer(f, area, filter, theme);
+    }
+
+    // While the quit confirm dialog is visible, show only its relevant keys so
+    // the footer accurately reflects what is active — not the normal nav hints.
+    if show_quit_confirm {
+        return render_quit_confirm_footer(f, area, theme);
     }
 
     // Handle default navigation footer (wrapped for smaller screens)
@@ -290,6 +297,60 @@ fn render_navigation_footer(
 
     // Return number of lines used (max 2)
     num_lines
+}
+
+/// Footer displayed while the quit confirmation dialog is active.
+///
+/// Shows only the keys that are valid in this state so the footer matches
+/// what the user can actually press.
+fn render_quit_confirm_footer(f: &mut Frame, area: Rect, theme: &Theme) -> usize {
+    let spans = vec![
+        Span::styled(
+            "y",
+            Style::default()
+                .fg(theme.operation_confirm)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("/"),
+        Span::styled(
+            "Y",
+            Style::default()
+                .fg(theme.operation_confirm)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Quit  "),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(theme.operation_cancel)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("/"),
+        Span::styled(
+            "N",
+            Style::default()
+                .fg(theme.operation_cancel)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("/"),
+        Span::styled(
+            "q",
+            Style::default()
+                .fg(theme.operation_cancel)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("/"),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(theme.operation_cancel)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Cancel"),
+    ];
+    let footer = Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::ALL));
+    f.render_widget(footer, area);
+    1
 }
 
 fn render_confirmation_footer_text<'a>(

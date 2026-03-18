@@ -66,9 +66,11 @@ Use these keyboard shortcuts to navigate flux9s:
 | `t`       | Trace ownership chain                                   |
 | `W`       | Reconcile with source                                   |
 | `d`       | Delete resource                                         |
-| `?`       | Show/hide help                                          |
-| `Esc`     | Go back / Quit                                          |
-| `Tab`     | Autocomplete command                                    |
+| `?`          | Show/hide help                                          |
+| `q` / `Esc`  | Go back; shows a quit prompt when at the root view      |
+| `Q`          | Quit immediately (no prompt)                            |
+| `Ctrl+C`     | Quit (also `:q`, `:quit`)                               |
+| `Tab`        | Autocomplete command                                    |
 
 ## Commands
 
