@@ -51,6 +51,26 @@ pub fn render_loading_state(f: &mut Frame, area: Rect, title: &str, message: &st
     f.render_widget(paragraph, area);
 }
 
+/// Clean a JSON object by removing Kubernetes-managed fields that add noise in text views.
+pub fn clean_resource_json(obj: &serde_json::Value) -> serde_json::Value {
+    match obj {
+        serde_json::Value::Object(map) => {
+            let mut cleaned = serde_json::Map::new();
+            for (key, value) in map {
+                if key == "managedFields" {
+                    continue;
+                }
+                cleaned.insert(key.clone(), clean_resource_json(value));
+            }
+            serde_json::Value::Object(cleaned)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(clean_resource_json).collect())
+        }
+        other => other.clone(),
+    }
+}
+
 /// Render an empty state message
 ///
 /// Shows a consistent empty state message across all views.

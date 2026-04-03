@@ -56,12 +56,17 @@ impl App {
         // Clear status messages on any key press (except in special modes and operation keys)
         // Don't clear if this is an operation key - we'll set a new message
         let is_operation_key = matches!(
-            key.code,
-            crossterm::event::KeyCode::Char('s')
-                | crossterm::event::KeyCode::Char('r')
-                | crossterm::event::KeyCode::Char('d')
-                | crossterm::event::KeyCode::Char('R')
-                | crossterm::event::KeyCode::Char('W')
+            (key.modifiers, key.code),
+            (
+                crossterm::event::KeyModifiers::NONE,
+                crossterm::event::KeyCode::Char('s')
+                    | crossterm::event::KeyCode::Char('r')
+                    | crossterm::event::KeyCode::Char('R')
+                    | crossterm::event::KeyCode::Char('W')
+            ) | (
+                crossterm::event::KeyModifiers::CONTROL,
+                crossterm::event::KeyCode::Char('d')
+            )
         );
 
         if self.ui_state.status_message.is_some()
@@ -140,6 +145,8 @@ impl App {
                 crossterm::event::KeyCode::Char('f') => {
                     if self.view_state.current_view == View::ResourceYAML {
                         self.view_state.yaml_scroll_offset += page_size;
+                    } else if self.view_state.current_view == View::ResourceDescribe {
+                        self.view_state.describe_scroll_offset += page_size;
                     } else if self.view_state.current_view == View::ResourceTrace {
                         self.view_state.trace_scroll_offset += page_size;
                     } else if self.view_state.current_view == View::ResourceHistory {
@@ -158,6 +165,11 @@ impl App {
                     if self.view_state.current_view == View::ResourceYAML {
                         self.view_state.yaml_scroll_offset =
                             self.view_state.yaml_scroll_offset.saturating_sub(page_size);
+                    } else if self.view_state.current_view == View::ResourceDescribe {
+                        self.view_state.describe_scroll_offset = self
+                            .view_state
+                            .describe_scroll_offset
+                            .saturating_sub(page_size);
                     } else if self.view_state.current_view == View::ResourceTrace {
                         self.view_state.trace_scroll_offset = self
                             .view_state
@@ -182,6 +194,10 @@ impl App {
                     }
                     return None;
                 }
+                crossterm::event::KeyCode::Char('d') => {
+                    self.handle_operation_key('d');
+                    return None;
+                }
                 _ => {}
             }
         }
@@ -193,6 +209,8 @@ impl App {
                 crossterm::event::KeyCode::PageDown => {
                     if self.view_state.current_view == View::ResourceYAML {
                         self.view_state.yaml_scroll_offset += page_size;
+                    } else if self.view_state.current_view == View::ResourceDescribe {
+                        self.view_state.describe_scroll_offset += page_size;
                     } else if self.view_state.current_view == View::ResourceTrace {
                         self.view_state.trace_scroll_offset += page_size;
                     } else if self.view_state.current_view == View::ResourceHistory {
@@ -211,6 +229,11 @@ impl App {
                     if self.view_state.current_view == View::ResourceYAML {
                         self.view_state.yaml_scroll_offset =
                             self.view_state.yaml_scroll_offset.saturating_sub(page_size);
+                    } else if self.view_state.current_view == View::ResourceDescribe {
+                        self.view_state.describe_scroll_offset = self
+                            .view_state
+                            .describe_scroll_offset
+                            .saturating_sub(page_size);
                     } else if self.view_state.current_view == View::ResourceTrace {
                         self.view_state.trace_scroll_offset = self
                             .view_state
@@ -262,80 +285,16 @@ impl App {
             }
             crossterm::event::KeyCode::Char('s')
             | crossterm::event::KeyCode::Char('r')
-            | crossterm::event::KeyCode::Char('d')
             | crossterm::event::KeyCode::Char('R')
             | crossterm::event::KeyCode::Char('W') => {
-                // Handle Flux operations - works from list, favorites, and detail view
-                if let Some(resource) = self.get_current_resource() {
-                    let op_key = match key.code {
-                        crossterm::event::KeyCode::Char('s') => 's',
-                        crossterm::event::KeyCode::Char('r') => 'r',
-                        crossterm::event::KeyCode::Char('d') => 'd',
-                        crossterm::event::KeyCode::Char('R') => 'R',
-                        crossterm::event::KeyCode::Char('W') => 'W',
-                        _ => return None,
-                    };
-
-                    if let Some(operation) = self.operation_registry.get_by_keybinding(op_key) {
-                        if operation.is_valid_for(&resource.resource_type) {
-                            // Check readonly mode first
-                            if self.config.read_only {
-                                self.set_status_message((
-                                    "Readonly mode is enabled. Use :readonly to toggle write actions."
-                                        .to_string(),
-                                    true,
-                                ));
-                            } else if operation.requires_confirmation() {
-                                // Show confirmation dialog
-                                self.async_state.confirmation_pending =
-                                    Some(PendingOperation::new(
-                                        resource.resource_type.clone(),
-                                        resource.namespace.clone(),
-                                        resource.name.clone(),
-                                        op_key,
-                                    ));
-                            } else {
-                                // Show immediate feedback
-                                if let Some(operation) =
-                                    self.operation_registry.get_by_keybinding(op_key)
-                                {
-                                    let feedback_msg = if op_key == 'W' {
-                                        // Special message for reconcile with source
-                                        format!(
-                                            "Reconciling {}/{} with source...",
-                                            resource.resource_type, resource.name
-                                        )
-                                    } else {
-                                        format!(
-                                            "{} {}/{}...",
-                                            operation.name(),
-                                            resource.resource_type,
-                                            resource.name
-                                        )
-                                    };
-                                    self.set_status_message((feedback_msg, false));
-                                }
-                                // Execute immediately
-                                self.execute_operation(
-                                    &resource.resource_type,
-                                    &resource.namespace,
-                                    &resource.name,
-                                    op_key,
-                                );
-                            }
-                        } else {
-                            // Operation not valid for this resource type
-                            self.set_status_message((
-                                format!(
-                                    "Operation '{}' is not valid for {}",
-                                    operation.name(),
-                                    resource.resource_type
-                                ),
-                                true,
-                            ));
-                        }
-                    }
-                }
+                let op_key = match key.code {
+                    crossterm::event::KeyCode::Char('s') => 's',
+                    crossterm::event::KeyCode::Char('r') => 'r',
+                    crossterm::event::KeyCode::Char('R') => 'R',
+                    crossterm::event::KeyCode::Char('W') => 'W',
+                    _ => return None,
+                };
+                self.handle_operation_key(op_key);
             }
             crossterm::event::KeyCode::Char('t') => {
                 // Trace command - works from list, favorites, and detail view
@@ -359,6 +318,9 @@ impl App {
                     if self.view_state.yaml_scroll_offset > 0 {
                         self.view_state.yaml_scroll_offset -= 1;
                     }
+                } else if self.view_state.current_view == View::ResourceDescribe {
+                    self.view_state.describe_scroll_offset =
+                        self.view_state.describe_scroll_offset.saturating_sub(1);
                 } else if self.view_state.current_view == View::ResourceTrace {
                     // Scroll up in trace view
                     self.view_state.trace_scroll_offset =
@@ -385,6 +347,8 @@ impl App {
                 if self.view_state.current_view == View::ResourceYAML {
                     // Scroll down in YAML view - we'll handle max scroll in render
                     self.view_state.yaml_scroll_offset += 1;
+                } else if self.view_state.current_view == View::ResourceDescribe {
+                    self.view_state.describe_scroll_offset += 1;
                 } else if self.view_state.current_view == View::ResourceTrace {
                     // Scroll down in trace view
                     self.view_state.trace_scroll_offset += 1;
@@ -410,32 +374,19 @@ impl App {
             }
             crossterm::event::KeyCode::Char('y') => {
                 // View YAML - trigger async fetch
-                if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    // Save current view as previous list view before navigating
-                    self.view_state.previous_list_view = self.view_state.current_view;
-                    let resources = self.get_filtered_resources();
-                    if let Some(resource) = resources.get(self.view_state.selected_index) {
-                        let key = crate::watcher::resource_key(
-                            &resource.namespace,
-                            &resource.name,
-                            &resource.resource_type,
-                        );
-                        self.selection_state.selected_resource_key = Some(key.clone());
-                        self.async_state.yaml_fetch_pending = Some(key);
-                        self.async_state.yaml_fetched = None; // Clear previous fetch
-                        self.view_state.yaml_scroll_offset = 0; // Reset scroll when entering YAML view
-                        self.view_state.current_view = View::ResourceYAML;
-                    }
-                } else if self.view_state.current_view == View::ResourceDetail {
-                    // From detail view, preserve the previous_list_view (don't overwrite it)
-                    if let Some(ref key) = self.selection_state.selected_resource_key {
-                        self.async_state.yaml_fetch_pending = Some(key.clone());
-                        self.async_state.yaml_fetched = None;
-                        self.view_state.yaml_scroll_offset = 0; // Reset scroll when entering YAML view
-                    }
+                if let Some(key) = self.prepare_selected_resource_key_for_nested_view() {
+                    self.async_state.yaml_fetch_pending = Some(key);
+                    self.async_state.yaml_fetched = None;
+                    self.view_state.yaml_scroll_offset = 0;
                     self.view_state.current_view = View::ResourceYAML;
+                }
+            }
+            crossterm::event::KeyCode::Char('d') => {
+                if let Some(key) = self.prepare_selected_resource_key_for_nested_view() {
+                    self.async_state.describe_fetch_pending = Some(key);
+                    self.async_state.describe_fetched = None;
+                    self.view_state.describe_scroll_offset = 0;
+                    self.view_state.current_view = View::ResourceDescribe;
                 }
             }
             crossterm::event::KeyCode::Enter => {
@@ -580,6 +531,7 @@ impl App {
             crossterm::event::KeyCode::Backspace => {
                 // Backspace goes back (same as Escape for detail view)
                 if self.view_state.current_view == View::ResourceDetail
+                    || self.view_state.current_view == View::ResourceDescribe
                     || self.view_state.current_view == View::ResourceYAML
                     || self.view_state.current_view == View::ResourceTrace
                     || self.view_state.current_view == View::ResourceHistory
@@ -768,6 +720,7 @@ impl App {
                 None
             }
             View::ResourceDetail
+            | View::ResourceDescribe
             | View::ResourceYAML
             | View::ResourceTrace
             | View::ResourceHistory
@@ -810,6 +763,84 @@ impl App {
         }
     }
 
+    fn prepare_selected_resource_key_for_nested_view(&mut self) -> Option<String> {
+        match self.view_state.current_view {
+            View::ResourceList | View::ResourceFavorites => {
+                self.view_state.previous_list_view = self.view_state.current_view;
+                let resources = self.get_filtered_resources();
+                let resource = resources.get(self.view_state.selected_index)?;
+                let key = crate::watcher::resource_key(
+                    &resource.namespace,
+                    &resource.name,
+                    &resource.resource_type,
+                );
+                self.selection_state.selected_resource_key = Some(key.clone());
+                Some(key)
+            }
+            View::ResourceDetail | View::ResourceDescribe => {
+                self.selection_state.selected_resource_key.clone()
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_operation_key(&mut self, op_key: char) {
+        if let Some(resource) = self.get_current_resource() {
+            if let Some(operation) = self.operation_registry.get_by_keybinding(op_key) {
+                if !operation.is_valid_for(&resource.resource_type) {
+                    self.set_status_message((
+                        format!(
+                            "Operation '{}' is not valid for {}",
+                            operation.name(),
+                            resource.resource_type
+                        ),
+                        true,
+                    ));
+                    return;
+                }
+
+                if self.config.read_only {
+                    self.set_status_message((
+                        crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
+                        true,
+                    ));
+                    return;
+                }
+
+                if operation.requires_confirmation() {
+                    self.async_state.confirmation_pending = Some(PendingOperation::new(
+                        resource.resource_type.clone(),
+                        resource.namespace.clone(),
+                        resource.name.clone(),
+                        op_key,
+                    ));
+                    return;
+                }
+
+                let feedback_msg = if op_key == 'W' {
+                    format!(
+                        "Reconciling {}/{} with source...",
+                        resource.resource_type, resource.name
+                    )
+                } else {
+                    format!(
+                        "{} {}/{}...",
+                        operation.name(),
+                        resource.resource_type,
+                        resource.name
+                    )
+                };
+                self.set_status_message((feedback_msg, false));
+                self.execute_operation(
+                    &resource.resource_type,
+                    &resource.namespace,
+                    &resource.name,
+                    op_key,
+                );
+            }
+        }
+    }
+
     fn handle_confirmation_key(&mut self, key: KeyEvent) -> Option<bool> {
         if let Some(ref pending) = self.async_state.confirmation_pending {
             match key.code {
@@ -818,8 +849,7 @@ impl App {
                     if self.config.read_only {
                         self.async_state.confirmation_pending = None;
                         self.set_status_message((
-                            "Readonly mode is enabled. Use :readonly to toggle write actions."
-                                .to_string(),
+                            crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
                             true,
                         ));
                         return None;
@@ -857,7 +887,7 @@ impl App {
         if self.config.read_only && self.operation_registry.get_by_keybinding(op_key).is_some() {
             // All operations are modifications, so block them all in readonly mode
             self.set_status_message((
-                "Readonly mode is enabled. Use :readonly to toggle write actions.".to_string(),
+                crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
                 true,
             ));
             return;
@@ -1254,5 +1284,157 @@ impl App {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, LoggerConfig, UiConfig};
+    use crate::tui::Theme;
+    use crate::watcher::{ResourceInfo, ResourceState, resource_key};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use std::collections::HashMap;
+
+    fn make_key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn make_ctrl_key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn create_test_app(read_only: bool) -> App {
+        let state = ResourceState::new();
+        let config = Config {
+            read_only,
+            default_namespace: "".to_string(),
+            default_controller_namespace: "".to_string(),
+            namespace_hotkeys: vec![],
+            ui: UiConfig {
+                enable_mouse: false,
+                headless: false,
+                no_icons: false,
+                skin: "default".to_string(),
+                skin_read_only: None,
+                splashless: true,
+            },
+            logger: LoggerConfig {
+                tail: 100,
+                buffer: 1000,
+                since_seconds: 3600,
+                text_wrap: false,
+            },
+            context_skins: HashMap::new(),
+            cluster: HashMap::new(),
+            favorites: vec![],
+        };
+        let theme = Theme::default();
+        App::new(state, "test-context".to_string(), None, config, theme)
+    }
+
+    fn add_resource(app: &mut App) {
+        let resource = ResourceInfo {
+            name: "my-kustomization".to_string(),
+            namespace: "flux-system".to_string(),
+            resource_type: "Kustomization".to_string(),
+            age: None,
+            suspended: Some(false),
+            ready: Some(true),
+            message: Some("Applied revision".to_string()),
+            revision: Some("main@sha1:abc123".to_string()),
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: vec![],
+        };
+        app.state.upsert(
+            resource_key(&resource.namespace, &resource.name, &resource.resource_type),
+            resource,
+        );
+    }
+
+    #[test]
+    fn test_d_opens_describe_view() {
+        let mut app = create_test_app(false);
+        add_resource(&mut app);
+        app.view_state.current_view = View::ResourceList;
+
+        let result = app.handle_key(make_key(KeyCode::Char('d')));
+
+        assert_eq!(result, None);
+        assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+        assert_eq!(
+            app.async_state.describe_fetch_pending.as_deref(),
+            Some("Kustomization:flux-system:my-kustomization")
+        );
+        assert!(app.async_state.confirmation_pending.is_none());
+    }
+
+    #[test]
+    fn test_ctrl_d_still_requires_delete_confirmation() {
+        let mut app = create_test_app(false);
+        add_resource(&mut app);
+        app.view_state.current_view = View::ResourceList;
+
+        let result = app.handle_key(make_ctrl_key(KeyCode::Char('d')));
+
+        assert_eq!(result, None);
+        assert!(app.async_state.confirmation_pending.is_some());
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert!(app.async_state.pending_operation.is_none());
+    }
+
+    #[test]
+    fn test_ctrl_d_is_blocked_in_readonly_mode() {
+        let mut app = create_test_app(true);
+        add_resource(&mut app);
+        app.view_state.current_view = View::ResourceList;
+
+        let result = app.handle_key(make_ctrl_key(KeyCode::Char('d')));
+
+        assert_eq!(result, None);
+        assert!(app.async_state.confirmation_pending.is_none());
+        assert_eq!(
+            app.ui_state.status_message,
+            Some((
+                crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
+                true,
+            ))
+        );
+    }
+
+    #[test]
+    fn test_delete_confirmation_still_blocks_execution_in_readonly_mode() {
+        let mut app = create_test_app(true);
+        app.async_state.confirmation_pending = Some(PendingOperation::new(
+            "Kustomization".to_string(),
+            "flux-system".to_string(),
+            "my-kustomization".to_string(),
+            'd',
+        ));
+
+        let result = app.handle_key(make_key(KeyCode::Char('y')));
+
+        assert_eq!(result, None);
+        assert!(app.async_state.confirmation_pending.is_none());
+        assert!(app.async_state.pending_operation.is_none());
+        assert_eq!(
+            app.ui_state.status_message,
+            Some((
+                crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
+                true,
+            ))
+        );
     }
 }

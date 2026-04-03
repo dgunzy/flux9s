@@ -60,6 +60,27 @@ impl App {
         None
     }
 
+    /// Trigger describe fetch if pending
+    pub fn trigger_describe_fetch(
+        &mut self,
+    ) -> Option<(
+        String,
+        kube::Client,
+        tokio::sync::oneshot::Sender<anyhow::Result<serde_json::Value>>,
+    )> {
+        if let Some(ref key) = self.async_state.describe_fetch_pending {
+            if let Some(ref client) = self.kube_client {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let key_clone = key.clone();
+                let client_clone = client.clone();
+                self.async_state.describe_fetch_pending = None;
+                self.async_state.describe_fetch_rx = Some(rx);
+                return Some((key_clone, client_clone, tx));
+            }
+        }
+        None
+    }
+
     /// Set YAML fetch result
     pub fn set_yaml_fetched(&mut self, yaml: serde_json::Value) {
         self.async_state.yaml_fetched = Some(yaml);
@@ -69,6 +90,17 @@ impl App {
     pub fn set_yaml_fetch_error(&mut self) {
         self.async_state.yaml_fetched = None;
         self.async_state.yaml_fetch_pending = None;
+    }
+
+    /// Set describe fetch result
+    pub fn set_describe_fetched(&mut self, describe: serde_json::Value) {
+        self.async_state.describe_fetched = Some(describe);
+    }
+
+    /// Set describe fetch error
+    pub fn set_describe_fetch_error(&mut self) {
+        self.async_state.describe_fetched = None;
+        self.async_state.describe_fetch_pending = None;
     }
 
     /// Try to get YAML fetch result
@@ -85,6 +117,26 @@ impl App {
                 Err(_) => {
                     self.async_state.yaml_fetch_rx = None;
                     return Some(Err(anyhow::anyhow!("YAML fetch failed")));
+                }
+            }
+        }
+        None
+    }
+
+    /// Try to get describe fetch result
+    pub fn try_get_describe_result(&mut self) -> Option<anyhow::Result<serde_json::Value>> {
+        if let Some(ref mut rx) = self.async_state.describe_fetch_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.async_state.describe_fetch_rx = None;
+                    return Some(result);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    return None;
+                }
+                Err(_) => {
+                    self.async_state.describe_fetch_rx = None;
+                    return Some(Err(anyhow::anyhow!("Describe fetch failed")));
                 }
             }
         }

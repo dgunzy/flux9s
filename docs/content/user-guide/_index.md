@@ -60,12 +60,13 @@ Use these keyboard shortcuts to navigate flux9s:
 | `r`       | Resume reconciliation                                   |
 | `R`       | Reconcile resource                                      |
 | `y`       | View resource YAML                                      |
+| `d`       | View describe output                                    |
 | `f`       | Toggle favorite                                         |
 | `g`       | View resource graph (Kustomization, HelmRelease, etc.)  |
 | `h`       | View reconciliation history                             |
 | `t`       | Trace ownership chain                                   |
 | `W`       | Reconcile with source                                   |
-| `d`       | Delete resource                                         |
+| `Ctrl+d`  | Delete resource (with confirmation)                     |
 | `?`          | Show/hide help                                          |
 | `q` / `Esc`  | Go back; shows a quit prompt when at the root view      |
 | `Q`          | Quit immediately (no prompt)                            |
@@ -222,7 +223,7 @@ Perform actions on selected resources:
 | `r` | Resume reconciliation  | GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, ImageUpdateAutomation |
 | `R` | Reconcile resource     | All Flux resources (cannot reconcile suspended resources)                                       |
 | `W` | Reconcile with source  | Kustomization, HelmRelease only                                                                 |
-| `d` | Delete resource        | All Flux resources (with confirmation)                                                          |
+| `Ctrl+d` | Delete resource   | All Flux resources (with confirmation)                                                          |
 
 **Note:** Suspend and Resume operations are only available for resources that support the `spec.suspend` field. Reconcile operations will fail if the resource is currently suspended.
 

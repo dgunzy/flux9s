@@ -377,6 +377,19 @@ impl App {
                         &self.theme,
                     );
                 }
+                View::ResourceDescribe => {
+                    render_resource_describe(
+                        f,
+                        area,
+                        &self.selection_state.selected_resource_key,
+                        &self.state,
+                        &self.resource_objects,
+                        &self.async_state.describe_fetched,
+                        &self.async_state.describe_fetch_pending,
+                        &mut self.view_state.describe_scroll_offset,
+                        &self.theme,
+                    );
+                }
                 View::ResourceYAML => {
                     render_resource_yaml(
                         f,

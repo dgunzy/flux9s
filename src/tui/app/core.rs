@@ -307,6 +307,7 @@ impl App {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn set_previous_list_view(&mut self, view: View) {
         self.view_state.previous_list_view = view;
     }
@@ -372,7 +373,7 @@ impl App {
                 let resources = self.get_filtered_resources();
                 resources.get(self.view_state.selected_index).cloned()
             }
-            View::ResourceDetail => self
+            View::ResourceDetail | View::ResourceDescribe => self
                 .selection_state
                 .selected_resource_key
                 .as_ref()
@@ -530,6 +531,10 @@ impl std::fmt::Debug for App {
             .field("selected_index", &self.view_state.selected_index)
             .field("scroll_offset", &self.view_state.scroll_offset)
             .field("yaml_scroll_offset", &self.view_state.yaml_scroll_offset)
+            .field(
+                "describe_scroll_offset",
+                &self.view_state.describe_scroll_offset,
+            )
             .field("show_help", &self.ui_state.show_help)
             .field("context", &self.context)
             .field("namespace", &self.namespace)
@@ -545,6 +550,18 @@ impl std::fmt::Debug for App {
             .field("yaml_fetch_pending", &self.async_state.yaml_fetch_pending)
             .field("yaml_fetched", &self.async_state.yaml_fetched.is_some())
             .field("yaml_fetch_rx", &self.async_state.yaml_fetch_rx.is_some())
+            .field(
+                "describe_fetch_pending",
+                &self.async_state.describe_fetch_pending,
+            )
+            .field(
+                "describe_fetched",
+                &self.async_state.describe_fetched.is_some(),
+            )
+            .field(
+                "describe_fetch_rx",
+                &self.async_state.describe_fetch_rx.is_some(),
+            )
             .field("trace_pending", &self.async_state.trace_pending)
             .field("trace_result", &self.async_state.trace_result.is_some())
             .field(

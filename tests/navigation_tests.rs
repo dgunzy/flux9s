@@ -6,7 +6,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use flux9s::tui::App;
 use flux9s::tui::app::state::View;
-use flux9s::watcher::ResourceState;
+use flux9s::watcher::{ResourceInfo, ResourceState, resource_key};
+use std::collections::HashMap;
 
 fn make_key(code: KeyCode) -> KeyEvent {
     KeyEvent {
@@ -44,6 +45,27 @@ fn create_test_app_no_splash() -> App {
     config.ui.splashless = true;
     let theme = flux9s::tui::Theme::default();
     App::new(state, "test-context".to_string(), None, config, theme)
+}
+
+fn add_test_resource(app: &mut App) {
+    let resource = ResourceInfo {
+        name: "my-kustomization".to_string(),
+        namespace: "flux-system".to_string(),
+        resource_type: "Kustomization".to_string(),
+        age: None,
+        suspended: Some(false),
+        ready: Some(true),
+        message: Some("Applied revision".to_string()),
+        revision: Some("main@sha1:abc123".to_string()),
+        labels: HashMap::new(),
+        annotations: HashMap::new(),
+        last_reconciled: None,
+        reconciliation_history: vec![],
+    };
+    app.state().upsert(
+        resource_key(&resource.namespace, &resource.name, &resource.resource_type),
+        resource,
+    );
 }
 
 #[test]
@@ -162,6 +184,23 @@ fn test_navigation_from_list_to_detail_to_yaml_to_esc() {
         initial_prev,
         "previous_list_view should remain unchanged when navigating between detail views"
     );
+}
+
+#[test]
+fn test_d_from_list_opens_describe_and_esc_returns_to_list() {
+    let mut app = create_test_app_no_splash();
+    add_test_resource(&mut app);
+    app.set_view(View::ResourceList);
+
+    let result = app.handle_key(make_key(KeyCode::Char('d')));
+
+    assert_eq!(result, None);
+    assert_eq!(app.current_view(), View::ResourceDescribe);
+
+    let result = app.handle_key(make_key(KeyCode::Esc));
+
+    assert_eq!(result, None);
+    assert_eq!(app.current_view(), View::ResourceList);
 }
 
 // ── q / Esc / quit-confirm key handling ──────────────────────────────────────

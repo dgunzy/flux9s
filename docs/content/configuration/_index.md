@@ -21,7 +21,7 @@ flux9s stores its configuration in a YAML file. The location depends on your ope
 
 ### Read-Only Mode
 
-By default, flux9s launches in readonly mode to prevent accidental changes (Delete operations always have a confirmation screen).
+By default, flux9s launches in readonly mode to prevent accidental changes (`Ctrl+d` delete operations always have a confirmation screen).
 You can change this:
 
 **Via command line:**

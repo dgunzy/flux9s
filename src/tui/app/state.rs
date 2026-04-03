@@ -12,6 +12,7 @@ use std::collections::HashSet;
 pub enum View {
     ResourceList,
     ResourceDetail,
+    ResourceDescribe,
     ResourceYAML,
     ResourceTrace,
     ResourceGraph,
@@ -51,6 +52,8 @@ pub struct ViewState {
     pub scroll_offset: usize,
     /// Scroll offset for YAML view
     pub yaml_scroll_offset: usize,
+    /// Scroll offset for describe view
+    pub describe_scroll_offset: usize,
     /// Scroll offset for trace view
     pub trace_scroll_offset: usize,
     /// Scroll offset for history view
@@ -78,6 +81,7 @@ impl Default for ViewState {
             selected_index: 0,
             scroll_offset: 0,
             yaml_scroll_offset: 0,
+            describe_scroll_offset: 0,
             trace_scroll_offset: 0,
             history_scroll_offset: 0,
             graph_scroll_offset: 0,
@@ -156,6 +160,12 @@ pub struct AsyncOperationState {
     pub yaml_fetch_pending: Option<String>,
     pub yaml_fetched: Option<serde_json::Value>,
     pub yaml_fetch_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<serde_json::Value>>>,
+
+    // Describe fetch
+    pub describe_fetch_pending: Option<String>,
+    pub describe_fetched: Option<serde_json::Value>,
+    pub describe_fetch_rx:
+        Option<tokio::sync::oneshot::Receiver<anyhow::Result<serde_json::Value>>>,
 
     // Trace
     pub trace_pending: Option<ResourceKey>,

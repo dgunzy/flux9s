@@ -4,8 +4,8 @@ expression: terminal.backend()
 ---
 "┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│j/k Navigate | ^f/^b PgDn/Up | : Command | Enter Details | / Filter(Name) | s Suspend | r Resume | R Reconcile        │"
-"│| y YAML | f Favorite | g Graph | h History | t Trace | W Reconcile+Source | d Delete | ? Help | Esc/q Back           │"
-"│                                                                                                                      │"
+"│| y YAML | d Describe | f Favorite | g Graph | h History | t Trace | W Reconcile+Source | ^d Delete | ? Help | Esc/q  │"
+"│Back                                                                                                                  │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
