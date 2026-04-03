@@ -31,7 +31,7 @@ use std::io;
 use crate::models::FluxResourceKind;
 use crate::watcher::ResourceKey;
 
-pub use crate::kube::fetch::fetch_resource_yaml;
+pub use crate::kube::fetch::{fetch_resource, fetch_resource_yaml};
 
 /// Extract Flux bundle version from deployment metadata labels
 /// Returns the app.kubernetes.io/version label if present (e.g., "v2.7.5")
@@ -347,6 +347,50 @@ pub async fn run_tui_with_async_init(
             }
         }
 
+        // Check if we need to fetch describe data asynchronously
+        if kube_initialized {
+            if let Some((key, client, tx)) = app.trigger_describe_fetch() {
+                if let Some(rk) = ResourceKey::parse(&key) {
+                    tracing::debug!(
+                        "Fetching describe data for {}/{} in namespace {}",
+                        rk.resource_type,
+                        rk.name,
+                        rk.namespace
+                    );
+
+                    let client_clone = client.clone();
+                    tokio::spawn(async move {
+                        let result = fetch_resource(
+                            &client_clone,
+                            &rk.resource_type,
+                            &rk.namespace,
+                            &rk.name,
+                        )
+                        .await;
+                        if let Err(ref e) = result {
+                            tracing::warn!(
+                                "Failed to fetch describe data for {}/{} in namespace {}: {}",
+                                rk.resource_type,
+                                rk.name,
+                                rk.namespace,
+                                e
+                            );
+                        } else {
+                            tracing::debug!(
+                                "Successfully fetched describe data for {}/{}",
+                                rk.resource_type,
+                                rk.name
+                            );
+                        }
+                        let _ = tx.send(result);
+                    });
+                } else {
+                    tracing::error!("Failed to parse resource key for describe fetch: {}", key);
+                    let _ = tx.send(Err(anyhow::anyhow!("Invalid resource key format: {}", key)));
+                }
+            }
+        }
+
         // Check if we need to trace a resource asynchronously
         // Only if Kubernetes is initialized
         if kube_initialized {
@@ -458,6 +502,17 @@ pub async fn run_tui_with_async_init(
                     tracing::debug!("YAML fetch error result received: {}", e);
                     app.set_yaml_fetch_error();
                     app.set_status_message((format!("Failed to fetch YAML: {}", e), true));
+                }
+            }
+        }
+
+        // Check for describe fetch results
+        if let Some(result) = app.try_get_describe_result() {
+            match result {
+                Ok(describe) => app.set_describe_fetched(describe),
+                Err(e) => {
+                    app.set_describe_fetch_error();
+                    app.set_status_message((format!("Failed to fetch description: {}", e), true));
                 }
             }
         }

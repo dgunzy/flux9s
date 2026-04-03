@@ -18,7 +18,7 @@ pub mod inventory;
 #[allow(unused_imports)] // Public API re-exports used by lib consumers
 pub use api::{get_api_resource_with_fallback, get_gvk_for_resource_type};
 #[allow(unused_imports)] // Public API re-exports used by lib consumers
-pub use fetch::fetch_resource_yaml;
+pub use fetch::{fetch_resource, fetch_resource_yaml};
 
 use anyhow::Result;
 use kube::config::Kubeconfig;

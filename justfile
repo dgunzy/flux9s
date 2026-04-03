@@ -22,7 +22,8 @@ test-integration:
 
 # Run cargo-audit to check for CVEs (ignores unmaintained warnings)
 audit:
-    cargo audit --ignore RUSTSEC-2024-0436
+    # RUSTSEC-2026-0002 is currently pulled in transitively via ratatui 0.29's lru dependency.
+    cargo audit --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0002
 
 # Run all CI checks in order
 ci: fmt clippy audit test test-integration

@@ -34,12 +34,13 @@ pub fn get_navigation_commands() -> Vec<NavigationCommand> {
         NavigationCommand::new("r", "Resume"),
         NavigationCommand::new("R", "Reconcile"),
         NavigationCommand::new("y", "YAML"),
+        NavigationCommand::new("d", "Describe"),
         NavigationCommand::new("f", "Favorite"),
         NavigationCommand::new("g", "Graph"),
         NavigationCommand::new("h", "History"),
         NavigationCommand::new("t", "Trace"),
         NavigationCommand::new("W", "Reconcile+Source"),
-        NavigationCommand::new("d", "Delete"),
+        NavigationCommand::new("^d", "Delete"),
         NavigationCommand::new("?", "Help"),
         NavigationCommand::new("Esc/q", "Back"),
     ]
@@ -82,12 +83,13 @@ pub fn get_resource_help_commands() -> Vec<(&'static str, &'static str)> {
                 "r" => Some(("<r>", "Resume reconciliation")),
                 "R" => Some(("<R>", "Reconcile resource")),
                 "y" => Some(("<y>", "View YAML manifest")),
+                "d" => Some(("<d>", "Describe resource")),
                 "f" => Some(("<f>", "Toggle favorite")),
                 "g" => Some(("<g>", "View resource graph")),
                 "h" => Some(("<h>", "View reconciliation history")),
                 "t" => Some(("<t>", "Trace ownership chain")),
                 "W" => Some(("<W>", "Reconcile with source")),
-                "d" => Some(("<d>", "Delete resource")),
+                "^d" => Some(("<Ctrl+d>", "Delete resource")),
                 _ => None, // Skip non-resource commands (j/k, :, /, ?, Esc)
             }
         })

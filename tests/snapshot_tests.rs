@@ -7,8 +7,8 @@ use flux9s::config::{Config, LoggerConfig, UiConfig};
 use flux9s::tui::Theme;
 use flux9s::tui::app::state::ControllerPodState;
 use flux9s::tui::views::{
-    render_footer, render_header, render_resource_detail, render_resource_list,
-    render_resource_yaml,
+    render_footer, render_header, render_resource_describe, render_resource_detail,
+    render_resource_list, render_resource_yaml,
 };
 use flux9s::watcher::{ResourceInfo, ResourceState};
 use insta::assert_snapshot;
@@ -500,6 +500,73 @@ fn test_render_resource_detail_no_selection() {
             let area = frame.area();
             let resource_objects = HashMap::new();
             render_resource_detail(frame, area, &None, &state, &resource_objects, &theme);
+        })
+        .unwrap();
+
+    assert_snapshot!(terminal.backend());
+}
+
+#[test]
+fn test_render_resource_describe_with_data() {
+    let state = create_test_resource_state();
+    let theme = create_test_theme();
+
+    let resource_json = serde_json::json!({
+        "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+        "kind": "Kustomization",
+        "metadata": {
+            "name": "my-kustomization",
+            "namespace": "flux-system",
+            "creationTimestamp": "2026-04-01T12:00:00Z",
+            "generation": 3,
+            "resourceVersion": "12345",
+            "labels": {
+                "app.kubernetes.io/name": "demo"
+            },
+            "annotations": {
+                "reconcile.fluxcd.io/requestedAt": "2026-04-01T12:05:00Z"
+            }
+        },
+        "spec": {
+            "interval": "10m",
+            "path": "./clusters/prod",
+            "prune": true,
+            "sourceRef": {
+                "kind": "GitRepository",
+                "name": "my-gitrepo"
+            }
+        },
+        "status": {
+            "conditions": [
+                {
+                    "type": "Ready",
+                    "status": "True",
+                    "reason": "ReconciliationSucceeded",
+                    "message": "Applied revision: main@sha1:abc123"
+                }
+            ],
+            "lastAppliedRevision": "main@sha1:abc123"
+        }
+    });
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let mut describe_scroll_offset = 0;
+
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            let resource_objects = HashMap::new();
+            render_resource_describe(
+                frame,
+                area,
+                &Some("Kustomization:flux-system:my-kustomization".to_string()),
+                &state,
+                &resource_objects,
+                &Some(resource_json),
+                &None,
+                &mut describe_scroll_offset,
+                &theme,
+            );
         })
         .unwrap();
 

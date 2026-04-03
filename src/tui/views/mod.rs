@@ -5,6 +5,7 @@
 //! part of the interface.
 
 mod confirmation;
+mod describe;
 mod detail;
 mod footer;
 mod graph;
@@ -21,6 +22,7 @@ pub mod trace;
 mod yaml;
 
 pub use confirmation::*;
+pub use describe::*;
 pub use detail::*;
 // favorites module is not exported - favorites view uses render_resource_list instead
 pub use footer::*;

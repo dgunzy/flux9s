@@ -5,34 +5,11 @@ use crate::watcher::ResourceState;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
-use serde_json::Value;
 use std::collections::HashMap;
-
-/// Clean a JSON object by removing Kubernetes internal fields
-fn clean_resource_json(obj: &Value) -> Value {
-    match obj {
-        Value::Object(map) => {
-            let mut cleaned = serde_json::Map::new();
-            for (key, value) in map {
-                // Skip Kubernetes internal fields that clutter the YAML view
-                match key.as_str() {
-                    "managedFields" => continue, // Skip managedFields entirely (contains f: paths)
-                    _ => {
-                        // Recursively clean nested objects
-                        cleaned.insert(key.clone(), clean_resource_json(value));
-                    }
-                }
-            }
-            Value::Object(cleaned)
-        }
-        Value::Array(arr) => Value::Array(arr.iter().map(clean_resource_json).collect()),
-        other => other.clone(),
-    }
-}
 
 /// Render the YAML view
 pub fn render_resource_yaml(
@@ -93,7 +70,7 @@ pub fn render_resource_yaml(
     };
 
     // Clean the JSON object to remove Kubernetes internal fields
-    let cleaned_json = clean_resource_json(&obj_json);
+    let cleaned_json = crate::tui::views::helpers::clean_resource_json(&obj_json);
 
     // Convert JSON to YAML using serde_yaml with proper formatting
     // serde_yaml automatically handles indentation with spaces
@@ -134,7 +111,7 @@ pub fn render_resource_yaml(
         .map(|line| highlight_yaml_line(line, theme))
         .collect();
 
-    let block = Block::default().title(title).borders(Borders::ALL);
+    let block = crate::tui::views::helpers::create_themed_block(&title, theme);
     // Use Wrap { trim: false } to preserve leading spaces for YAML indentation
     let paragraph = Paragraph::new(visible_lines)
         .block(block)
@@ -142,8 +119,8 @@ pub fn render_resource_yaml(
     f.render_widget(paragraph, area);
 }
 
-/// Highlight a YAML line with kubecolor-like syntax highlighting
-fn highlight_yaml_line(line: &str, _theme: &Theme) -> Line<'static> {
+/// Highlight a YAML line using the active theme's label, value, and secondary text colors.
+fn highlight_yaml_line(line: &str, theme: &Theme) -> Line<'static> {
     let mut spans = Vec::new();
     let mut chars = line.chars().peekable();
     let mut current_token = String::new();
@@ -166,7 +143,7 @@ fn highlight_yaml_line(line: &str, _theme: &Theme) -> Line<'static> {
                 // End of string
                 spans.push(Span::styled(
                     current_token.clone(),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme.text_value),
                 ));
                 current_token.clear();
                 in_string = false;
@@ -182,9 +159,9 @@ fn highlight_yaml_line(line: &str, _theme: &Theme) -> Line<'static> {
                 if !current_token.is_empty() {
                     // Flush current token
                     let color = if after_colon {
-                        get_value_color(&current_token)
+                        get_value_color(theme)
                     } else {
-                        Color::Cyan // Key
+                        theme.text_label
                     };
                     spans.push(Span::styled(
                         current_token.clone(),
@@ -201,11 +178,11 @@ fn highlight_yaml_line(line: &str, _theme: &Theme) -> Line<'static> {
                     // This is a key
                     spans.push(Span::styled(
                         current_token.clone(),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(theme.text_label),
                     ));
                     current_token.clear();
                 }
-                spans.push(Span::styled(":", Style::default().fg(Color::Cyan)));
+                spans.push(Span::styled(":", Style::default().fg(theme.text_label)));
                 after_colon = true;
             }
             '"' | '\'' => {
@@ -213,9 +190,9 @@ fn highlight_yaml_line(line: &str, _theme: &Theme) -> Line<'static> {
                 if !current_token.is_empty() {
                     // Flush current token (might be part of key or value)
                     let color = if after_colon {
-                        get_value_color(&current_token)
+                        get_value_color(theme)
                     } else {
-                        Color::Cyan // Key
+                        theme.text_label
                     };
                     spans.push(Span::styled(
                         current_token.clone(),
@@ -229,16 +206,16 @@ fn highlight_yaml_line(line: &str, _theme: &Theme) -> Line<'static> {
             }
             '-' if current_token.is_empty() && chars.peek().map(|c| *c == ' ') == Some(true) => {
                 // List item marker
-                spans.push(Span::styled("-", Style::default().fg(Color::Cyan)));
+                spans.push(Span::styled("-", Style::default().fg(theme.text_label)));
                 chars.next(); // Skip the space
             }
             ' ' | '\t' => {
                 if !current_token.is_empty() {
                     // Flush token
                     let color = if after_colon {
-                        get_value_color(&current_token)
+                        get_value_color(theme)
                     } else {
-                        Color::Cyan // Key
+                        theme.text_label
                     };
                     spans.push(Span::styled(
                         current_token.clone(),
@@ -258,13 +235,13 @@ fn highlight_yaml_line(line: &str, _theme: &Theme) -> Line<'static> {
     // Flush remaining token
     if !current_token.is_empty() {
         let color = if in_comment {
-            Color::DarkGray
+            theme.text_secondary
         } else if in_string {
-            Color::Green
+            theme.text_value
         } else if after_colon {
-            get_value_color(&current_token)
+            get_value_color(theme)
         } else {
-            Color::Cyan // Key
+            theme.text_label
         };
         spans.push(Span::styled(current_token, Style::default().fg(color)));
     }
@@ -272,18 +249,7 @@ fn highlight_yaml_line(line: &str, _theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Determine the color for a YAML value based on its type
-fn get_value_color(token: &str) -> Color {
-    match token {
-        "true" | "True" | "TRUE" | "false" | "False" | "FALSE" => Color::Yellow,
-        "null" | "Null" | "NULL" | "~" => Color::Red,
-        _ => {
-            // Check if it's a number
-            if token.parse::<f64>().is_ok() || token.parse::<i64>().is_ok() {
-                Color::Yellow
-            } else {
-                Color::White
-            }
-        }
-    }
+/// YAML values should use the same themed value color as other detail views.
+fn get_value_color(theme: &Theme) -> ratatui::style::Color {
+    theme.text_value
 }

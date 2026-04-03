@@ -12,6 +12,10 @@ pub const MAX_RECONCILIATION_HISTORY: usize = 50;
 /// Status message timeout in seconds
 pub const STATUS_MESSAGE_TIMEOUT_SECS: u64 = 4;
 
+/// Status message shown when a write action is attempted in readonly mode
+pub const READ_ONLY_WRITE_ACTION_MESSAGE: &str =
+    "Readonly mode is enabled. Use :readonly to toggle write actions.";
+
 /// Minimum terminal width required for the TUI
 pub const MIN_TERMINAL_WIDTH: u16 = 80;
 

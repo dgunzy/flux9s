@@ -48,7 +48,9 @@ pub use services::ClusterSession;
 pub use operations::{FluxOperation, OperationRegistry};
 
 // Re-export kube utilities
-pub use kube::{fetch_resource_yaml, get_api_resource_with_fallback, get_gvk_for_resource_type};
+pub use kube::{
+    fetch_resource, fetch_resource_yaml, get_api_resource_with_fallback, get_gvk_for_resource_type,
+};
 
 // Re-export trace types
 pub use trace::{
