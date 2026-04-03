@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-04-03
+
+## Version 0.8.1
+
+### Added
+- Added the `Describe` command
+
+### Changed
+- Changed the `d` command to `describe`
+- Changed the `delete` command
+
 ## [0.8.0] - 2026-03-18
 
 ### Version 0.8.0
