@@ -7,7 +7,7 @@ use crate::watcher::WatchableResource;
 use crate::watcher::{
     Alert, ArtifactGenerator, Bucket, ExternalArtifact, FluxInstance, FluxReport, GitRepository,
     HelmChart, HelmRelease, HelmRepository, ImagePolicy, ImageRepository, ImageUpdateAutomation,
-    Kustomization, OCIRepository, Provider, Receiver, ResourceSet, ResourceSetInputProvider,
+    Kustomization, OciRepository, Provider, Receiver, ResourceSet, ResourceSetInputProvider,
 };
 
 /// Get GroupVersionKind for a resource type
@@ -19,9 +19,9 @@ pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String,
             GitRepository::plural(),
         ),
         Some(FluxResourceKind::OCIRepository) => (
-            OCIRepository::api_group(),
-            OCIRepository::api_version(),
-            OCIRepository::plural(),
+            OciRepository::api_group(),
+            OciRepository::api_version(),
+            OciRepository::plural(),
         ),
         Some(FluxResourceKind::HelmRepository) => (
             HelmRepository::api_group(),

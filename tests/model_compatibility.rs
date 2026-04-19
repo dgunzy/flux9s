@@ -5,7 +5,7 @@
 
 use flux9s::watcher::{
     Alert, Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRelease, HelmRepository,
-    ImagePolicy, ImageRepository, ImageUpdateAutomation, Kustomization, OCIRepository, Provider,
+    ImagePolicy, ImageRepository, ImageUpdateAutomation, Kustomization, OciRepository, Provider,
     Receiver, ResourceSetInputProvider, WatchableResource,
 };
 use serde_json::json;
@@ -50,8 +50,8 @@ fn test_resource_type_api_consistency() {
     // Source controller resources should all use source.toolkit.fluxcd.io/v1
     assert_eq!(GitRepository::api_group(), "source.toolkit.fluxcd.io");
     assert_eq!(GitRepository::api_version(), "v1");
-    assert_eq!(OCIRepository::api_group(), "source.toolkit.fluxcd.io");
-    assert_eq!(OCIRepository::api_version(), "v1");
+    assert_eq!(OciRepository::api_group(), "source.toolkit.fluxcd.io");
+    assert_eq!(OciRepository::api_version(), "v1");
     assert_eq!(HelmRepository::api_group(), "source.toolkit.fluxcd.io");
     assert_eq!(HelmRepository::api_version(), "v1");
     assert_eq!(Bucket::api_group(), "source.toolkit.fluxcd.io");
