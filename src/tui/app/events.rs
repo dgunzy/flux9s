@@ -389,46 +389,44 @@ impl App {
                     self.view_state.current_view = View::ResourceDescribe;
                 }
             }
-            crossterm::event::KeyCode::Enter => {
-                if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    // Save current view as previous list view before navigating
-                    self.view_state.previous_list_view = self.view_state.current_view;
-                    let resources = self.get_filtered_resources();
-                    if let Some(resource) = resources.get(self.view_state.selected_index) {
-                        let key = crate::watcher::resource_key(
-                            &resource.namespace,
-                            &resource.name,
-                            &resource.resource_type,
-                        );
-                        self.selection_state.selected_resource_key = Some(key);
-                        self.view_state.current_view = View::ResourceDetail;
-                    }
+            crossterm::event::KeyCode::Enter
+                if (self.view_state.current_view == View::ResourceList
+                    || self.view_state.current_view == View::ResourceFavorites) =>
+            {
+                // Save current view as previous list view before navigating
+                self.view_state.previous_list_view = self.view_state.current_view;
+                let resources = self.get_filtered_resources();
+                if let Some(resource) = resources.get(self.view_state.selected_index) {
+                    let key = crate::watcher::resource_key(
+                        &resource.namespace,
+                        &resource.name,
+                        &resource.resource_type,
+                    );
+                    self.selection_state.selected_resource_key = Some(key);
+                    self.view_state.current_view = View::ResourceDetail;
                 }
             }
-            crossterm::event::KeyCode::Char('f') => {
-                // Toggle favorite - works from list view
-                if self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites
-                {
-                    let resources = self.get_filtered_resources();
-                    if let Some(resource) = resources.get(self.view_state.selected_index) {
-                        let key = crate::watcher::resource_key(
-                            &resource.namespace,
-                            &resource.name,
-                            &resource.resource_type,
-                        );
-                        self.toggle_favorite(&key);
-                        self.set_status_message((
-                            if self.is_favorite(&key) {
-                                format!("Added {} to favorites", resource.name)
-                            } else {
-                                format!("Removed {} from favorites", resource.name)
-                            },
-                            false,
-                        ));
-                    }
+            // Toggle favorite - works from list view
+            crossterm::event::KeyCode::Char('f')
+                if (self.view_state.current_view == View::ResourceList
+                    || self.view_state.current_view == View::ResourceFavorites) =>
+            {
+                let resources = self.get_filtered_resources();
+                if let Some(resource) = resources.get(self.view_state.selected_index) {
+                    let key = crate::watcher::resource_key(
+                        &resource.namespace,
+                        &resource.name,
+                        &resource.resource_type,
+                    );
+                    self.toggle_favorite(&key);
+                    self.set_status_message((
+                        if self.is_favorite(&key) {
+                            format!("Added {} to favorites", resource.name)
+                        } else {
+                            format!("Removed {} from favorites", resource.name)
+                        },
+                        false,
+                    ));
                 }
             }
             crossterm::event::KeyCode::Char('h') => {
@@ -615,30 +613,28 @@ impl App {
                     // Preview theme if this is a skin submenu
                     self.preview_theme_in_submenu();
                 }
-                crossterm::event::KeyCode::Char('s') | crossterm::event::KeyCode::Char('S') => {
-                    // Save/persist current selection (for skin submenu)
-                    if submenu.command == "skin" {
-                        if let Some(value) = submenu.selected_value() {
-                            match self.persist_theme(&value) {
-                                Ok(_) => {
-                                    // Close submenu and clear preview
-                                    self.view_state.submenu_state = None;
-                                    self.view_state.preview_original_theme = None;
-                                    let readonly_msg = if self.config.read_only {
-                                        " (readonly mode)"
-                                    } else {
-                                        ""
-                                    };
-                                    let msg = format!(
-                                        "Theme '{}' saved to config{}",
-                                        value, readonly_msg
-                                    );
-                                    self.set_status_message((msg, false));
-                                }
-                                Err(e) => {
-                                    let msg = format!("Failed to save theme: {}", e);
-                                    self.set_status_message((msg, true));
-                                }
+                // Save/persist current selection (for skin submenu)
+                crossterm::event::KeyCode::Char('s') | crossterm::event::KeyCode::Char('S')
+                    if submenu.command == "skin" =>
+                {
+                    if let Some(value) = submenu.selected_value() {
+                        match self.persist_theme(&value) {
+                            Ok(_) => {
+                                // Close submenu and clear preview
+                                self.view_state.submenu_state = None;
+                                self.view_state.preview_original_theme = None;
+                                let readonly_msg = if self.config.read_only {
+                                    " (readonly mode)"
+                                } else {
+                                    ""
+                                };
+                                let msg =
+                                    format!("Theme '{}' saved to config{}", value, readonly_msg);
+                                self.set_status_message((msg, false));
+                            }
+                            Err(e) => {
+                                let msg = format!("Failed to save theme: {}", e);
+                                self.set_status_message((msg, true));
                             }
                         }
                     }

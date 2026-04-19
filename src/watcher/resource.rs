@@ -66,7 +66,7 @@ pub use image_reflector_controller::{ImagePolicy, ImageRepository};
 pub use kustomize_controller::Kustomization;
 pub use notification_controller::{Alert, Provider, Receiver};
 pub use source_controller::{
-    Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRepository, OCIRepository,
+    Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRepository, OciRepository,
 };
 pub use source_watcher::ArtifactGenerator;
 // Flux Operator resources
@@ -108,7 +108,7 @@ impl_watchable!(
     "GitRepository"
 );
 impl_watchable!(
-    OCIRepository,
+    OciRepository,
     "source.toolkit.fluxcd.io",
     "v1",
     "ocirepositories",
