@@ -163,7 +163,7 @@ impl_watchable!(
 impl_watchable!(
     HelmRelease,
     "helm.toolkit.fluxcd.io",
-    "v2beta2",
+    "v2",
     "helmreleases",
     "HelmRelease"
 );

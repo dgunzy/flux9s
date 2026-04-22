@@ -1,4 +1,9 @@
-# Source controller resources — interconnected with Kustomizations, HelmReleases, and ImageUpdateAutomation
+# Legacy cluster sources — Flux 2.2.x API versions
+#
+# In Flux 2.3.0, five CRDs were promoted to stable:
+#   OCIRepository, Bucket, HelmRepository, HelmChart, HelmRelease (v1beta2→v1, v2beta2→v2)
+# On this cluster those CRDs only serve the pre-graduation beta versions.
+# GitRepository and Kustomization were already at v1 since Flux 2.0 and are unchanged.
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
 metadata:
@@ -11,7 +16,8 @@ spec:
   ref:
     branch: main
 ---
-apiVersion: source.toolkit.fluxcd.io/v1
+# v1beta2 — HelmRepository was also at this version in Flux 2.2.x.
+apiVersion: source.toolkit.fluxcd.io/v1beta2
 kind: HelmRepository
 metadata:
   name: podinfo
@@ -21,18 +27,9 @@ spec:
   interval: 1h
   url: https://stefanprodan.github.io/podinfo
 ---
-apiVersion: source.toolkit.fluxcd.io/v1
-kind: HelmRepository
-metadata:
-  name: bitnami
-  namespace: flux-resources
-  labels: {app.kubernetes.io/managed-by: flux9s-dev}
-spec:
-  type: oci
-  interval: 1h
-  url: oci://registry-1.docker.io/bitnamicharts
----
-apiVersion: source.toolkit.fluxcd.io/v1
+# v1beta2 — OCIRepository was at this version in Flux 2.2.x.
+# flux9s should try v1 first (404), then fall back to v1beta2 and find this.
+apiVersion: source.toolkit.fluxcd.io/v1beta2
 kind: OCIRepository
 metadata:
   name: podinfo-oci
@@ -44,7 +41,8 @@ spec:
   ref:
     semver: ">=6.0.0"
 ---
-apiVersion: source.toolkit.fluxcd.io/v1
+# v1beta2 — Bucket was also at this version in Flux 2.2.x.
+apiVersion: source.toolkit.fluxcd.io/v1beta2
 kind: Bucket
 metadata:
   name: terraform-state

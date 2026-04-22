@@ -1,0 +1,51 @@
+# Legacy cluster workloads — Flux 2.2.x API versions
+# HelmChart and HelmRelease were also still at beta versions in Flux 2.2.x.
+# Kustomization graduated to v1 in Flux 2.0 and is unchanged.
+#
+# v1beta2 — HelmChart was at this version in Flux 2.2.x.
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: HelmChart
+metadata:
+  name: podinfo
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  interval: 1h
+  chart: podinfo
+  version: ">=6.0.0"
+  sourceRef:
+    kind: HelmRepository
+    name: podinfo
+---
+# v2beta2 — HelmRelease was at this version in Flux 2.2.x.
+apiVersion: helm.toolkit.fluxcd.io/v2beta2
+kind: HelmRelease
+metadata:
+  name: podinfo
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  interval: 5m
+  chart:
+    spec:
+      chart: podinfo
+      version: ">=6.0.0"
+      sourceRef:
+        kind: HelmRepository
+        name: podinfo
+  values:
+    replicaCount: 1
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  interval: 10m
+  path: ./apps/base/podinfo
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system

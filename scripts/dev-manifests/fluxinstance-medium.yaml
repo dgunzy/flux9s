@@ -7,9 +7,9 @@ metadata:
     fluxcd.controlplane.io/reconcileEvery: "1h"
 spec:
   distribution:
-    # Pin to the current Flux release line represented by this repo's generated CRDs.
-    # This keeps the "simple" dev cluster aligned with the latest API surface flux9s targets.
-    version: "2.8.x"
+    # Pin to a mid-series release band where OCIRepository/Bucket/Helm* are stable,
+    # but the cluster still represents an older CRD surface than the repo baseline.
+    version: "2.5.x"
     registry: "ghcr.io/fluxcd"
   components:
     - source-controller

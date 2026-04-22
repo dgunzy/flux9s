@@ -15,11 +15,14 @@ use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::Pod;
-use kube::core::{ApiResource, DynamicObject};
+use kube::core::DynamicObject;
 use kube::runtime::watcher;
 use kube::{Api, Client, ResourceExt};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+
+use crate::kube::api::{get_flux_api_resources_with_fallback, is_version_missing_error};
+use crate::models::FluxResourceKind;
 
 /// Event emitted by resource watchers
 #[derive(Debug, Clone)]
@@ -205,17 +208,10 @@ impl ResourceWatcher {
                         tracing::debug!("{} watcher initialization complete", display_name);
                     }
                     Err(e) => {
-                        // Check if this is a 404 error (CRD doesn't exist)
-                        // watcher::Error can be converted to kube::Error to check the underlying error
-                        let error_string = format!("{}", e);
-                        let is_404 = error_string.contains("404")
-                            || error_string.contains("Not Found")
-                            || error_string.contains("page not found");
-
-                        if is_404 {
-                            // 404 means the CRD doesn't exist - stop immediately, don't retry
+                        if is_version_missing_error(&format!("{}", e)) {
+                            // CRD not installed or version not served — stop, don't retry
                             tracing::info!(
-                                "{} CRD not found (404), stopping watcher",
+                                "{} CRD not available in cluster, stopping watcher",
                                 display_name
                             );
                             let _ = event_tx.send(WatchEvent::Error(format!(
@@ -395,35 +391,28 @@ impl ResourceWatcher {
         Ok(())
     }
 
-    /// Watch OCIRepository with version-agnostic support (v1 and v1beta2)
+    /// Watch a resource type that may be served at different API versions across Flux releases.
     ///
-    /// This uses DynamicObject to watch OCIRepository resources regardless of their API version.
-    /// It tries v1beta2 first (older version that user has), then v1 if v1beta2 doesn't exist.
-    fn watch_oci_repository(&mut self) -> Result<()> {
-        use crate::models::FluxResourceKind;
+    /// Uses DynamicObject to try each version in order, stopping at the first that responds.
+    /// Handles all five resource types that graduated from beta to stable in Flux 2.3.0:
+    ///   - OCIRepository / Bucket / HelmRepository / HelmChart  (v1beta2 → v1)
+    ///   - HelmRelease                                           (v2beta2 → v2)
+    fn watch_with_version_fallback(&mut self, resource_kind: FluxResourceKind) -> Result<()> {
+        let api_resources = get_flux_api_resources_with_fallback(resource_kind)?;
         let client = self.client.clone();
         let namespace = self.current_namespace.clone();
         let event_tx = self.event_tx.clone();
-        let resource_type = FluxResourceKind::OCIRepository.as_str().to_string();
+        let display_name = resource_kind.as_str();
+        let resource_type = display_name.to_string();
 
         let handle = tokio::spawn(async move {
-            // Try v1beta2 first (since user has resources in this version), then v1
-            let versions = vec!["v1beta2", "v1"];
-
-            for version in versions {
-                use crate::models::FluxResourceKind;
-                let api_resource = ApiResource {
-                    group: "source.toolkit.fluxcd.io".to_string(),
-                    version: version.to_string(),
-                    api_version: format!("source.toolkit.fluxcd.io/{}", version),
-                    kind: FluxResourceKind::OCIRepository.as_str().to_string(),
-                    plural: "ocirepositories".to_string(),
-                };
-
+            for api_resource in api_resources {
+                let version = api_resource.version.clone();
                 let api: Api<DynamicObject> = match namespace {
                     Some(ref ns) => {
                         tracing::debug!(
-                            "Starting OCIRepository watcher (version {}) for namespace: {}",
+                            "Starting {} watcher (version {}) for namespace: {}",
+                            display_name,
                             version,
                             ns
                         );
@@ -431,7 +420,8 @@ impl ResourceWatcher {
                     }
                     None => {
                         tracing::debug!(
-                            "Starting OCIRepository watcher (version {}) for all namespaces",
+                            "Starting {} watcher (version {}) for all namespaces",
+                            display_name,
                             version
                         );
                         Api::all_with(client.clone(), &api_resource)
@@ -443,7 +433,6 @@ impl ResourceWatcher {
                 const MAX_CONSECUTIVE_ERRORS: u32 = 5;
                 let mut version_working = false;
 
-                // Watch this version
                 loop {
                     match w.next().await {
                         Some(Ok(watcher::Event::InitApply(obj))) => {
@@ -481,32 +470,33 @@ impl ResourceWatcher {
                                 event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
                         }
                         Some(Ok(watcher::Event::Init)) => {
+                            // Init fires before the HTTP request — does NOT confirm the version
+                            // exists. Only reset the error counter so transient failures during
+                            // an already-working watch don't accumulate toward MAX_CONSECUTIVE_ERRORS.
                             error_count = 0;
-                            version_working = true;
                             tracing::debug!(
-                                "OCIRepository watcher (version {}) initialized",
+                                "{} watcher (version {}) starting",
+                                display_name,
                                 version
                             );
                         }
                         Some(Ok(watcher::Event::InitDone)) => {
+                            // InitDone fires after a successful initial list — confirms the version
+                            // exists on this cluster (even if there are no resources yet).
                             error_count = 0;
                             version_working = true;
                             tracing::debug!(
-                                "OCIRepository watcher (version {}) initialization complete",
+                                "{} watcher (version {}) confirmed available",
+                                display_name,
                                 version
                             );
                         }
                         Some(Err(e)) => {
                             error_count += 1;
-                            let error_string = format!("{}", e);
-                            let is_404 = error_string.contains("404")
-                                || error_string.contains("Not Found")
-                                || error_string.contains("page not found");
-
-                            if is_404 && !version_working {
-                                // 404 means this version doesn't exist - try next version
+                            if is_version_missing_error(&format!("{}", e)) && !version_working {
                                 tracing::debug!(
-                                    "OCIRepository version {} not found (404), trying next version",
+                                    "{} version {} not available, trying next version",
+                                    display_name,
                                     version
                                 );
                                 break; // Try next version
@@ -514,23 +504,24 @@ impl ResourceWatcher {
 
                             if error_count >= MAX_CONSECUTIVE_ERRORS {
                                 tracing::error!(
-                                    "OCIRepository watcher (version {}) stopped after {} consecutive errors",
+                                    "{} watcher (version {}) stopped after {} consecutive errors",
+                                    display_name,
                                     version,
                                     error_count
                                 );
                                 let _ = event_tx.send(WatchEvent::Error(format!(
-                                    "OCIRepository watcher (version {}) stopped after {} consecutive errors",
-                                    version, error_count
+                                    "{} watcher stopped after {} consecutive errors",
+                                    display_name, error_count
                                 )));
-                                return; // Give up
+                                return;
                             }
 
                             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                         }
                         None => {
-                            // Stream ended
                             tracing::debug!(
-                                "OCIRepository watcher (version {}) stream ended",
+                                "{} watcher (version {}) stream ended",
+                                display_name,
                                 version
                             );
                             break;
@@ -538,17 +529,16 @@ impl ResourceWatcher {
                     }
                 }
 
-                // If this version worked, use it and stop trying others
                 if version_working {
-                    tracing::info!("OCIRepository watcher using version {}", version);
+                    tracing::info!("{} watcher using version {}", display_name, version);
                     return;
                 }
             }
 
-            // If no version worked, report error
-            let _ = event_tx.send(WatchEvent::Error(
-                "OCIRepository watcher failed: no supported version found".to_string(),
-            ));
+            let _ = event_tx.send(WatchEvent::Error(format!(
+                "{} watcher: no supported API version found on this cluster",
+                display_name
+            )));
         });
 
         self.handles.push(handle);
@@ -565,20 +555,24 @@ impl ResourceWatcher {
         tracing::debug!("Starting watchers for all Flux resources");
 
         // Source Controller resources
+        // GitRepository has been at v1 since Flux 2.0 — stable, no fallback needed.
         self.watch::<resource::GitRepository>()?;
-        // OCIRepository uses version-agnostic watch to support both v1 and v1beta2
-        self.watch_oci_repository()?;
-        self.watch::<resource::HelmRepository>()?;
-        self.watch::<resource::Bucket>()?;
-        self.watch::<resource::HelmChart>()?;
+        // The five resources below graduated from beta to stable in Flux 2.3.0.
+        // Use version-fallback watches so older clusters (Flux 2.2.x) still work.
+        self.watch_with_version_fallback(FluxResourceKind::OCIRepository)?;
+        self.watch_with_version_fallback(FluxResourceKind::HelmRepository)?;
+        self.watch_with_version_fallback(FluxResourceKind::Bucket)?;
+        self.watch_with_version_fallback(FluxResourceKind::HelmChart)?;
         self.watch::<resource::ExternalArtifact>()?;
         self.watch::<resource::ArtifactGenerator>()?;
 
         // Kustomize Controller resources
+        // Kustomization has been at v1 since Flux 2.0 — stable.
         self.watch::<resource::Kustomization>()?;
 
         // Helm Controller resources
-        self.watch::<resource::HelmRelease>()?;
+        // HelmRelease graduated from v2beta2 to v2 in Flux 2.3.0.
+        self.watch_with_version_fallback(FluxResourceKind::HelmRelease)?;
 
         // Image Reflector Controller resources
         self.watch::<resource::ImageRepository>()?;

@@ -31,7 +31,7 @@ spec:
   interval: 1h
   url: oci://registry-1.docker.io/bitnamicharts
 ---
-apiVersion: source.toolkit.fluxcd.io/v1beta2
+apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository
 metadata:
   name: podinfo-oci${SUFFIX}
@@ -43,7 +43,7 @@ spec:
   ref:
     semver: ">=6.0.0"
 ---
-apiVersion: source.toolkit.fluxcd.io/v1beta2
+apiVersion: source.toolkit.fluxcd.io/v1
 kind: Bucket
 metadata:
   name: terraform-state${SUFFIX}

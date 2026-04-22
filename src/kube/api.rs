@@ -209,6 +209,35 @@ fn generate_fallback_versions(default_version: &str) -> Vec<String> {
     fallbacks
 }
 
+/// Get all Flux ApiResources to try for a resource kind, ordered from newest to oldest.
+///
+/// This keeps the watcher fallback logic aligned with the central Flux resource metadata
+/// instead of repeating API groups, versions, and plurals at each callsite.
+pub fn get_flux_api_resources_with_fallback(
+    resource_kind: FluxResourceKind,
+) -> Result<Vec<ApiResource>> {
+    let resource_type = resource_kind.as_str();
+    let (group, default_version, plural) = get_gvk_for_resource_type(resource_type)?;
+    let mut versions = vec![default_version.clone()];
+
+    for fallback in generate_fallback_versions(&default_version) {
+        if !versions.contains(&fallback) {
+            versions.push(fallback);
+        }
+    }
+
+    Ok(versions
+        .into_iter()
+        .map(|version| ApiResource {
+            group: group.clone(),
+            version: version.clone(),
+            api_version: format!("{}/{}", group, version),
+            kind: resource_type.to_string(),
+            plural: plural.clone(),
+        })
+        .collect())
+}
+
 /// Get ApiResource for a resource type with version fallback
 ///
 /// **Why kubectl works without versions but kube-rs doesn't:**
@@ -258,12 +287,10 @@ pub async fn get_api_resource_with_fallback(
             return Ok(api_resource);
         }
         Err(e) => {
-            let error_string = format!("{}", e);
-            // If it's not a 404, return the error (resource might not exist or other issue)
-            if !error_string.contains("404") && !error_string.contains("Not Found") {
+            if !is_version_missing_error(&format!("{}", e)) {
                 return Err(anyhow::anyhow!("Failed to fetch {}: {}", resource_type, e));
             }
-            // 404 means this version doesn't exist, try fallback versions
+            // Version doesn't exist on this cluster, try fallback versions
         }
     }
 
@@ -296,11 +323,8 @@ pub async fn get_api_resource_with_fallback(
                 return Ok(fallback_api_resource);
             }
             Err(e) => {
-                let error_string = format!("{}", e);
-                // If it's not a 404, this might be the right version but resource doesn't exist
-                // Continue trying other versions
-                if !error_string.contains("404") && !error_string.contains("Not Found") {
-                    // Non-404 error - might be the right version, return it
+                if !is_version_missing_error(&format!("{}", e)) {
+                    // Non-"not found" error means this version exists but the resource doesn't
                     return Ok(fallback_api_resource);
                 }
             }
@@ -310,4 +334,113 @@ pub async fn get_api_resource_with_fallback(
     // If we get here, default version didn't work and no fallback worked
     // Return the default anyway - the error will be handled by the caller
     Ok(api_resource)
+}
+
+/// Returns true if an error string indicates the API version doesn't exist on this cluster.
+///
+/// kube-rs formats missing resource types as "the server could not find the requested resource"
+/// (HTTP 404), so we check case-insensitively to catch all variants.
+pub fn is_version_missing_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("404")
+        || lower.contains("not found")
+        || lower.contains("could not find")
+        || lower.contains("page not found")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_fallback_versions_stable_v1() {
+        let fallbacks = generate_fallback_versions("v1");
+        assert!(
+            fallbacks.contains(&"v1beta2".to_string()),
+            "v1 should fall back to v1beta2 for older clusters"
+        );
+        assert!(fallbacks.contains(&"v1beta1".to_string()));
+    }
+
+    #[test]
+    fn test_generate_fallback_versions_stable_v2() {
+        let fallbacks = generate_fallback_versions("v2");
+        assert!(
+            fallbacks.contains(&"v2beta2".to_string()),
+            "v2 should fall back to v2beta2 for older clusters (e.g. HelmRelease)"
+        );
+        assert!(fallbacks.contains(&"v1".to_string()));
+    }
+
+    #[test]
+    fn test_generate_fallback_versions_beta_does_not_include_stable_next() {
+        // v2beta2 should NOT generate v2 as a fallback — that's a promotion, not a fallback.
+        // This was the HelmRelease bug: impl_watchable! said v2beta2 so individual-resource ops
+        // tried v2beta2 first and the fallback list never reached v2.
+        let fallbacks = generate_fallback_versions("v2beta2");
+        assert!(
+            !fallbacks.contains(&"v2".to_string()),
+            "beta fallbacks should not include the stable promoted version"
+        );
+    }
+
+    #[test]
+    fn test_get_flux_api_resources_with_fallback_for_oci_repository() {
+        let api_resources =
+            get_flux_api_resources_with_fallback(FluxResourceKind::OCIRepository).unwrap();
+
+        assert_eq!(api_resources[0].group, "source.toolkit.fluxcd.io");
+        assert_eq!(api_resources[0].kind, "OCIRepository");
+        assert_eq!(api_resources[0].plural, "ocirepositories");
+        assert_eq!(api_resources[0].version, "v1");
+        assert!(
+            api_resources
+                .iter()
+                .any(|resource| resource.version == "v1beta2"),
+            "OCIRepository should fall back to v1beta2 for older Flux clusters"
+        );
+    }
+
+    #[test]
+    fn test_get_flux_api_resources_with_fallback_for_helm_release() {
+        let api_resources =
+            get_flux_api_resources_with_fallback(FluxResourceKind::HelmRelease).unwrap();
+
+        assert_eq!(api_resources[0].group, "helm.toolkit.fluxcd.io");
+        assert_eq!(api_resources[0].kind, "HelmRelease");
+        assert_eq!(api_resources[0].plural, "helmreleases");
+        assert_eq!(api_resources[0].version, "v2");
+        assert!(
+            api_resources
+                .iter()
+                .any(|resource| resource.version == "v2beta2"),
+            "HelmRelease should fall back to v2beta2 for older Flux clusters"
+        );
+    }
+
+    #[test]
+    fn test_is_version_missing_error_kubernetes_message() {
+        // The actual message kube-rs surfaces for a missing resource type
+        assert!(is_version_missing_error(
+            "failed to perform initial watch: Api error: the server could not find the requested resource"
+        ));
+    }
+
+    #[test]
+    fn test_is_version_missing_error_numeric_code() {
+        assert!(is_version_missing_error("error 404 from server"));
+    }
+
+    #[test]
+    fn test_is_version_missing_error_not_found_mixed_case() {
+        assert!(is_version_missing_error("Api error: Not Found"));
+        assert!(is_version_missing_error("api error: not found"));
+    }
+
+    #[test]
+    fn test_is_version_missing_error_unrelated_error() {
+        assert!(!is_version_missing_error("connection refused"));
+        assert!(!is_version_missing_error("timeout waiting for response"));
+        assert!(!is_version_missing_error("unauthorized: token expired"));
+    }
 }
