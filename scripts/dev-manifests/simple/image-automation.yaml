@@ -1,6 +1,6 @@
 # Image automation resources — ImageRepository → ImagePolicy → ImageUpdateAutomation
 # ImageUpdateAutomation writes back to GitRepository/flux-system
-apiVersion: image.toolkit.fluxcd.io/v1beta2
+apiVersion: image.toolkit.fluxcd.io/v1
 kind: ImageRepository
 metadata:
   name: podinfo
@@ -10,7 +10,7 @@ spec:
   interval: 5m
   image: ghcr.io/stefanprodan/podinfo
 ---
-apiVersion: image.toolkit.fluxcd.io/v1beta2
+apiVersion: image.toolkit.fluxcd.io/v1
 kind: ImagePolicy
 metadata:
   name: podinfo
@@ -23,7 +23,7 @@ spec:
     semver:
       range: ">=6.0.0"
 ---
-apiVersion: image.toolkit.fluxcd.io/v1beta2
+apiVersion: image.toolkit.fluxcd.io/v1
 kind: ImageUpdateAutomation
 metadata:
   name: podinfo

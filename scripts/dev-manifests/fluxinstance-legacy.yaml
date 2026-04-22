@@ -1,0 +1,24 @@
+apiVersion: fluxcd.controlplane.io/v1
+kind: FluxInstance
+metadata:
+  name: flux
+  namespace: flux-system
+  annotations:
+    fluxcd.controlplane.io/reconcileEvery: "1h"
+spec:
+  distribution:
+    # Pin to Flux 2.2.x — the last series before Flux 2.3.0 graduated five CRDs to stable:
+    #   OCIRepository v1beta2→v1, Bucket v1beta2→v1, HelmRepository v1beta2→v1,
+    #   HelmChart v1beta2→v1, HelmRelease v2beta2→v2
+    # This cluster intentionally serves all five at their pre-graduation beta versions,
+    # which exercises flux9s's version fallback (tries stable first, falls back to beta).
+    version: "2.2.x"
+    registry: "ghcr.io/fluxcd"
+  components:
+    - source-controller
+    - kustomize-controller
+    - helm-controller
+  cluster:
+    type: kubernetes
+    multitenant: false
+    networkPolicy: false

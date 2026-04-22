@@ -38,7 +38,7 @@ fn test_watchable_resource_trait_implementations() {
     assert_eq!(Kustomization::display_name(), "Kustomization");
 
     assert_eq!(HelmRelease::api_group(), "helm.toolkit.fluxcd.io");
-    assert_eq!(HelmRelease::api_version(), "v2beta2");
+    assert_eq!(HelmRelease::api_version(), "v2");
     assert_eq!(HelmRelease::plural(), "helmreleases");
     assert_eq!(HelmRelease::display_name(), "HelmRelease");
 }
@@ -67,7 +67,7 @@ fn test_resource_type_api_consistency() {
 
     // Helm controller
     assert_eq!(HelmRelease::api_group(), "helm.toolkit.fluxcd.io");
-    assert_eq!(HelmRelease::api_version(), "v2beta2");
+    assert_eq!(HelmRelease::api_version(), "v2");
 
     // Image reflector/automation controllers
     assert_eq!(ImageRepository::api_group(), "image.toolkit.fluxcd.io");
