@@ -328,6 +328,64 @@ fn test_extract_status_fields_helmrelease_example() {
 }
 
 #[test]
+fn test_extract_status_fields_resourceset_annotation_suspended() {
+    let obj = json!({
+        "apiVersion": "fluxcd.controlplane.io/v1",
+        "kind": "ResourceSet",
+        "metadata": {
+            "name": "cluster-configs",
+            "namespace": "flux-system",
+            "annotations": {
+                "fluxcd.controlplane.io/reconcile": "disabled"
+            }
+        },
+        "status": {
+            "conditions": [
+                {
+                    "type": "Ready",
+                    "status": "True",
+                    "message": "Applied resources"
+                }
+            ]
+        }
+    });
+
+    let (suspended, ready, message, revision) = extract_status_fields(&obj);
+    assert_eq!(suspended, Some(true));
+    assert_eq!(ready, Some(true));
+    assert_eq!(message, Some("Applied resources".to_string()));
+    assert_eq!(revision, None);
+}
+
+#[test]
+fn test_extract_status_fields_fluxinstance_annotation_defaults_false() {
+    let obj = json!({
+        "apiVersion": "fluxcd.controlplane.io/v1",
+        "kind": "FluxInstance",
+        "metadata": {
+            "name": "flux",
+            "namespace": "flux-system",
+            "annotations": {}
+        },
+        "status": {
+            "conditions": [
+                {
+                    "type": "Ready",
+                    "status": "False",
+                    "message": "Reconciling"
+                }
+            ]
+        }
+    });
+
+    let (suspended, ready, message, revision) = extract_status_fields(&obj);
+    assert_eq!(suspended, Some(false));
+    assert_eq!(ready, Some(false));
+    assert_eq!(message, Some("Reconciling".to_string()));
+    assert_eq!(revision, None);
+}
+
+#[test]
 fn test_resource_key_format() {
     // Ensure resource key format is consistent
     let key = resource_key("default", "my-resource", "Kustomization");

@@ -680,19 +680,21 @@ pub fn extract_status_fields(
     let mut message = None;
     let mut revision = None;
 
-    // Extract suspended from spec.suspend (Flux uses "suspend" not "suspended")
-    // Default to false if not present (most resources are not suspended)
-    let suspended = if let Some(spec) = obj.get("spec") {
-        if let Some(suspend_val) = spec.get("suspend") {
-            suspend_val.as_bool()
-        } else {
-            // If suspend field doesn't exist, default to false (not suspended)
-            Some(false)
-        }
-    } else {
-        // If spec doesn't exist, default to false
-        Some(false)
-    };
+    // Suspension is resource-specific: most Flux resources use spec.suspend,
+    // while Flux Operator resources use a reconcile annotation.
+    let suspended = obj
+        .get("kind")
+        .and_then(|k| k.as_str())
+        .and_then(crate::models::FluxResourceKind::parse_optional)
+        .and_then(|kind| kind.extract_suspended(obj))
+        .or_else(|| {
+            Some(
+                obj.get("spec")
+                    .and_then(|spec| spec.get("suspend"))
+                    .and_then(|s| s.as_bool())
+                    .unwrap_or(false),
+            )
+        });
 
     // Extract ready and message from status.conditions
     if let Some(status) = obj.get("status") {

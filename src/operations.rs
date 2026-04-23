@@ -36,14 +36,32 @@ async fn get_resource_api(
     ))
 }
 
-/// Helper to check if a resource is suspended
-fn is_resource_suspended(obj: &DynamicObject) -> bool {
-    obj.data
-        .get("spec")
-        .and_then(|s| s.as_object())
-        .and_then(|spec| spec.get("suspend"))
-        .and_then(|s| s.as_bool())
-        .unwrap_or(false)
+/// Helper to check if a resource is suspended.
+///
+/// Flux Operator resources use the annotation `fluxcd.controlplane.io/reconcile: disabled`
+/// instead of spec.suspend — this function checks the correct mechanism for each type.
+fn is_resource_suspended(obj: &DynamicObject, resource_type: &str) -> bool {
+    use crate::models::FluxResourceKind;
+    FluxResourceKind::parse_optional(resource_type)
+        .and_then(|kind| {
+            let mut obj_json = obj.data.clone();
+            if let Some(root) = obj_json.as_object_mut()
+                && let Some(annotations) = &obj.metadata.annotations
+            {
+                let metadata = root.entry("metadata").or_insert_with(|| json!({}));
+                if let Some(metadata_obj) = metadata.as_object_mut() {
+                    metadata_obj.insert("annotations".to_string(), json!(annotations));
+                }
+            }
+            kind.extract_suspended(&obj_json)
+        })
+        .unwrap_or_else(|| {
+            obj.data
+                .get("spec")
+                .and_then(|spec| spec.get("suspend"))
+                .and_then(|s| s.as_bool())
+                .unwrap_or(false)
+        })
 }
 
 /// Helper to get or create annotations map from a resource
@@ -109,14 +127,25 @@ impl FluxOperation for SuspendOperation {
             namespace
         );
 
+        use crate::models::FluxResourceKind;
+
         let api = get_resource_api(client, resource_type, namespace, name).await?;
 
-        // Patch spec.suspend to true
-        let patch = json!({
-            "spec": {
-                "suspend": true
-            }
-        });
+        let uses_annotation = FluxResourceKind::parse_optional(resource_type)
+            .map(|k| k.uses_annotation_suspend())
+            .unwrap_or(false);
+
+        let patch = if uses_annotation {
+            json!({
+                "metadata": {
+                    "annotations": {
+                        (FluxResourceKind::RECONCILE_ANNOTATION): "disabled"
+                    }
+                }
+            })
+        } else {
+            json!({ "spec": { "suspend": true } })
+        };
 
         api.patch(name, &PatchParams::default(), &Patch::Merge(patch))
             .await
@@ -165,6 +194,9 @@ impl FluxOperation for SuspendOperation {
                 | Some(FluxResourceKind::Kustomization)
                 | Some(FluxResourceKind::HelmRelease)
                 | Some(FluxResourceKind::ImageUpdateAutomation)
+                | Some(FluxResourceKind::FluxInstance)
+                | Some(FluxResourceKind::ResourceSet)
+                | Some(FluxResourceKind::ResourceSetInputProvider)
         )
     }
 }
@@ -188,14 +220,25 @@ impl FluxOperation for ResumeOperation {
             namespace
         );
 
+        use crate::models::FluxResourceKind;
+
         let api = get_resource_api(client, resource_type, namespace, name).await?;
 
-        // Patch spec.suspend to false
-        let patch = json!({
-            "spec": {
-                "suspend": false
-            }
-        });
+        let uses_annotation = FluxResourceKind::parse_optional(resource_type)
+            .map(|k| k.uses_annotation_suspend())
+            .unwrap_or(false);
+
+        let patch = if uses_annotation {
+            json!({
+                "metadata": {
+                    "annotations": {
+                        (FluxResourceKind::RECONCILE_ANNOTATION): "enabled"
+                    }
+                }
+            })
+        } else {
+            json!({ "spec": { "suspend": false } })
+        };
 
         api.patch(name, &PatchParams::default(), &Patch::Merge(patch))
             .await
@@ -244,6 +287,9 @@ impl FluxOperation for ResumeOperation {
                 | Some(FluxResourceKind::Kustomization)
                 | Some(FluxResourceKind::HelmRelease)
                 | Some(FluxResourceKind::ImageUpdateAutomation)
+                | Some(FluxResourceKind::FluxInstance)
+                | Some(FluxResourceKind::ResourceSet)
+                | Some(FluxResourceKind::ResourceSetInputProvider)
         )
     }
 }
@@ -355,7 +401,7 @@ impl FluxOperation for ReconcileOperation {
         })?;
 
         // Check if resource is suspended (like Flux does)
-        if is_resource_suspended(&obj) {
+        if is_resource_suspended(&obj, resource_type) {
             tracing::warn!(
                 "Cannot reconcile suspended resource {}/{} in namespace {}",
                 resource_type,
@@ -464,7 +510,7 @@ impl FluxOperation for ReconcileWithSourceOperation {
         })?;
 
         // Check if resource is suspended
-        if is_resource_suspended(&obj) {
+        if is_resource_suspended(&obj, resource_type) {
             tracing::warn!(
                 "Cannot reconcile suspended resource {}/{} in namespace {}",
                 resource_type,
@@ -527,7 +573,7 @@ impl FluxOperation for ReconcileWithSourceOperation {
         })?;
 
         // Check if source is suspended
-        if is_resource_suspended(&source_obj) {
+        if is_resource_suspended(&source_obj, source_kind) {
             tracing::warn!(
                 "Cannot reconcile: source {}/{} in namespace {} is suspended",
                 source_kind,
@@ -879,25 +925,104 @@ mod tests {
     #[test]
     fn test_operation_is_valid_for() {
         let suspend = SuspendOperation;
+        let resume = ResumeOperation;
         let delete = DeleteOperation;
         let reconcile = ReconcileOperation;
 
-        // Suspend should work for suspendable resources
         use crate::models::FluxResourceKind;
+
+        // Suspend/resume should work for standard Flux resources
         assert!(suspend.is_valid_for(FluxResourceKind::Kustomization.as_str()));
         assert!(suspend.is_valid_for(FluxResourceKind::GitRepository.as_str()));
         assert!(suspend.is_valid_for(FluxResourceKind::HelmRelease.as_str()));
+        assert!(resume.is_valid_for(FluxResourceKind::Kustomization.as_str()));
+        assert!(resume.is_valid_for(FluxResourceKind::GitRepository.as_str()));
+        assert!(resume.is_valid_for(FluxResourceKind::HelmRelease.as_str()));
+
+        // Suspend/resume should also work for Flux Operator resources
+        assert!(suspend.is_valid_for(FluxResourceKind::FluxInstance.as_str()));
+        assert!(suspend.is_valid_for(FluxResourceKind::ResourceSet.as_str()));
+        assert!(suspend.is_valid_for(FluxResourceKind::ResourceSetInputProvider.as_str()));
+        assert!(resume.is_valid_for(FluxResourceKind::FluxInstance.as_str()));
+        assert!(resume.is_valid_for(FluxResourceKind::ResourceSet.as_str()));
+        assert!(resume.is_valid_for(FluxResourceKind::ResourceSetInputProvider.as_str()));
+
+        // Suspend/resume should not work for read-only or notification resources
+        assert!(!suspend.is_valid_for(FluxResourceKind::FluxReport.as_str()));
+        assert!(!suspend.is_valid_for(FluxResourceKind::Alert.as_str()));
+        assert!(!resume.is_valid_for(FluxResourceKind::FluxReport.as_str()));
 
         // Delete should work for all resources
         assert!(delete.is_valid_for(FluxResourceKind::Kustomization.as_str()));
         assert!(delete.is_valid_for(FluxResourceKind::GitRepository.as_str()));
         assert!(delete.is_valid_for(FluxResourceKind::HelmRelease.as_str()));
         assert!(delete.is_valid_for(FluxResourceKind::Alert.as_str()));
+        assert!(delete.is_valid_for(FluxResourceKind::FluxInstance.as_str()));
+        assert!(delete.is_valid_for(FluxResourceKind::ResourceSet.as_str()));
 
         // Reconcile should work for all resources
         assert!(reconcile.is_valid_for(FluxResourceKind::Kustomization.as_str()));
         assert!(reconcile.is_valid_for(FluxResourceKind::GitRepository.as_str()));
         assert!(reconcile.is_valid_for(FluxResourceKind::HelmRelease.as_str()));
+        assert!(reconcile.is_valid_for(FluxResourceKind::FluxInstance.as_str()));
+        assert!(reconcile.is_valid_for(FluxResourceKind::ResourceSet.as_str()));
+        assert!(reconcile.is_valid_for(FluxResourceKind::ResourceSetInputProvider.as_str()));
+    }
+
+    #[test]
+    fn test_is_resource_suspended_annotation_based() {
+        use crate::models::FluxResourceKind;
+        use kube::core::DynamicObject;
+
+        let make_rset = |reconcile_value: Option<&str>| -> DynamicObject {
+            let annotations = match reconcile_value {
+                Some(v) => serde_json::json!({ "fluxcd.controlplane.io/reconcile": v }),
+                None => serde_json::json!({}),
+            };
+            serde_json::from_value(serde_json::json!({
+                "apiVersion": "fluxcd.controlplane.io/v1",
+                "kind": "ResourceSet",
+                "metadata": { "name": "test", "namespace": "default", "annotations": annotations },
+                "spec": {}
+            }))
+            .unwrap()
+        };
+
+        let rset = FluxResourceKind::ResourceSet.as_str();
+        assert!(is_resource_suspended(&make_rset(Some("disabled")), rset));
+        assert!(!is_resource_suspended(&make_rset(Some("enabled")), rset));
+        assert!(!is_resource_suspended(&make_rset(None), rset));
+
+        // Same for FluxInstance and ResourceSetInputProvider
+        let fi = FluxResourceKind::FluxInstance.as_str();
+        assert!(is_resource_suspended(&make_rset(Some("disabled")), fi));
+        assert!(!is_resource_suspended(&make_rset(None), fi));
+
+        // Standard Flux resources still use spec.suspend
+        let ks_obj: DynamicObject = serde_json::from_value(serde_json::json!({
+            "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+            "kind": "Kustomization",
+            "metadata": { "name": "test", "namespace": "default" },
+            "spec": { "suspend": true }
+        }))
+        .unwrap();
+        assert!(is_resource_suspended(
+            &ks_obj,
+            FluxResourceKind::Kustomization.as_str()
+        ));
+
+        // Standard Flux resource without suspend annotation should not be suspended
+        let ks_not_suspended: DynamicObject = serde_json::from_value(serde_json::json!({
+            "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+            "kind": "Kustomization",
+            "metadata": { "name": "test", "namespace": "default" },
+            "spec": { "suspend": false }
+        }))
+        .unwrap();
+        assert!(!is_resource_suspended(
+            &ks_not_suspended,
+            FluxResourceKind::Kustomization.as_str()
+        ));
     }
 
     #[test]
