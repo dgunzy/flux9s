@@ -76,6 +76,9 @@ pub enum FluxResourceKind {
 }
 
 impl FluxResourceKind {
+    /// Annotation key used by Flux Operator resources to control reconciliation.
+    pub const RECONCILE_ANNOTATION: &str = "fluxcd.controlplane.io/reconcile";
+
     /// Get the display name as a string
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -215,6 +218,41 @@ impl FluxResourceKind {
     /// configuration-only resources with no reconciliation status.
     pub fn is_stateless(&self) -> bool {
         matches!(self, FluxResourceKind::Alert | FluxResourceKind::Provider)
+    }
+
+    /// Check if this resource type uses annotation-based suspension instead of spec.suspend.
+    ///
+    /// Flux Operator resources (FluxInstance, ResourceSet, ResourceSetInputProvider) have no
+    /// spec.suspend field. Suspension is controlled via the annotation
+    /// `fluxcd.controlplane.io/reconcile: disabled` and resumed by setting it to `enabled`.
+    pub fn uses_annotation_suspend(&self) -> bool {
+        matches!(
+            self,
+            FluxResourceKind::FluxInstance
+                | FluxResourceKind::ResourceSet
+                | FluxResourceKind::ResourceSetInputProvider
+        )
+    }
+
+    /// Extract suspended state using the mechanism defined by this resource kind.
+    pub fn extract_suspended(&self, obj: &Value) -> Option<bool> {
+        if self.uses_annotation_suspend() {
+            return Some(
+                obj.get("metadata")
+                    .and_then(|m| m.get("annotations"))
+                    .and_then(|a| a.get(Self::RECONCILE_ANNOTATION))
+                    .and_then(|v| v.as_str())
+                    .map(|v| v == "disabled")
+                    .unwrap_or(false),
+            );
+        }
+
+        Some(
+            obj.get("spec")
+                .and_then(|s| s.get("suspend"))
+                .and_then(|s| s.as_bool())
+                .unwrap_or(false),
+        )
     }
 
     /// Get all resource types that support graph view
@@ -768,6 +806,54 @@ mod tests {
         let default_cols = FluxResourceKind::ArtifactGenerator.columns();
         assert!(default_cols.contains(&"STATUS"));
         assert!(default_cols.contains(&"TYPE"));
+    }
+
+    #[test]
+    fn test_extract_suspended_spec_based_resource() {
+        let obj = json!({
+            "spec": {
+                "suspend": true
+            }
+        });
+
+        assert_eq!(
+            FluxResourceKind::Kustomization.extract_suspended(&obj),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_extract_suspended_annotation_based_resource() {
+        let obj = json!({
+            "metadata": {
+                "annotations": {
+                    "fluxcd.controlplane.io/reconcile": "disabled"
+                }
+            }
+        });
+
+        assert_eq!(
+            FluxResourceKind::ResourceSet.extract_suspended(&obj),
+            Some(true)
+        );
+        assert_eq!(
+            FluxResourceKind::FluxInstance.extract_suspended(&obj),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_extract_suspended_annotation_defaults_false() {
+        let obj = json!({
+            "metadata": {
+                "annotations": {}
+            }
+        });
+
+        assert_eq!(
+            FluxResourceKind::ResourceSetInputProvider.extract_suspended(&obj),
+            Some(false)
+        );
     }
 
     #[test]
