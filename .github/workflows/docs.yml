@@ -92,6 +92,9 @@ jobs:
           path: docs/public
 
   deploy:
+    # Only deploy from branch pushes — tag pushes build but don't deploy
+    # (GitHub Pages environment protection rules reject deployments from tags)
+    if: github.ref_type == 'branch'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
