@@ -37,10 +37,6 @@ flux9s config path
 | `ui.skin` | string | `default` | Theme/skin name |
 | `ui.skinReadOnly` | string | *(none)* | Skin override when `readOnly=true` |
 | `ui.splashless` | bool | `false` | Skip the startup splash screen |
-| `logger.tail` | number | `100` | Default number of log lines to fetch |
-| `logger.buffer` | number | `5000` | Maximum log lines held in view |
-| `logger.sinceSeconds` | number | `300` | How far back to fetch historical logs (seconds) |
-| `logger.textWrap` | bool | `false` | Wrap long log lines |
 | `namespaceHotkeys` | string[] | *(auto-discover)* | Namespaces assigned to number keys 0–9 |
 | `contextSkins` | map | *(empty)* | Per-context skin overrides |
 | `favorites` | string[] | *(empty)* | Persisted favorite resource keys |
@@ -241,26 +237,6 @@ flux9s config set ui.splashless true
 
 ---
 
-### Logger Settings
-
-Configure how logs are fetched and displayed in the log view (`l` on any resource):
-
-```bash
-# Number of lines fetched (default: 100)
-flux9s config set logger.tail 200
-
-# Maximum lines buffered in view (default: 5000)
-flux9s config set logger.buffer 10000
-
-# How far back in time to fetch logs, in seconds (default: 300 = 5 minutes)
-flux9s config set logger.sinceSeconds 3600
-
-# Enable line wrapping (default: false)
-flux9s config set logger.textWrap true
-```
-
----
-
 ### Favorites
 
 Mark resources as favorites for quick access. Favorites persist across sessions.
@@ -327,12 +303,6 @@ ui:
   skin: dracula
   skinReadOnly: rose-pine-moon  # Different skin in read-only mode
   splashless: false
-
-logger:
-  tail: 200
-  buffer: 5000
-  sinceSeconds: 300
-  textWrap: false
 
 namespaceHotkeys:
   - all           # Key 0 = all namespaces

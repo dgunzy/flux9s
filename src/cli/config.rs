@@ -302,29 +302,6 @@ fn display_config_with_defaults(config: &Config) {
     );
     println!();
 
-    println!("logger:");
-    println!(
-        "  tail: {}{}",
-        config.logger.tail,
-        default_marker(&config.logger.tail, &d.logger.tail)
-    );
-    println!(
-        "  buffer: {}{}",
-        config.logger.buffer,
-        default_marker(&config.logger.buffer, &d.logger.buffer)
-    );
-    println!(
-        "  sinceSeconds: {}{}",
-        config.logger.since_seconds,
-        default_marker(&config.logger.since_seconds, &d.logger.since_seconds)
-    );
-    println!(
-        "  textWrap: {}{}",
-        config.logger.text_wrap,
-        default_marker(&config.logger.text_wrap, &d.logger.text_wrap)
-    );
-    println!();
-
     if config.namespace_hotkeys.is_empty() {
         println!("namespaceHotkeys: []  # (default: auto-discover at startup)");
     } else {
@@ -359,10 +336,6 @@ fn display_config_with_defaults(config: &Config) {
     println!("#   ui.skin - Default skin name (default: default)");
     println!("#   ui.skinReadOnly - Skin for readonly mode, overrides ui.skin when readOnly=true");
     println!("#   ui.splashless - Skip startup splash (default: false)");
-    println!("#   logger.tail - Default log line count (default: 100)");
-    println!("#   logger.buffer - Max log lines in view (default: 5000)");
-    println!("#   logger.sinceSeconds - Historical log timeframe in seconds (default: 300)");
-    println!("#   logger.textWrap - Enable line wrapping (default: false)");
     println!(
         "#   namespaceHotkeys - Array of namespace names for 0-9 hotkeys (max 10, default: auto-discover)"
     );

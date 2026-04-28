@@ -98,6 +98,7 @@ pub async fn run_tui_with_async_init(
     theme: crate::tui::Theme,
     debug: bool,
     kubeconfig_path: Option<&std::path::Path>,
+    config_warning: Option<String>,
 ) -> Result<()> {
     tracing::debug!("Initializing TUI with async Kubernetes setup");
 
@@ -278,6 +279,10 @@ pub async fn run_tui_with_async_init(
                         if let Some(ref filter) = config.default_resource_filter {
                             app.view_state.selected_resource_type = Some(filter.clone());
                             tracing::debug!("Applied default resource filter: {}", filter);
+                        }
+
+                        if let Some(ref warning) = config_warning {
+                            app.set_status_message((warning.clone(), true));
                         }
 
                         kube_initialized = true;

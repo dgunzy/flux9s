@@ -76,11 +76,19 @@ async fn main() -> Result<()> {
         tracing::debug!("Debug logging enabled");
     }
 
-    // Load configuration
+    // Load configuration — capture any parse/IO error so we can warn the user in the TUI
     let cluster: Option<&str> = None;
     let context_name: Option<&str> = None;
-    let config = config::ConfigLoader::load(cluster, context_name)
-        .unwrap_or_else(|_| config::ConfigLoader::load_defaults());
+    let (config, config_warning) = match config::ConfigLoader::load(cluster, context_name) {
+        Ok(c) => (c, None),
+        Err(e) => {
+            tracing::warn!("Failed to load config, using defaults: {}", e);
+            (
+                config::ConfigLoader::load_defaults(),
+                Some(format!("Config load failed (using defaults): {}", e)),
+            )
+        }
+    };
 
     if args.debug {
         tracing::debug!(
@@ -151,7 +159,14 @@ async fn main() -> Result<()> {
 
     // Start TUI immediately with splash screen, then initialize Kubernetes in background
     // This ensures splash appears instantly, not after Kubernetes API calls
-    tui::run_tui_with_async_init(config, theme, args.debug, args.kubeconfig.as_deref()).await?;
+    tui::run_tui_with_async_init(
+        config,
+        theme,
+        args.debug,
+        args.kubeconfig.as_deref(),
+        config_warning,
+    )
+    .await?;
 
     // Check for updates after TUI exits (blocking, shows notification)
     // This ensures the notification doesn't interfere with TUI display

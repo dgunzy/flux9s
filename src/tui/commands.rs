@@ -69,6 +69,14 @@ pub const APP_COMMANDS: &[Command] = &[
         name: "fav",
         takes_args: false,
     },
+    Command {
+        name: "all",
+        takes_args: false,
+    },
+    Command {
+        name: "clear",
+        takes_args: false,
+    },
 ];
 
 /// Find all commands that match the given prefix
@@ -461,5 +469,30 @@ mod tests {
         assert!(get_command_submenu("skin", "context1", "default").is_some());
         assert!(get_command_submenu("skin ", "context1", "default").is_some());
         assert!(get_command_submenu("skin dracula", "context1", "default").is_none());
+    }
+
+    #[test]
+    fn test_all_and_clear_appear_in_autocomplete() {
+        // :all and :clear must be discoverable via autocomplete so users can find them
+        let all_matches = find_matching_commands("al");
+        assert!(
+            all_matches.contains(&"all".to_string()),
+            ":all should appear in autocomplete for prefix 'al'"
+        );
+
+        let clear_matches = find_matching_commands("cl");
+        assert!(
+            clear_matches.contains(&"clear".to_string()),
+            ":clear should appear in autocomplete for prefix 'cl'"
+        );
+    }
+
+    #[test]
+    fn test_all_and_clear_are_clear_commands() {
+        assert!(is_all_command("all"));
+        assert!(is_all_command("clear"));
+        assert!(is_all_command("ALL"));
+        assert!(is_all_command("CLEAR"));
+        assert!(!is_all_command("ks"));
     }
 }
