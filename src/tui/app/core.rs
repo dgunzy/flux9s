@@ -643,6 +643,7 @@ mod tests {
             context_skins: HashMap::new(),
             cluster: HashMap::new(),
             favorites: vec![],
+            default_resource_filter: None,
         };
         let theme = Theme::default();
         App::new(state, "test-context".to_string(), None, config, theme)

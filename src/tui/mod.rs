@@ -275,6 +275,11 @@ pub async fn run_tui_with_async_init(
                             );
                         }
 
+                        if let Some(ref filter) = config.default_resource_filter {
+                            app.view_state.selected_resource_type = Some(filter.clone());
+                            tracing::debug!("Applied default resource filter: {}", filter);
+                        }
+
                         kube_initialized = true;
                     }
                     Err(e) => {

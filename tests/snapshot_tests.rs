@@ -44,6 +44,7 @@ fn create_test_config() -> Config {
         context_skins: HashMap::new(),
         cluster: HashMap::new(),
         favorites: vec![],
+        default_resource_filter: None,
     }
 }
 

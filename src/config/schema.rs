@@ -47,6 +47,11 @@ pub struct Config {
     /// Favorite resources (resource keys: "resource_type:namespace:name")
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub favorites: Vec<String>,
+
+    /// Default resource type filter applied at startup (None = show all types)
+    /// Accepts display names (e.g., "Kustomization") or aliases (e.g., "ks") — stored as display name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_resource_filter: Option<String>,
 }
 
 /// UI configuration
@@ -54,7 +59,7 @@ pub struct Config {
 #[serde(rename_all = "camelCase")]
 pub struct UiConfig {
     /// Enable mouse support
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub enable_mouse: bool,
 
     /// Hide header
@@ -108,10 +113,6 @@ fn default_namespace() -> String {
     "flux-system".to_string()
 }
 
-fn default_true() -> bool {
-    true
-}
-
 fn default_false() -> bool {
     false
 }
@@ -144,6 +145,7 @@ impl Default for Config {
             context_skins: HashMap::new(),
             cluster: HashMap::new(),
             favorites: Vec::new(), // Empty by default
+            default_resource_filter: None,
         }
     }
 }
