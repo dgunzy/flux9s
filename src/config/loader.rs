@@ -131,6 +131,7 @@ impl ConfigLoader {
             context_skins: other.context_skins.clone(),
             cluster: other.cluster,
             favorites: other.favorites.clone(),
+            default_resource_filter: other.default_resource_filter.clone(),
         }
     }
 
@@ -151,6 +152,13 @@ impl ConfigLoader {
         // FLUX9S_DEFAULT_NAMESPACE override
         if let Ok(namespace) = std::env::var("FLUX9S_DEFAULT_NAMESPACE") {
             config.default_namespace = namespace;
+        }
+
+        // FLUX9S_DEFAULT_RESOURCE_FILTER override
+        if let Ok(filter) = std::env::var("FLUX9S_DEFAULT_RESOURCE_FILTER") {
+            if !filter.is_empty() {
+                config.default_resource_filter = Some(filter);
+            }
         }
 
         config

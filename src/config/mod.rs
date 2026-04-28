@@ -43,6 +43,7 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
             serde_yaml::to_string(&config.namespace_hotkeys)
                 .map_err(|e| anyhow::anyhow!("Failed to serialize namespaceHotkeys: {}", e))
         }
+        "defaultResourceFilter" => Ok(config.default_resource_filter.clone().unwrap_or_default()),
         _ => Err(anyhow::anyhow!("Unknown configuration key: {}", key)),
     }
 }
@@ -133,6 +134,25 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
             }
 
             config.namespace_hotkeys = hotkeys;
+        }
+        "defaultResourceFilter" => {
+            if value.is_empty() {
+                config.default_resource_filter = None;
+            } else {
+                let display_name =
+                    crate::watcher::get_display_name_for_command(value).ok_or_else(|| {
+                        let valid: Vec<_> = crate::watcher::RESOURCE_REGISTRY
+                            .iter()
+                            .map(|e| e.display_name)
+                            .collect();
+                        anyhow::anyhow!(
+                            "Unknown resource type '{}'. Valid types: {}",
+                            value,
+                            valid.join(", ")
+                        )
+                    })?;
+                config.default_resource_filter = Some(display_name.to_string());
+            }
         }
         _ => return Err(anyhow::anyhow!("Unknown configuration key: {}", key)),
     }

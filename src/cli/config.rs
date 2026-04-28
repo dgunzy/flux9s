@@ -263,6 +263,10 @@ fn display_config_with_defaults(config: &Config) {
             &d.default_controller_namespace
         )
     );
+    match &config.default_resource_filter {
+        Some(f) => println!("defaultResourceFilter: {}", f),
+        None => println!("defaultResourceFilter: ~  # (default: none, shows all resource types)"),
+    }
     println!();
 
     println!("ui:");
@@ -346,6 +350,9 @@ fn display_config_with_defaults(config: &Config) {
     println!("#   readOnly - Disable modification operations (default: true)");
     println!("#   defaultNamespace - Starting namespace (default: flux-system)");
     println!("#   defaultControllerNamespace - Flux controller namespace (default: flux-system)");
+    println!(
+        "#   defaultResourceFilter - Resource type filter at startup, e.g. \"Kustomization\" (default: none, shows all)"
+    );
     println!("#   ui.enableMouse - Enable mouse support (default: false)");
     println!("#   ui.headless - Hide header (default: false)");
     println!("#   ui.noIcons - Disable Unicode icons (default: false)");
@@ -360,9 +367,13 @@ fn display_config_with_defaults(config: &Config) {
         "#   namespaceHotkeys - Array of namespace names for 0-9 hotkeys (max 10, default: auto-discover)"
     );
     println!("#   contextSkins - Map of context name to skin name (default: empty)");
+    println!(
+        "#   favorites - List of favorited resource keys, e.g. \"Kustomization:flux-system:my-app\" (default: empty)"
+    );
     println!("#");
     println!("# Environment Variables (override config):");
     println!("#   FLUX9S_SKIN - Override skin (highest priority)");
     println!("#   FLUX9S_READ_ONLY - Override readonly mode");
     println!("#   FLUX9S_DEFAULT_NAMESPACE - Override default namespace");
+    println!("#   FLUX9S_DEFAULT_RESOURCE_FILTER - Override default resource filter");
 }
