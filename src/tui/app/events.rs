@@ -1216,8 +1216,11 @@ impl App {
                 // Restart watchers with new namespace (more efficient than watching all)
                 if let Some(ref mut watcher) = self.watcher {
                     if let Err(e) = watcher.set_namespace(new_namespace) {
-                        // Log error but continue - watcher will retry
-                        eprintln!("Failed to switch namespace: {}", e);
+                        tracing::warn!("Failed to switch namespace: {}", e);
+                        self.set_status_message((
+                            format!("Failed to switch namespace: {}", e),
+                            true,
+                        ));
                     }
                 }
             }
@@ -1286,7 +1289,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, LoggerConfig, UiConfig};
+    use crate::config::{Config, UiConfig};
     use crate::tui::Theme;
     use crate::watcher::{ResourceInfo, ResourceState, resource_key};
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
@@ -1324,12 +1327,6 @@ mod tests {
                 skin: "default".to_string(),
                 skin_read_only: None,
                 splashless: true,
-            },
-            logger: LoggerConfig {
-                tail: 100,
-                buffer: 1000,
-                since_seconds: 3600,
-                text_wrap: false,
             },
             context_skins: HashMap::new(),
             cluster: HashMap::new(),

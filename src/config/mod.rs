@@ -16,8 +16,6 @@ pub use loader::ConfigLoader;
 #[allow(unused_imports)] // Public API exports - may be used by external code
 pub use schema::Config;
 #[allow(unused_imports)] // Public API exports - may be used by external code
-pub use schema::LoggerConfig;
-#[allow(unused_imports)] // Public API exports - may be used by external code
 pub use schema::UiConfig;
 #[cfg(feature = "tui")]
 pub use theme_loader::ThemeLoader;
@@ -34,10 +32,6 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
         "ui.skin" => Ok(config.ui.skin.clone()),
         "ui.skinReadOnly" => Ok(config.ui.skin_read_only.clone().unwrap_or_default()),
         "ui.splashless" => Ok(config.ui.splashless.to_string()),
-        "logger.tail" => Ok(config.logger.tail.to_string()),
-        "logger.buffer" => Ok(config.logger.buffer.to_string()),
-        "logger.sinceSeconds" => Ok(config.logger.since_seconds.to_string()),
-        "logger.textWrap" => Ok(config.logger.text_wrap.to_string()),
         "namespaceHotkeys" => {
             // Return as YAML array
             serde_yaml::to_string(&config.namespace_hotkeys)
@@ -92,22 +86,6 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
             config.ui.splashless = value
                 .parse()
                 .context("ui.splashless must be 'true' or 'false'")?;
-        }
-        "logger.tail" => {
-            config.logger.tail = value.parse().context("logger.tail must be a number")?;
-        }
-        "logger.buffer" => {
-            config.logger.buffer = value.parse().context("logger.buffer must be a number")?;
-        }
-        "logger.sinceSeconds" => {
-            config.logger.since_seconds = value
-                .parse()
-                .context("logger.sinceSeconds must be a number")?;
-        }
-        "logger.textWrap" => {
-            config.logger.text_wrap = value
-                .parse()
-                .context("logger.textWrap must be 'true' or 'false'")?;
         }
         "namespaceHotkeys" => {
             // Parse as YAML array or comma-separated list

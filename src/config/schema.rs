@@ -25,10 +25,6 @@ pub struct Config {
     #[serde(default)]
     pub ui: UiConfig,
 
-    /// Logger configuration
-    #[serde(default)]
-    pub logger: LoggerConfig,
-
     /// Namespace hotkeys configuration (0-9)
     /// Array of namespace names, where index corresponds to hotkey (0=all, 1=flux-system, etc.)
     /// Maximum 10 items (0-9)
@@ -83,27 +79,6 @@ pub struct UiConfig {
     pub splashless: bool,
 }
 
-/// Logger configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct LoggerConfig {
-    /// Default log line count
-    #[serde(default = "default_log_tail")]
-    pub tail: u32,
-
-    /// Max log lines in view
-    #[serde(default = "default_log_buffer")]
-    pub buffer: u32,
-
-    /// Historical log timeframe in seconds
-    #[serde(default = "default_log_since_seconds")]
-    pub since_seconds: u64,
-
-    /// Enable/disable line wrapping
-    #[serde(default = "default_false")]
-    pub text_wrap: bool,
-}
-
 // Default value functions
 fn default_read_only() -> bool {
     true
@@ -121,18 +96,6 @@ fn default_skin() -> String {
     "default".to_string()
 }
 
-fn default_log_tail() -> u32 {
-    100
-}
-
-fn default_log_buffer() -> u32 {
-    5000
-}
-
-fn default_log_since_seconds() -> u64 {
-    300
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -140,7 +103,6 @@ impl Default for Config {
             default_namespace: default_namespace(),
             default_controller_namespace: default_namespace(),
             ui: UiConfig::default(),
-            logger: LoggerConfig::default(),
             namespace_hotkeys: Vec::new(), // Empty means use auto-discovered defaults
             context_skins: HashMap::new(),
             cluster: HashMap::new(),
@@ -159,17 +121,6 @@ impl Default for UiConfig {
             skin: default_skin(),
             skin_read_only: None,
             splashless: default_false(),
-        }
-    }
-}
-
-impl Default for LoggerConfig {
-    fn default() -> Self {
-        Self {
-            tail: default_log_tail(),
-            buffer: default_log_buffer(),
-            since_seconds: default_log_since_seconds(),
-            text_wrap: default_false(),
         }
     }
 }

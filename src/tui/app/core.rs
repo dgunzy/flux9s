@@ -615,7 +615,7 @@ impl std::fmt::Debug for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, LoggerConfig, UiConfig};
+    use crate::config::{Config, UiConfig};
     use crate::watcher::ResourceState;
     use std::collections::HashMap;
 
@@ -633,12 +633,6 @@ mod tests {
                 skin: "default".to_string(),
                 skin_read_only: None,
                 splashless: true,
-            },
-            logger: LoggerConfig {
-                tail: 100,
-                buffer: 1000,
-                since_seconds: 3600,
-                text_wrap: false,
             },
             context_skins: HashMap::new(),
             cluster: HashMap::new(),

@@ -125,7 +125,8 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `h` - View reconciliation history
 - `t` - Trace ownership chain
 - `W` - Reconcile with source (Kustomization, HelmRelease)
-- `d` - Delete resource (with confirmation)
+- `d` - Describe resource
+- `Ctrl+d` - Delete resource (with confirmation)
 - `?` - Show/hide help
 - `q` / `Esc` - Go back; shows a quit prompt when at the root view
 - `Q` - Quit immediately (no prompt)

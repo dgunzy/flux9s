@@ -3,7 +3,7 @@
 //! These tests use insta to capture and compare the rendered output of the TUI views.
 //! Run `cargo insta review` to review and accept snapshot changes.
 
-use flux9s::config::{Config, LoggerConfig, UiConfig};
+use flux9s::config::{Config, UiConfig};
 use flux9s::tui::Theme;
 use flux9s::tui::app::state::ControllerPodState;
 use flux9s::tui::views::{
@@ -34,12 +34,6 @@ fn create_test_config() -> Config {
             skin: "default".to_string(),
             skin_read_only: None,
             splashless: true, // Skip splash for tests
-        },
-        logger: LoggerConfig {
-            tail: 100,
-            buffer: 1000,
-            since_seconds: 3600,
-            text_wrap: false,
         },
         context_skins: HashMap::new(),
         cluster: HashMap::new(),
