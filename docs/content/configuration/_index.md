@@ -31,6 +31,7 @@ flux9s config path
 | `defaultNamespace` | string | `flux-system` | Starting namespace (`all` or `-A` = all namespaces) |
 | `defaultControllerNamespace` | string | `flux-system` | Namespace where Flux controllers run |
 | `defaultResourceFilter` | string | *(none)* | Resource type shown at startup (e.g., `Kustomization`) |
+| `connectTimeoutSeconds` | integer | `10` | Startup Kubernetes API health-check timeout in seconds |
 | `ui.enableMouse` | bool | `false` | Enable mouse support |
 | `ui.headless` | bool | `false` | Hide the header bar |
 | `ui.noIcons` | bool | `false` | Disable Unicode icons for terminal compatibility |
@@ -122,6 +123,24 @@ Accepted values are any resource type name or alias:
 | `ResourceSet` | `rset`, `resourceset`, `resourcesets` |
 
 You can also change the filter interactively during a session by typing `:ks`, `:hr`, etc. in the TUI, or `:all` to clear it.
+
+---
+
+### Kubernetes API Connection Timeout
+
+At startup, flux9s probes the Kubernetes API server before starting watchers. If the kubeconfig, context, credentials, network, or API server is not working, flux9s shows a connection error screen instead of hanging indefinitely.
+
+```bash
+flux9s config set connectTimeoutSeconds 15
+```
+
+You can also override the configured value for a single run:
+
+```bash
+FLUX9S_CONNECT_TIMEOUT=15 flux9s
+```
+
+The timeout must be a positive integer. The default is `10` seconds.
 
 ---
 

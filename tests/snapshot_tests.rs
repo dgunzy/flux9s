@@ -39,6 +39,7 @@ fn create_test_config() -> Config {
         cluster: HashMap::new(),
         favorites: vec![],
         default_resource_filter: None,
+        connect_timeout_seconds: flux9s::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
     }
 }
 
@@ -236,6 +237,7 @@ fn test_render_footer_navigation() {
                 &theme,
                 &[],
                 &None,
+                false,
             );
         })
         .unwrap();
@@ -270,6 +272,7 @@ fn test_render_footer_command_mode() {
                 &theme,
                 &[],
                 &None,
+                false,
             );
         })
         .unwrap();
@@ -304,6 +307,7 @@ fn test_render_footer_filter_mode() {
                 &theme,
                 &[],
                 &None,
+                false,
             );
         })
         .unwrap();
@@ -674,6 +678,41 @@ fn test_render_resource_yaml_with_data() {
                 &None,
                 &mut yaml_scroll_offset,
                 &theme,
+            );
+        })
+        .unwrap();
+
+    assert_snapshot!(terminal.backend());
+}
+
+#[test]
+fn test_render_footer_connection_error() {
+    let state = create_test_resource_state();
+    let theme = create_test_theme();
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            let operation_registry = flux9s::tui::operations::OperationRegistry::new();
+            render_footer(
+                frame,
+                area,
+                false,
+                "",
+                false,
+                "",
+                false,
+                false,
+                &None,
+                &None,
+                &operation_registry,
+                &state,
+                &theme,
+                &[],
+                &None,
+                true, // has_connection_error = true
             );
         })
         .unwrap();

@@ -20,31 +20,38 @@ impl ConfigLoader {
     /// 4. Root config
     /// 5. Built-in defaults
     pub fn load(cluster: Option<&str>, context: Option<&str>) -> Result<Config> {
-        let mut config = Self::load_defaults();
+        let mut merged_yaml = match serde_yaml::to_value(Self::load_defaults()) {
+            Ok(v) => v,
+            Err(_) => serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        };
 
         // Load root config
-        if let Ok(root_config) = Self::load_file(&paths::root_config_path()) {
-            config = Self::merge_config(config, root_config);
+        if let Ok(root_yaml) = Self::load_yaml_file(&paths::root_config_path()) {
+            Self::merge_yaml(&mut merged_yaml, root_yaml);
         }
 
         // Load cluster-specific config if cluster is provided
         if let Some(cluster_name) = cluster {
-            if let Ok(cluster_config) =
-                Self::load_file(&paths::cluster_config_path(cluster_name, None))
+            if let Ok(cluster_yaml) =
+                Self::load_yaml_file(&paths::cluster_config_path(cluster_name, None))
             {
-                config = Self::merge_config(config, cluster_config);
+                Self::merge_yaml(&mut merged_yaml, cluster_yaml);
             }
 
             // Load context-specific config if context is provided
             if let Some(context_name) = context {
-                if let Ok(context_config) = Self::load_file(&paths::cluster_config_path(
+                if let Ok(context_yaml) = Self::load_yaml_file(&paths::cluster_config_path(
                     cluster_name,
                     Some(context_name),
                 )) {
-                    config = Self::merge_config(config, context_config);
+                    Self::merge_yaml(&mut merged_yaml, context_yaml);
                 }
             }
         }
+
+        // Deserialize the fully merged YAML value into Config
+        let mut config: Config =
+            serde_yaml::from_value(merged_yaml).context("Failed to parse merged configuration")?;
 
         // Apply environment variable overrides
         config = Self::apply_env_overrides(config);
@@ -65,6 +72,60 @@ impl ConfigLoader {
             .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
 
         Ok(config)
+    }
+
+    /// Load a YAML value from a file
+    fn load_yaml_file(path: &PathBuf) -> Result<serde_yaml::Value> {
+        if !path.exists() {
+            return Err(anyhow::anyhow!("Config file not found: {}", path.display()));
+        }
+
+        let contents = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+
+        if contents.trim().is_empty() {
+            return Ok(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+        }
+
+        let val: serde_yaml::Value = serde_yaml::from_str(&contents)
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+
+        Ok(val)
+    }
+
+    /// Recursively merge two YAML values, with `other` taking precedence over `base`.
+    fn merge_yaml(base: &mut serde_yaml::Value, other: serde_yaml::Value) {
+        match (base, other) {
+            (serde_yaml::Value::Mapping(base_map), serde_yaml::Value::Mapping(other_map)) => {
+                for (k, v) in other_map {
+                    if v.is_null() {
+                        continue;
+                    }
+                    // Special case for sequence fields: if empty, inherit from base
+                    if let serde_yaml::Value::Sequence(ref seq) = v {
+                        if seq.is_empty() {
+                            continue;
+                        }
+                    }
+                    // Special case for options: skip if null
+                    if v.is_null() {
+                        continue;
+                    }
+                    if base_map.contains_key(&k) {
+                        if let Some(base_val) = base_map.get_mut(&k) {
+                            Self::merge_yaml(base_val, v);
+                        }
+                    } else {
+                        base_map.insert(k, v);
+                    }
+                }
+            }
+            (base, other) => {
+                if !other.is_null() {
+                    *base = other;
+                }
+            }
+        }
     }
 
     /// Validate configuration by loading and checking for errors
@@ -107,59 +168,6 @@ impl ConfigLoader {
         defaults::default_config()
     }
 
-    /// Merge two configurations, with `other` taking precedence over `base`.
-    ///
-    /// Scalar fields (bool, numbers, non-optional strings) always come from `other`
-    /// because serde gives them their default value when absent in YAML, making
-    /// "not set" and "set to default" indistinguishable.
-    ///
-    /// Option, Vec, and HashMap fields use smarter merging:
-    /// - `Option<T>`: use `other` if `Some`, otherwise fall back to `base`
-    /// - `Vec<T>`: use `other` if non-empty, otherwise fall back to `base`
-    /// - `HashMap`: merge maps, with `other` keys taking precedence
-    fn merge_config(base: Config, other: Config) -> Config {
-        // Merge context_skins maps: base entries kept, other entries override/add
-        let mut merged_context_skins = base.context_skins.clone();
-        merged_context_skins.extend(other.context_skins.clone());
-
-        // Merge cluster maps the same way
-        let mut merged_cluster = base.cluster.clone();
-        merged_cluster.extend(other.cluster.clone());
-
-        Config {
-            read_only: other.read_only,
-            default_namespace: other.default_namespace.clone(),
-            default_controller_namespace: other.default_controller_namespace.clone(),
-            ui: UiConfig {
-                enable_mouse: other.ui.enable_mouse,
-                headless: other.ui.headless,
-                no_icons: other.ui.no_icons,
-                skin: other.ui.skin.clone(),
-                // Only override if other explicitly sets a readonly skin
-                skin_read_only: other.ui.skin_read_only.clone().or(base.ui.skin_read_only),
-                splashless: other.ui.splashless,
-            },
-            // Inherit base hotkeys/favorites if the overlay layer leaves them empty
-            namespace_hotkeys: if other.namespace_hotkeys.is_empty() {
-                base.namespace_hotkeys
-            } else {
-                other.namespace_hotkeys
-            },
-            context_skins: merged_context_skins,
-            cluster: merged_cluster,
-            favorites: if other.favorites.is_empty() {
-                base.favorites
-            } else {
-                other.favorites
-            },
-            // Only override if other explicitly sets a resource filter
-            default_resource_filter: other
-                .default_resource_filter
-                .clone()
-                .or(base.default_resource_filter),
-        }
-    }
-
     /// Apply environment variable overrides
     fn apply_env_overrides(mut config: Config) -> Config {
         // FLUX9S_SKIN override
@@ -183,6 +191,15 @@ impl ConfigLoader {
         if let Ok(filter) = std::env::var("FLUX9S_DEFAULT_RESOURCE_FILTER") {
             if !filter.is_empty() {
                 config.default_resource_filter = Some(filter);
+            }
+        }
+
+        // FLUX9S_CONNECT_TIMEOUT override
+        if let Ok(timeout) = std::env::var(crate::kube::health::CONNECT_TIMEOUT_ENV) {
+            if let Ok(seconds) = timeout.parse::<u64>() {
+                if seconds > 0 {
+                    config.connect_timeout_seconds = seconds;
+                }
             }
         }
 
@@ -216,12 +233,16 @@ impl ConfigLoader {
     }
 }
 
-// Re-export types for convenience
-use super::schema::UiConfig;
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn merge_config(base: Config, other: Config) -> Config {
+        let mut base_val = serde_yaml::to_value(base).unwrap();
+        let other_val = serde_yaml::to_value(other).unwrap();
+        ConfigLoader::merge_yaml(&mut base_val, other_val);
+        serde_yaml::from_value(base_val).unwrap()
+    }
 
     #[test]
     fn test_load_defaults() {
@@ -239,7 +260,7 @@ mod tests {
             ..Default::default()
         };
 
-        let merged = ConfigLoader::merge_config(base, other);
+        let merged = merge_config(base, other);
         assert!(merged.read_only);
         assert_eq!(merged.default_namespace, "test-ns");
     }
@@ -258,7 +279,7 @@ mod tests {
         };
         let other = Config::default(); // other has no Option values set
 
-        let merged = ConfigLoader::merge_config(base, other);
+        let merged = merge_config(base, other);
         assert_eq!(merged.ui.skin_read_only, Some("rose-pine".to_string()));
         assert_eq!(
             merged.default_resource_filter,
@@ -286,7 +307,7 @@ mod tests {
             ..Default::default()
         };
 
-        let merged = ConfigLoader::merge_config(base, other);
+        let merged = merge_config(base, other);
         assert_eq!(merged.ui.skin_read_only, Some("other-skin".to_string()));
         assert_eq!(
             merged.default_resource_filter,
@@ -304,7 +325,7 @@ mod tests {
         };
         let other = Config::default(); // empty vecs
 
-        let merged = ConfigLoader::merge_config(base, other);
+        let merged = merge_config(base, other);
         assert_eq!(merged.namespace_hotkeys.len(), 2);
         assert_eq!(merged.favorites.len(), 1);
     }
@@ -329,7 +350,7 @@ mod tests {
             ..Default::default()
         };
 
-        let merged = ConfigLoader::merge_config(base, other);
+        let merged = merge_config(base, other);
         assert_eq!(
             merged.context_skins.get("prod").map(String::as_str),
             Some("nord")
@@ -354,6 +375,7 @@ mod tests {
         unsafe {
             std::env::set_var("FLUX9S_SKIN", "test-skin");
             std::env::set_var("FLUX9S_READ_ONLY", "true");
+            std::env::set_var(crate::kube::health::CONNECT_TIMEOUT_ENV, "12");
         }
 
         let config = Config::default();
@@ -361,6 +383,7 @@ mod tests {
 
         assert_eq!(config.ui.skin, "test-skin");
         assert!(config.read_only);
+        assert_eq!(config.connect_timeout_seconds, 12);
 
         // Cleanup
         // SAFETY: remove_var is unsafe in Rust 2024 due to potential data races.
@@ -368,6 +391,23 @@ mod tests {
         unsafe {
             std::env::remove_var("FLUX9S_SKIN");
             std::env::remove_var("FLUX9S_READ_ONLY");
+            std::env::remove_var(crate::kube::health::CONNECT_TIMEOUT_ENV);
         }
+    }
+
+    #[test]
+    fn test_merge_yaml_preserves_root_timeout_when_cluster_omits_it() {
+        let base_yaml_str = "connectTimeoutSeconds: 30\nreadOnly: true";
+        let other_yaml_str = "defaultNamespace: my-ns"; // omits connectTimeoutSeconds and readOnly
+
+        let mut base_val: serde_yaml::Value = serde_yaml::from_str(base_yaml_str).unwrap();
+        let other_val: serde_yaml::Value = serde_yaml::from_str(other_yaml_str).unwrap();
+
+        ConfigLoader::merge_yaml(&mut base_val, other_val);
+
+        let merged_config: Config = serde_yaml::from_value(base_val).unwrap();
+        assert_eq!(merged_config.connect_timeout_seconds, 30);
+        assert!(merged_config.read_only);
+        assert_eq!(merged_config.default_namespace, "my-ns");
     }
 }

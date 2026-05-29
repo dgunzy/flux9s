@@ -267,6 +267,11 @@ fn display_config_with_defaults(config: &Config) {
         Some(f) => println!("defaultResourceFilter: {}", f),
         None => println!("defaultResourceFilter: ~  # (default: none, shows all resource types)"),
     }
+    println!(
+        "connectTimeoutSeconds: {}{}",
+        config.connect_timeout_seconds,
+        default_marker(&config.connect_timeout_seconds, &d.connect_timeout_seconds)
+    );
     println!();
 
     println!("ui:");
@@ -330,6 +335,9 @@ fn display_config_with_defaults(config: &Config) {
     println!(
         "#   defaultResourceFilter - Resource type filter at startup, e.g. \"Kustomization\" (default: none, shows all)"
     );
+    println!(
+        "#   connectTimeoutSeconds - Startup Kubernetes API health-check timeout in seconds (default: 10)"
+    );
     println!("#   ui.enableMouse - Enable mouse support (default: false)");
     println!("#   ui.headless - Hide header (default: false)");
     println!("#   ui.noIcons - Disable Unicode icons (default: false)");
@@ -349,4 +357,5 @@ fn display_config_with_defaults(config: &Config) {
     println!("#   FLUX9S_READ_ONLY - Override readonly mode");
     println!("#   FLUX9S_DEFAULT_NAMESPACE - Override default namespace");
     println!("#   FLUX9S_DEFAULT_RESOURCE_FILTER - Override default resource filter");
+    println!("#   FLUX9S_CONNECT_TIMEOUT - Override Kubernetes API connect timeout in seconds");
 }

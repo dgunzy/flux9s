@@ -46,6 +46,15 @@ pub fn get_navigation_commands() -> Vec<NavigationCommand> {
     ]
 }
 
+/// Get navigation commands for the connection error state
+pub fn get_connection_error_commands() -> Vec<NavigationCommand> {
+    vec![
+        NavigationCommand::new(":", "Command"),
+        NavigationCommand::new("?", "Help"),
+        NavigationCommand::new("Esc/q", "Quit"),
+    ]
+}
+
 /// Convert navigation commands to segments with color for footer rendering
 pub fn navigation_commands_to_segments(
     commands: &[NavigationCommand],
@@ -104,14 +113,19 @@ pub fn calculate_footer_height(
     terminal_width: u16,
     namespace_hotkeys: &[String],
     current_namespace: &Option<String>,
+    has_connection_error: bool,
 ) -> u16 {
     use crate::tui::constants::{MAX_FOOTER_NAMESPACE_HOTKEYS, MAX_FOOTER_NAMESPACE_LENGTH};
 
     // Get base navigation commands
-    let mut nav_segments = navigation_commands_to_segments_simple(&get_navigation_commands());
+    let mut nav_segments = if has_connection_error {
+        navigation_commands_to_segments_simple(&get_connection_error_commands())
+    } else {
+        navigation_commands_to_segments_simple(&get_navigation_commands())
+    };
 
     // Add namespace hotkeys (matching footer.rs logic)
-    if !namespace_hotkeys.is_empty() {
+    if !has_connection_error && !namespace_hotkeys.is_empty() {
         for (idx, ns) in namespace_hotkeys
             .iter()
             .take(MAX_FOOTER_NAMESPACE_HOTKEYS)
@@ -174,4 +188,24 @@ pub fn calculate_footer_height(
     let footer_content_lines: u16 = if use_line2 { 2 } else { 1 };
 
     footer_content_lines + 2 // Content + borders
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_footer_height_connection_error() {
+        // Under a connection error state, the footer has fewer options and fits on one line.
+        let height = calculate_footer_height(80, &[], &None, true);
+        assert_eq!(height, 3); // 1 content line + 2 borders
+    }
+
+    #[test]
+    fn test_calculate_footer_height_normal() {
+        // Under normal circumstances, check that it calculates correctly.
+        let height = calculate_footer_height(80, &[], &None, false);
+        // Normally at 80 cols, the default commands (lots of them) wrap to 2 lines.
+        assert_eq!(height, 4); // 2 content lines + 2 borders
+    }
 }

@@ -52,15 +52,25 @@ pub struct ClusterSession {
 }
 
 impl ClusterSession {
-    /// Connect to a cluster using a specific context name.
+    /// Connect to a cluster using a specific context name and configuration.
     pub async fn connect(
         context: &str,
         namespace: Option<String>,
         controller_namespace: &str,
+        config: &Config,
     ) -> Result<Self> {
         let client = crate::kube::create_client_for_context(context)
             .await
             .with_context(|| format!("Failed to connect to context '{}'", context))?;
+
+        // Verify the API server is actually reachable before starting watchers.
+        crate::kube::check_connectivity(
+            &client,
+            crate::kube::resolve_connect_timeout(config.connect_timeout_seconds),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))
+        .with_context(|| format!("Failed to connect to context '{}'", context))?;
 
         let state = ResourceState::new();
         let (mut watcher, event_rx) = ResourceWatcher::new(
@@ -93,6 +103,15 @@ impl ClusterSession {
         let context = crate::kube::get_context()
             .await
             .context("Failed to get current context")?;
+
+        // Verify the API server is actually reachable before starting watchers.
+        crate::kube::check_connectivity(
+            &client,
+            crate::kube::resolve_connect_timeout(config.connect_timeout_seconds),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))
+        .context("Failed to connect to the Kubernetes API server")?;
 
         let namespace = if config.default_namespace.is_empty()
             || config.default_namespace == "all"
@@ -137,6 +156,15 @@ impl ClusterSession {
             })?;
 
         let context = crate::kube::get_context_from_kubeconfig_path(path)?;
+
+        // Verify the API server is actually reachable before starting watchers.
+        crate::kube::check_connectivity(
+            &client,
+            crate::kube::resolve_connect_timeout(config.connect_timeout_seconds),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))
+        .context("Failed to connect to the Kubernetes API server")?;
 
         let namespace = if config.default_namespace.is_empty()
             || config.default_namespace == "all"
@@ -311,18 +339,26 @@ impl ClusterSession {
 
     /// Switch to a different cluster context.
     ///
-    /// Creates a new client and restarts watchers. State is cleared.
+    /// Creates a new client, checks connectivity, and restarts watchers.
+    /// State is only cleared and updated after the new connection and watchers succeed.
     pub async fn switch_context(
         &mut self,
         context: &str,
         controller_namespace: &str,
+        config: &Config,
     ) -> Result<()> {
         let new_client = crate::kube::create_client_for_context(context)
             .await
             .with_context(|| format!("Failed to switch to context '{}'", context))?;
 
-        self.watcher.stop();
-        self.state.clear();
+        // Verify connectivity of the new context before changing state.
+        crate::kube::check_connectivity(
+            &new_client,
+            crate::kube::resolve_connect_timeout(config.connect_timeout_seconds),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))
+        .with_context(|| format!("Failed to connect to context '{}'", context))?;
 
         let (mut new_watcher, new_event_rx) = ResourceWatcher::new(
             new_client.clone(),
@@ -333,6 +369,10 @@ impl ClusterSession {
         new_watcher
             .watch_all()
             .context("Failed to start watchers after context switch")?;
+
+        // Succeeded! Now we can safely stop the old watcher, clear state, and update fields.
+        self.watcher.stop();
+        self.state.clear();
 
         self.client = new_client;
         self.context = context.to_string();
@@ -349,5 +389,19 @@ impl ClusterSession {
         self.watcher.set_namespace(namespace.clone())?;
         self.namespace = namespace;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_cluster_session_connect_invalid_context() {
+        let config = Config::default();
+        let result =
+            ClusterSession::connect("nonexistent-context-12345", None, "flux-system", &config)
+                .await;
+        assert!(result.is_err());
     }
 }

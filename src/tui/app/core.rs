@@ -31,6 +31,8 @@ pub struct App {
     pub(crate) namespace_hotkeys: Vec<String>,
     pub(crate) pending_context_switch: Option<String>,
     pub(crate) controller_pods: ControllerPodState,
+    /// Path to the active log file, shown on the connection error screen.
+    pub(crate) log_path: Option<std::path::PathBuf>,
 }
 
 impl App {
@@ -75,6 +77,55 @@ impl App {
             namespace_hotkeys: Self::build_namespace_hotkeys(&config, Vec::new()),
             pending_context_switch: None,
             controller_pods: ControllerPodState::default(),
+            log_path: None,
+        }
+    }
+
+    /// Mark the connection as established (clears the connecting state).
+    pub fn set_connected(&mut self) {
+        self.ui_state.connection_status = crate::tui::app::state::ConnectionStatus::Connected;
+        self.ui_state.cached_terminal_size = None;
+    }
+
+    /// Record a fatal connection error to display on the error screen.
+    pub fn set_connection_error(&mut self, error: crate::kube::health::ConnectionError) {
+        self.ui_state.connection_status =
+            crate::tui::app::state::ConnectionStatus::Failed(Box::new(error));
+        self.ui_state.show_splash = false;
+        self.ui_state.splash_start_time = None;
+        self.ui_state.cached_terminal_size = None;
+        self.async_state.clear_pending();
+    }
+
+    /// Whether the app is currently showing a fatal connection error.
+    pub fn has_connection_error(&self) -> bool {
+        matches!(
+            self.ui_state.connection_status,
+            crate::tui::app::state::ConnectionStatus::Failed(_)
+        )
+    }
+
+    /// Set the active log file path (shown on the connection error screen).
+    pub fn set_log_path(&mut self, path: Option<std::path::PathBuf>) {
+        self.log_path = path;
+    }
+
+    /// Render the connection error view inside the specified area, if in a failed state.
+    pub(crate) fn render_connection_error_screen(
+        &self,
+        f: &mut ratatui::Frame,
+        area: ratatui::layout::Rect,
+    ) {
+        if let crate::tui::app::state::ConnectionStatus::Failed(err) =
+            &self.ui_state.connection_status
+        {
+            crate::tui::views::render_connection_error(
+                f,
+                area,
+                &self.theme,
+                err,
+                self.log_path.as_deref(),
+            );
         }
     }
 
@@ -274,14 +325,16 @@ impl App {
     }
 
     /// Update the app with a new context after successful switch
-    pub fn complete_context_switch(&mut self, context: String) {
+    pub fn complete_context_switch(&mut self, context: String, namespace: Option<String>) {
         self.context = context;
+        self.namespace = namespace;
         self.state.clear();
         self.resource_objects.clear();
         self.controller_pods.clear();
         self.view_state.selected_index = 0;
         self.view_state.scroll_offset = 0;
         self.view_state.selected_resource_type = None;
+        self.async_state.clear_pending();
     }
 
     pub fn state(&mut self) -> &mut ResourceState {
@@ -638,6 +691,7 @@ mod tests {
             cluster: HashMap::new(),
             favorites: vec![],
             default_resource_filter: None,
+            connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
         };
         let theme = Theme::default();
         App::new(state, "test-context".to_string(), None, config, theme)
@@ -766,5 +820,16 @@ mod tests {
         }
         // Theme should be applied regardless of save success
         let _ = app.theme.header_context;
+    }
+
+    #[test]
+    fn test_complete_context_switch_resets_namespace() {
+        let mut app = create_test_app();
+        app.set_namespace(Some("old-namespace".to_string()));
+        assert_eq!(app.namespace(), &Some("old-namespace".to_string()));
+
+        app.complete_context_switch("new-context".to_string(), Some("new-namespace".to_string()));
+        assert_eq!(app.context, "new-context");
+        assert_eq!(app.namespace(), &Some("new-namespace".to_string()));
     }
 }

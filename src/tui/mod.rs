@@ -99,7 +99,9 @@ pub async fn run_tui_with_async_init(
     debug: bool,
     kubeconfig_path: Option<&std::path::Path>,
     config_warning: Option<String>,
+    log_file: Option<std::path::PathBuf>,
 ) -> Result<()> {
+    use crate::kube::health::ConnectionError;
     tracing::debug!("Initializing TUI with async Kubernetes setup");
 
     // Setup terminal IMMEDIATELY - this is the first thing we do
@@ -131,9 +133,16 @@ pub async fn run_tui_with_async_init(
         theme,
     );
 
+    // Record the log file path so the connection error screen can point to it.
+    app.set_log_path(log_file);
+
     // Initialize splash timer right before first render
     // This ensures the timer starts when TUI actually renders, not during async initialization
     app.init_splash_timer();
+
+    // Bounded timeout for the startup connectivity probe (env-overridable).
+    let connect_timeout =
+        crate::kube::health::resolve_connect_timeout(config.connect_timeout_seconds);
 
     // Spawn async task to initialize Kubernetes and start watchers
     // This happens in the background while splash is showing
@@ -156,7 +165,7 @@ pub async fn run_tui_with_async_init(
                             path.display(),
                             e
                         );
-                        let _ = kube_init_tx.send(Err(e));
+                        let _ = kube_init_tx.send(Err(ConnectionError::from_anyhow(e)));
                         return;
                     }
                 }
@@ -165,7 +174,7 @@ pub async fn run_tui_with_async_init(
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("Failed to create Kubernetes client: {}", e);
-                    let _ = kube_init_tx.send(Err(e));
+                    let _ = kube_init_tx.send(Err(ConnectionError::from_anyhow(e)));
                     return;
                 }
             },
@@ -181,7 +190,7 @@ pub async fn run_tui_with_async_init(
                         path.display(),
                         e
                     );
-                    let _ = kube_init_tx.send(Err(e));
+                    let _ = kube_init_tx.send(Err(ConnectionError::from_anyhow(e)));
                     return;
                 }
             },
@@ -189,7 +198,7 @@ pub async fn run_tui_with_async_init(
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("Failed to get Kubernetes context: {}", e);
-                    let _ = kube_init_tx.send(Err(e));
+                    let _ = kube_init_tx.send(Err(ConnectionError::from_anyhow(e)));
                     return;
                 }
             },
@@ -214,6 +223,25 @@ pub async fn run_tui_with_async_init(
             }
         }
 
+        // Active connectivity probe with a bounded timeout. Building a client does
+        // no network I/O, so without this an unreachable/timed-out/unauthorized
+        // API server would not be detected until watchers silently failed in the
+        // background. Hitting /version is cheap and requires no RBAC.
+        let server_url = crate::kube::health::detect_cluster_server(
+            kubeconfig_path_clone.as_deref(),
+            Some(&context),
+        );
+        if let Err(conn_err) =
+            crate::kube::health::check_connectivity(&client, connect_timeout).await
+        {
+            let conn_err = conn_err
+                .with_context(Some(context.clone()))
+                .with_server(server_url.clone());
+            tracing::error!("Kubernetes connectivity check failed: {}", conn_err);
+            let _ = kube_init_tx.send(Err(conn_err));
+            return;
+        }
+
         // Create resource state and watcher
         tracing::debug!("Creating resource state and watcher");
         let (mut watcher, event_rx) = crate::watcher::ResourceWatcher::new(
@@ -225,15 +253,31 @@ pub async fn run_tui_with_async_init(
         // Start watching all Flux resources
         if let Err(e) = watcher.watch_all() {
             tracing::error!("Failed to start watchers: {}", e);
-            let _ = kube_init_tx.send(Err(anyhow::anyhow!("Failed to start watchers: {}", e)));
+            let _ = kube_init_tx.send(Err(ConnectionError::from_anyhow(e)
+                .with_context(Some(context.clone()))
+                .with_server(server_url.clone())));
             return;
         }
 
         // Discover namespaces with Flux resources for hotkeys (if not configured)
         let namespace_hotkeys = if config.namespace_hotkeys.is_empty() {
-            crate::kube::discover_namespaces_with_flux_resources(&client)
-                .await
-                .unwrap_or_default()
+            // Bounded so a slow/unreachable server can't stall startup here.
+            match tokio::time::timeout(
+                connect_timeout,
+                crate::kube::discover_namespaces_with_flux_resources(&client),
+            )
+            .await
+            {
+                Ok(Ok(ns)) => ns,
+                Ok(Err(e)) => {
+                    tracing::warn!("Namespace discovery failed: {}", e);
+                    Vec::new()
+                }
+                Err(_) => {
+                    tracing::warn!("Namespace discovery timed out");
+                    Vec::new()
+                }
+            }
         } else {
             Vec::new()
         };
@@ -251,17 +295,19 @@ pub async fn run_tui_with_async_init(
     // Main event loop - start rendering immediately with splash
     let mut event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::watcher::WatchEvent>> =
         None;
-    let mut kube_client: Option<kube::Client> = None;
     let mut kube_initialized = false;
+    // Tracks whether the init channel has resolved (success OR failure), so a
+    // failed connection stops polling without being treated as initialized.
+    let mut kube_init_done = false;
 
     loop {
         // Check if Kubernetes initialization is complete
-        if !kube_initialized {
+        if !kube_init_done {
             if let Ok(result) = kube_init_rx.try_recv() {
+                kube_init_done = true;
                 match result {
                     Ok((client, context, namespace, w, rx, namespace_hotkeys)) => {
                         tracing::debug!("Kubernetes initialization complete");
-                        kube_client = Some(client.clone());
                         event_rx = Some(rx);
                         app.set_kube_client(client.clone());
                         app.set_watcher(w);
@@ -285,24 +331,15 @@ pub async fn run_tui_with_async_init(
                             app.set_status_message((warning.clone(), true));
                         }
 
+                        app.set_connected();
                         kube_initialized = true;
                     }
-                    Err(e) => {
-                        tracing::error!("Kubernetes initialization failed: {}", e);
-
-                        // Clean up terminal before exiting
-                        disable_raw_mode()?;
-                        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-                        if config.ui.enable_mouse {
-                            execute!(terminal.backend_mut(), DisableMouseCapture)?;
-                        }
-
-                        // Print error to stderr and exit
-                        eprintln!("Error: Failed to connect to Kubernetes: {}", e);
-                        if let Some(kubeconfig_path) = kubeconfig_path {
-                            eprintln!("Kubeconfig file: {}", kubeconfig_path.display());
-                        }
-                        std::process::exit(1);
+                    Err(conn_err) => {
+                        // Keep the TUI alive and show a clear, full-screen error
+                        // instead of tearing down and exiting. The user reads the
+                        // message and quits with q / Ctrl+C.
+                        tracing::error!("Kubernetes initialization failed: {}", conn_err);
+                        app.set_connection_error(conn_err);
                     }
                 }
             }
@@ -599,52 +636,118 @@ pub async fn run_tui_with_async_init(
 
         // Handle context switch if pending
         if let Some(new_context) = app.take_pending_context_switch() {
+            kube_init_done = true;
             tracing::info!("Switching to context: {}", new_context);
 
-            if kube_client.is_some() {
-                match crate::kube::create_client_for_context(&new_context).await {
-                    Ok(new_client) => {
-                        // Create new watcher with new client
-                        // ResourceWatcher::new returns a tuple (watcher, receiver), not a Result
-                        let namespace = app.namespace().clone();
-                        let (mut new_watcher, new_event_rx) = crate::watcher::ResourceWatcher::new(
-                            new_client.clone(),
-                            namespace,
-                            controller_namespace.clone(),
-                        );
+            match crate::kube::create_client_for_context(&new_context).await {
+                Ok(new_client) => {
+                    // Probe connection to the new context
+                    let server_url = crate::kube::health::detect_cluster_server(
+                        kubeconfig_path,
+                        Some(&new_context),
+                    );
 
-                        // Start watching all resources with the new watcher
-                        if let Err(e) = new_watcher.watch_all() {
-                            tracing::error!("Failed to start watchers after context switch: {}", e);
-                            app.set_status_message((
-                                format!("Failed to start watchers: {}", e),
-                                true,
-                            ));
-                            return Ok(());
+                    match crate::kube::health::check_connectivity(&new_client, connect_timeout)
+                        .await
+                    {
+                        Ok(_) => {
+                            // Determine the default namespace for the new context
+                            let new_default_namespace = if app.config.default_namespace.is_empty()
+                                || app.config.default_namespace == "all"
+                                || app.config.default_namespace == "-A"
+                            {
+                                crate::kube::get_default_namespace().await
+                            } else {
+                                Some(app.config.default_namespace.clone())
+                            };
+
+                            // Create new watcher with new client and resolved namespace
+                            let (mut new_watcher, new_event_rx) =
+                                crate::watcher::ResourceWatcher::new(
+                                    new_client.clone(),
+                                    new_default_namespace.clone(),
+                                    controller_namespace.clone(),
+                                );
+
+                            // Start watching all resources with the new watcher
+                            if let Err(e) = new_watcher.watch_all() {
+                                tracing::error!(
+                                    "Failed to start watchers after context switch: {}",
+                                    e
+                                );
+                                app.set_status_message((
+                                    format!("Failed to start watchers: {}", e),
+                                    true,
+                                ));
+                                let conn_err = ConnectionError::from_anyhow(e)
+                                    .with_context(Some(new_context.clone()))
+                                    .with_server(server_url.clone());
+                                app.set_connection_error(conn_err);
+                                kube_initialized = false;
+                                app.kube_client = None;
+                                app.watcher = None;
+                                event_rx = None;
+                            } else {
+                                // Update app with new context, namespace and watcher
+                                app.complete_context_switch(
+                                    new_context.clone(),
+                                    new_default_namespace,
+                                );
+                                app.set_kube_client(new_client.clone());
+                                app.set_watcher(new_watcher);
+
+                                // Replace event receiver
+                                event_rx = Some(new_event_rx);
+
+                                kube_initialized = true;
+
+                                // Clear any previous connection error state
+                                app.set_connected();
+
+                                app.set_status_message((
+                                    format!("Successfully switched to context: {}", new_context),
+                                    false,
+                                ));
+
+                                // Reload skin for new context
+                                app.reload_skin_for_readonly_mode(Some(&new_context));
+
+                                tracing::info!("Context switch completed: {}", new_context);
+                            }
                         }
-
-                        // Update app with new context and watcher
-                        app.complete_context_switch(new_context.clone());
-                        app.set_kube_client(new_client.clone());
-                        app.set_watcher(new_watcher);
-
-                        // Replace event receiver
-                        event_rx = Some(new_event_rx);
-
-                        app.set_status_message((
-                            format!("Successfully switched to context: {}", new_context),
-                            false,
-                        ));
-
-                        // Reload skin for new context
-                        app.reload_skin_for_readonly_mode(Some(&new_context));
-
-                        tracing::info!("Context switch completed: {}", new_context);
+                        Err(conn_err) => {
+                            let conn_err = conn_err
+                                .with_context(Some(new_context.clone()))
+                                .with_server(server_url.clone());
+                            tracing::error!(
+                                "Kubernetes connectivity check failed after context switch: {}",
+                                conn_err
+                            );
+                            app.set_connection_error(conn_err);
+                            kube_initialized = false;
+                            app.kube_client = None;
+                            app.watcher = None;
+                            event_rx = None;
+                        }
                     }
-                    Err(e) => {
-                        app.set_status_message((format!("Failed to switch context: {}", e), true));
-                        tracing::error!("Context switch failed: {}", e);
-                    }
+                }
+                Err(e) => {
+                    let server_url = crate::kube::health::detect_cluster_server(
+                        kubeconfig_path,
+                        Some(&new_context),
+                    );
+                    let conn_err = ConnectionError::from_anyhow(e)
+                        .with_context(Some(new_context.clone()))
+                        .with_server(server_url);
+                    tracing::error!(
+                        "Kubernetes context client creation failed after context switch: {}",
+                        conn_err
+                    );
+                    app.set_connection_error(conn_err);
+                    kube_initialized = false;
+                    app.kube_client = None;
+                    app.watcher = None;
+                    event_rx = None;
                 }
             }
         }
@@ -801,6 +904,18 @@ pub async fn run_tui_with_async_init(
         execute!(terminal.backend_mut(), DisableMouseCapture)?;
     }
     terminal.show_cursor()?;
+
+    if app.has_connection_error() {
+        if let crate::tui::app::state::ConnectionStatus::Failed(err) =
+            &app.ui_state.connection_status
+        {
+            return Err(anyhow::anyhow!(
+                "Failed to connect to Kubernetes: {}",
+                err.detail()
+            ));
+        }
+        return Err(anyhow::anyhow!("Failed to connect to Kubernetes"));
+    }
 
     Ok(())
 }

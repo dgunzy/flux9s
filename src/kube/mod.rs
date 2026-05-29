@@ -13,12 +13,18 @@
 
 pub mod api;
 pub mod fetch;
+pub mod health;
 pub mod inventory;
 
 #[allow(unused_imports)] // Public API re-exports used by lib consumers
 pub use api::{get_api_resource_with_fallback, get_gvk_for_resource_type};
 #[allow(unused_imports)] // Public API re-exports used by lib consumers
 pub use fetch::{fetch_resource, fetch_resource_yaml};
+#[allow(unused_imports)] // Public API re-exports used by lib consumers
+pub use health::{
+    ConnectionError, ConnectionErrorKind, check_connectivity, detect_cluster_server,
+    resolve_connect_timeout,
+};
 
 use anyhow::Result;
 use kube::config::Kubeconfig;

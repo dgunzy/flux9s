@@ -31,6 +31,7 @@ pub fn render_footer(
     theme: &Theme,
     namespace_hotkeys: &[String],
     current_namespace: &Option<String>,
+    has_connection_error: bool,
 ) -> usize {
     if command_mode {
         return render_command_footer(f, area, command_buffer, theme);
@@ -48,7 +49,14 @@ pub fn render_footer(
 
     // Handle default navigation footer (wrapped for smaller screens)
     if !show_help && confirmation_pending.is_none() && status_message.is_none() {
-        return render_navigation_footer(f, area, theme, namespace_hotkeys, current_namespace);
+        return render_navigation_footer(
+            f,
+            area,
+            theme,
+            namespace_hotkeys,
+            current_namespace,
+            has_connection_error,
+        );
     }
 
     // Build footer text for non-default cases
@@ -163,16 +171,21 @@ fn render_navigation_footer(
     theme: &Theme,
     namespace_hotkeys: &[String],
     current_namespace: &Option<String>,
+    has_connection_error: bool,
 ) -> usize {
     // Default navigation hints - wrap for smaller screens
     // Returns the number of lines used
     // Use centralized keybindings
-    let commands = get_navigation_commands();
+    let commands = if has_connection_error {
+        crate::tui::keybindings::get_connection_error_commands()
+    } else {
+        get_navigation_commands()
+    };
     let mut nav_segments = navigation_commands_to_segments(&commands, theme.footer_key);
 
     // Add namespace hotkeys (show first few that fit)
     use crate::tui::constants::{MAX_FOOTER_NAMESPACE_HOTKEYS, MAX_FOOTER_NAMESPACE_LENGTH};
-    if !namespace_hotkeys.is_empty() {
+    if !has_connection_error && !namespace_hotkeys.is_empty() {
         // Show up to MAX_FOOTER_NAMESPACE_HOTKEYS namespace hotkeys in footer
         for (idx, ns) in namespace_hotkeys
             .iter()
