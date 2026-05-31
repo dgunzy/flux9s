@@ -132,8 +132,12 @@ impl App {
             self.ui_state.cached_header_height = (content_lines + 2).max(MIN_HEADER_HEIGHT);
 
             // Calculate footer height using centralized function
-            self.ui_state.cached_footer_height =
-                calculate_footer_height(terminal_width, self.namespace_hotkeys(), self.namespace());
+            self.ui_state.cached_footer_height = calculate_footer_height(
+                terminal_width,
+                self.namespace_hotkeys(),
+                self.namespace(),
+                self.has_connection_error(),
+            );
         }
 
         let header_height = self.ui_state.cached_header_height;
@@ -219,6 +223,7 @@ impl App {
             &self.theme,
             self.namespace_hotkeys(),
             &self.namespace,
+            self.has_connection_error(),
         );
     }
 
@@ -294,6 +299,20 @@ impl App {
     fn render_main(&mut self, f: &mut Frame, area: Rect) {
         // Cache page size for PageUp/PageDown: visible rows = area height minus top/bottom borders
         self.view_state.page_size = (area.height as usize).saturating_sub(2).max(1);
+
+        if self.has_connection_error() {
+            self.render_connection_error_screen(f, area);
+            // If help, submenu, or quit confirm is active, render it on top!
+            if self.ui_state.show_help {
+                render_help(f, area, &self.theme, self.namespace_hotkeys());
+            } else if let Some(ref submenu) = self.view_state.submenu_state {
+                render_submenu(f, area, submenu, &self.theme);
+            }
+            if self.ui_state.show_quit_confirm {
+                render_quit_confirm(f, area, &self.theme);
+            }
+            return;
+        }
 
         if self.async_state.confirmation_pending.is_some() {
             if let Some(ref confirmation) = self.async_state.confirmation_pending {

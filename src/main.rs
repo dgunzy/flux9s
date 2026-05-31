@@ -29,6 +29,10 @@ struct Args {
     #[arg(long)]
     kubeconfig: Option<std::path::PathBuf>,
 
+    /// Check connection health and exit (0 = healthy, 1 = unhealthy) without starting the UI
+    #[arg(long)]
+    check: bool,
+
     /// Configuration subcommand
     #[command(subcommand)]
     command: Option<Command>,
@@ -157,6 +161,32 @@ async fn main() -> Result<()> {
         context_name
     );
 
+    // Check if we are in a non-interactive environment or check mode is requested
+    use std::io::IsTerminal;
+    let is_interactive = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
+
+    if args.check || !is_interactive {
+        if args.check {
+            tracing::info!("Running connection check requested via --check flag");
+        } else {
+            tracing::info!(
+                "Non-interactive environment detected, running in connection check mode"
+            );
+        }
+
+        let connect_timeout = std::time::Duration::from_secs(config.connect_timeout_seconds);
+        match run_connection_check(args.kubeconfig.as_deref(), connect_timeout).await {
+            Ok(_) => {
+                println!("Connectivity check passed successfully.");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Connectivity check failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Start TUI immediately with splash screen, then initialize Kubernetes in background
     // This ensures splash appears instantly, not after Kubernetes API calls
     tui::run_tui_with_async_init(
@@ -165,12 +195,38 @@ async fn main() -> Result<()> {
         args.debug,
         args.kubeconfig.as_deref(),
         config_warning,
+        log_file,
     )
     .await?;
 
     // Check for updates after TUI exits (blocking, shows notification)
     // This ensures the notification doesn't interfere with TUI display
     cli::check_for_updates_blocking(args.debug);
+
+    Ok(())
+}
+
+async fn run_connection_check(
+    kubeconfig_path: Option<&std::path::Path>,
+    connect_timeout: std::time::Duration,
+) -> Result<()> {
+    use crate::kube::health::{check_connectivity, detect_cluster_server};
+
+    let client = match kubeconfig_path {
+        Some(path) => crate::kube::create_client_from_kubeconfig_path(path).await?,
+        None => crate::kube::create_client().await?,
+    };
+
+    let context = match kubeconfig_path {
+        Some(path) => crate::kube::get_context_from_kubeconfig_path(path)?,
+        None => crate::kube::get_context().await?,
+    };
+
+    let server_url = detect_cluster_server(kubeconfig_path, Some(&context));
+
+    check_connectivity(&client, connect_timeout)
+        .await
+        .map_err(|e| e.with_context(Some(context)).with_server(server_url))?;
 
     Ok(())
 }

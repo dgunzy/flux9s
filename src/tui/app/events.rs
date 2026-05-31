@@ -39,6 +39,60 @@ impl App {
             return self.handle_submenu_key(key);
         }
 
+        // Handle connection error state keys
+        if self.has_connection_error() {
+            // Check status message timeout
+            self.check_status_message_timeout();
+
+            // Clear status messages on Esc
+            if self.ui_state.status_message.is_some()
+                && !self.ui_state.command_mode
+                && key.code == crossterm::event::KeyCode::Esc
+            {
+                self.ui_state.status_message = None;
+                self.ui_state.status_message_time = None;
+                return None;
+            }
+
+            if self.ui_state.command_mode {
+                if let Some(should_quit) = self.handle_command_key(key) {
+                    return Some(should_quit);
+                }
+                return None;
+            }
+
+            // Only allow quit/Esc, Ctrl+C, :, ? when in connection error state
+            match (key.modifiers, key.code) {
+                (crossterm::event::KeyModifiers::CONTROL, crossterm::event::KeyCode::Char('c')) => {
+                    return Some(true);
+                }
+                (crossterm::event::KeyModifiers::NONE, crossterm::event::KeyCode::Char(':')) => {
+                    self.ui_state.command_mode = true;
+                    self.ui_state.command_buffer.clear();
+                    return None;
+                }
+                (crossterm::event::KeyModifiers::NONE, crossterm::event::KeyCode::Char('?')) => {
+                    self.ui_state.show_help = !self.ui_state.show_help;
+                    return None;
+                }
+                (
+                    crossterm::event::KeyModifiers::NONE,
+                    crossterm::event::KeyCode::Char('q') | crossterm::event::KeyCode::Esc,
+                ) => {
+                    return self.navigate_back_or_confirm_quit();
+                }
+                _ => {
+                    // Clear status messages on any key press (except in command mode/etc)
+                    if self.ui_state.status_message.is_some() {
+                        self.ui_state.status_message = None;
+                        self.ui_state.status_message_time = None;
+                    }
+                    // Ignore all other keys
+                    return None;
+                }
+            }
+        }
+
         // Handle Esc to dismiss status messages
         if self.ui_state.status_message.is_some()
             && !self.ui_state.command_mode
@@ -996,6 +1050,18 @@ impl App {
             return None;
         }
 
+        // If we have a connection error, block all commands except context and skin commands.
+        if self.has_connection_error()
+            && !crate::tui::commands::is_context_command(&cmd_lower)
+            && !crate::tui::commands::is_skin_command(&cmd_lower)
+        {
+            self.set_status_message((
+                "Commands are disabled when disconnected (except :ctx, :skin, :q)".to_string(),
+                true,
+            ));
+            return None;
+        }
+
         // Handle skin/theme change command
         if crate::tui::commands::is_skin_command(&cmd_lower) {
             let theme_name = crate::tui::commands::extract_command_arg(cmd, "skin");
@@ -1332,6 +1398,7 @@ mod tests {
             cluster: HashMap::new(),
             favorites: vec![],
             default_resource_filter: None,
+            connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
         };
         let theme = Theme::default();
         App::new(state, "test-context".to_string(), None, config, theme)
@@ -1428,6 +1495,27 @@ mod tests {
             Some((
                 crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
                 true,
+            ))
+        );
+    }
+
+    #[test]
+    fn test_ctx_command_sets_pending_context_switch() {
+        let mut app = create_test_app(false);
+        app.ui_state.command_buffer = "ctx new-context-xyz".to_string();
+
+        let result = app.execute_command();
+
+        assert_eq!(result, None);
+        assert_eq!(
+            app.pending_context_switch,
+            Some("new-context-xyz".to_string())
+        );
+        assert_eq!(
+            app.ui_state.status_message,
+            Some((
+                "Switching to context 'new-context-xyz'...".to_string(),
+                false
             ))
         );
     }

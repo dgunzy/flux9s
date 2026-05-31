@@ -48,6 +48,12 @@ pub struct Config {
     /// Accepts display names (e.g., "Kustomization") or aliases (e.g., "ks") — stored as display name
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_resource_filter: Option<String>,
+
+    /// Timeout (in seconds) for the initial connectivity/health check to the
+    /// Kubernetes API server at startup. Overridable at runtime with the
+    /// `FLUX9S_CONNECT_TIMEOUT` environment variable.
+    #[serde(default = "default_connect_timeout_seconds")]
+    pub connect_timeout_seconds: u64,
 }
 
 /// UI configuration
@@ -96,6 +102,11 @@ fn default_skin() -> String {
     "default".to_string()
 }
 
+/// Default connection/health-check timeout in seconds.
+fn default_connect_timeout_seconds() -> u64 {
+    crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -108,6 +119,7 @@ impl Default for Config {
             cluster: HashMap::new(),
             favorites: Vec::new(), // Empty by default
             default_resource_filter: None,
+            connect_timeout_seconds: default_connect_timeout_seconds(),
         }
     }
 }
@@ -136,6 +148,21 @@ mod tests {
         assert_eq!(config.default_namespace, "flux-system");
         assert_eq!(config.default_controller_namespace, "flux-system");
         assert_eq!(config.ui.skin, "default");
+        assert_eq!(
+            config.connect_timeout_seconds,
+            crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS
+        );
+    }
+
+    #[test]
+    fn test_config_connect_timeout_defaults_when_absent() {
+        // Older config files without the field should still deserialize.
+        let yaml = "readOnly: false\n";
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            config.connect_timeout_seconds,
+            crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS
+        );
     }
 
     #[test]
@@ -144,6 +171,7 @@ mod tests {
         let yaml = serde_yaml::to_string(&config).unwrap();
         assert!(yaml.contains("readOnly"));
         assert!(yaml.contains("defaultNamespace"));
+        assert!(yaml.contains("connectTimeoutSeconds"));
     }
 
     #[test]
@@ -151,12 +179,14 @@ mod tests {
         let yaml = r#"
 readOnly: true
 defaultNamespace: my-ns
+connectTimeoutSeconds: 15
 ui:
   skin: dracula
 "#;
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert!(config.read_only);
         assert_eq!(config.default_namespace, "my-ns");
+        assert_eq!(config.connect_timeout_seconds, 15);
         assert_eq!(config.ui.skin, "dracula");
     }
 }

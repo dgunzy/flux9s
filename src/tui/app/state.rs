@@ -22,6 +22,22 @@ pub enum View {
     Help,
 }
 
+/// Connection status to the Kubernetes API server.
+///
+/// Drives the startup connection-error screen: while `Connecting` the splash is
+/// shown, on `Failed` the full-screen error view takes over (see
+/// [`crate::tui::views::render_connection_error`]).
+#[derive(Debug, Default)]
+pub enum ConnectionStatus {
+    /// Initial connection/health check in progress.
+    #[default]
+    Connecting,
+    /// Successfully connected and watching resources.
+    Connected,
+    /// Connection failed; carries the classified error for display.
+    Failed(Box<crate::kube::health::ConnectionError>),
+}
+
 /// Health filter for resources
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum HealthFilter {
@@ -133,6 +149,8 @@ pub struct UIState {
     pub cached_header_height: u16,
     /// Cached footer height to prevent flicker
     pub cached_footer_height: u16,
+    /// Current connection status to the cluster.
+    pub connection_status: ConnectionStatus,
 }
 
 impl UIState {
@@ -149,6 +167,7 @@ impl UIState {
             cached_terminal_size: None,
             cached_header_height: crate::tui::constants::MIN_HEADER_HEIGHT,
             cached_footer_height: crate::tui::constants::MIN_FOOTER_HEIGHT,
+            connection_status: ConnectionStatus::Connecting,
         }
     }
 }
@@ -184,6 +203,31 @@ pub struct AsyncOperationState {
     pub operation_result_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>>,
     pub last_operation_key: Option<char>,
     pub confirmation_pending: Option<PendingOperation>,
+}
+
+impl AsyncOperationState {
+    pub fn clear_pending(&mut self) {
+        self.yaml_fetch_pending = None;
+        self.yaml_fetched = None;
+        self.yaml_fetch_rx = None;
+
+        self.describe_fetch_pending = None;
+        self.describe_fetched = None;
+        self.describe_fetch_rx = None;
+
+        self.trace_pending = None;
+        self.trace_result = None;
+        self.trace_result_rx = None;
+
+        self.graph_pending = None;
+        self.graph_result = None;
+        self.graph_result_rx = None;
+
+        self.pending_operation = None;
+        self.operation_result_rx = None;
+        self.last_operation_key = None;
+        self.confirmation_pending = None;
+    }
 }
 
 /// Pending operation awaiting confirmation

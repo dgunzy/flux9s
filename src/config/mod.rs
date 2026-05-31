@@ -38,6 +38,7 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
                 .map_err(|e| anyhow::anyhow!("Failed to serialize namespaceHotkeys: {}", e))
         }
         "defaultResourceFilter" => Ok(config.default_resource_filter.clone().unwrap_or_default()),
+        "connectTimeoutSeconds" => Ok(config.connect_timeout_seconds.to_string()),
         _ => Err(anyhow::anyhow!("Unknown configuration key: {}", key)),
     }
 }
@@ -132,8 +133,46 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
                 config.default_resource_filter = Some(display_name.to_string());
             }
         }
+        "connectTimeoutSeconds" => {
+            let seconds = value
+                .parse::<u64>()
+                .context("connectTimeoutSeconds must be a positive integer")?;
+            if seconds == 0 {
+                return Err(anyhow::anyhow!(
+                    "connectTimeoutSeconds must be a positive integer"
+                ));
+            }
+            config.connect_timeout_seconds = seconds;
+        }
         _ => return Err(anyhow::anyhow!("Unknown configuration key: {}", key)),
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_connect_timeout_get_set_config_value() {
+        let mut config = schema::Config::default();
+
+        set_config_value(&mut config, "connectTimeoutSeconds", "15").unwrap();
+
+        assert_eq!(config.connect_timeout_seconds, 15);
+        assert_eq!(
+            get_config_value(&config, "connectTimeoutSeconds").unwrap(),
+            "15"
+        );
+    }
+
+    #[test]
+    fn test_connect_timeout_rejects_zero() {
+        let mut config = schema::Config::default();
+
+        let err = set_config_value(&mut config, "connectTimeoutSeconds", "0").unwrap_err();
+
+        assert!(err.to_string().contains("positive integer"));
+    }
 }

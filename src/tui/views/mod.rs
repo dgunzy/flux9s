@@ -5,6 +5,7 @@
 //! part of the interface.
 
 mod confirmation;
+mod connection_error;
 mod describe;
 mod detail;
 mod footer;
@@ -22,6 +23,7 @@ pub mod trace;
 mod yaml;
 
 pub use confirmation::*;
+pub use connection_error::render_connection_error;
 pub use describe::*;
 pub use detail::*;
 // favorites module is not exported - favorites view uses render_resource_list instead
