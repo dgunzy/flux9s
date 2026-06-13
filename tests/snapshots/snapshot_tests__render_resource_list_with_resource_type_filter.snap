@@ -3,8 +3,8 @@ source: tests/snapshot_tests.rs
 expression: terminal.backend()
 ---
 "┌Kustomization (1)─────────────────────────────────────────────────────────────────────────────────────────────────────┐"
-"│STA NAMESPACE       NAME                           PATH                           REVISION             PRUN SUSPE READ│"
-"│●   flux-system     my-kustomization               -                              main@sha1:abc123     -    False True│"
+"│STATUS  NAMESPACE       NAME                           PATH                           REVISION             PR SU RE AG│"
+"│●       flux-system     my-kustomization               -                              main@sha1:abc123     -  Fa Tr 2h│"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"

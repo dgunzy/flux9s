@@ -89,7 +89,7 @@ pub struct ResourceInfo {
     pub name: String,
     pub namespace: String,
     pub resource_type: String,
-    #[allow(dead_code)] // Set but not yet displayed - reserved for future age display feature
+    /// Creation timestamp (from `metadata.creationTimestamp`), shown as the AGE column
     pub age: Option<chrono::DateTime<chrono::Utc>>,
     // Common status fields across Flux CRDs
     pub suspended: Option<bool>,
@@ -116,6 +116,19 @@ pub fn extract_labels(obj: &serde_json::Value) -> HashMap<String, String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Extract the creation timestamp from a Kubernetes resource JSON object.
+///
+/// Reads `metadata.creationTimestamp` (RFC 3339); used for the AGE column.
+pub fn extract_creation_timestamp(
+    obj: &serde_json::Value,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    obj.get("metadata")
+        .and_then(|m| m.get("creationTimestamp"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
 /// Extract annotations from a Kubernetes resource JSON object
@@ -145,28 +158,42 @@ impl ResourceState {
         }
     }
 
+    /// Acquire the write lock, recovering from poisoning.
+    ///
+    /// A poisoned lock means another thread panicked while holding it; the map
+    /// itself is still valid (worst case one stale entry), so recovering keeps
+    /// the TUI alive instead of cascading the panic.
+    fn write_lock(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<String, ResourceInfo>> {
+        self.inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Acquire the read lock, recovering from poisoning (see [`Self::write_lock`]).
+    fn read_lock(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, ResourceInfo>> {
+        self.inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Add or update a resource
     pub fn upsert(&self, key: String, info: ResourceInfo) {
-        let mut state = self.inner.write().unwrap();
-        state.insert(key, info);
+        self.write_lock().insert(key, info);
     }
 
     /// Remove a resource
     pub fn remove(&self, key: &str) {
-        let mut state = self.inner.write().unwrap();
-        state.remove(key);
+        self.write_lock().remove(key);
     }
 
     /// Get all resources
     pub fn all(&self) -> Vec<ResourceInfo> {
-        let state = self.inner.read().unwrap();
-        state.values().cloned().collect()
+        self.read_lock().values().cloned().collect()
     }
 
     /// Get resources by type
     pub fn by_type(&self, resource_type: &str) -> Vec<ResourceInfo> {
-        let state = self.inner.read().unwrap();
-        state
+        self.read_lock()
             .values()
             .filter(|info| info.resource_type == resource_type)
             .cloned()
@@ -175,13 +202,12 @@ impl ResourceState {
 
     /// Get a specific resource
     pub fn get(&self, key: &str) -> Option<ResourceInfo> {
-        let state = self.inner.read().unwrap();
-        state.get(key).cloned()
+        self.read_lock().get(key).cloned()
     }
 
     /// Count resources by type
     pub fn count_by_type(&self) -> HashMap<String, usize> {
-        let state = self.inner.read().unwrap();
+        let state = self.read_lock();
         let mut counts = HashMap::new();
         for info in state.values() {
             *counts.entry(info.resource_type.clone()).or_insert(0) += 1;
@@ -191,8 +217,7 @@ impl ResourceState {
 
     /// Clear all resources (useful when switching namespaces)
     pub fn clear(&self) {
-        let mut state = self.inner.write().unwrap();
-        state.clear();
+        self.write_lock().clear();
     }
 }
 

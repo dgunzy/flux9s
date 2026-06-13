@@ -16,13 +16,59 @@ use futures::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::Pod;
 use kube::core::DynamicObject;
-use kube::runtime::watcher;
+use kube::runtime::utils::Backoff;
+use kube::runtime::{WatchStreamExt, watcher};
 use kube::{Api, Client, ResourceExt};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::kube::api::{get_flux_api_resources_with_fallback, is_version_missing_error};
 use crate::models::FluxResourceKind;
+
+/// Maximum interval between watch-reconnect attempts.
+///
+/// kube's `default_backoff()` caps at 30s, which makes the "watch degraded"
+/// banner drain slowly: each watcher reconnects independently, and once pinned
+/// at the cap it only retries that often, so the degraded count ticks down one
+/// step per cap interval. A short 3s cap keeps the count draining quickly once
+/// the API server is reachable again. The extra reconnect traffic is negligible
+/// (a few dozen watchers retrying at most every 3s).
+const WATCH_BACKOFF_MAX: Duration = Duration::from_secs(3);
+const WATCH_BACKOFF_MIN: Duration = Duration::from_millis(800);
+
+/// Exponential backoff for watch retries, capped at [`WATCH_BACKOFF_MAX`].
+///
+/// Retries forever — `next()` never returns `None` — so a watcher is never
+/// permanently abandoned during a prolonged outage. `reset()` is called by
+/// `StreamBackoff` on every successful watch event, returning to the minimum.
+struct CappedBackoff {
+    current: Duration,
+}
+
+impl CappedBackoff {
+    fn new() -> Self {
+        Self {
+            current: WATCH_BACKOFF_MIN,
+        }
+    }
+}
+
+impl Iterator for CappedBackoff {
+    type Item = Duration;
+
+    fn next(&mut self) -> Option<Duration> {
+        let delay = self.current;
+        self.current = (self.current * 2).min(WATCH_BACKOFF_MAX);
+        Some(delay)
+    }
+}
+
+impl Backoff for CappedBackoff {
+    fn reset(&mut self) {
+        self.current = WATCH_BACKOFF_MIN;
+    }
+}
 
 /// Event emitted by resource watchers
 #[derive(Debug, Clone)]
@@ -33,6 +79,11 @@ pub enum WatchEvent {
     Deleted(String, String, String), // resource_type, namespace, name
     /// Watch error occurred
     Error(String),
+    /// A watcher started erroring and is retrying with backoff.
+    /// Drives the "watch degraded" banner in the UI.
+    WatcherDegraded(String), // watcher display name
+    /// A previously degraded watcher received a successful event again.
+    WatcherRecovered(String), // watcher display name
     /// Controller pod was added or updated
     PodApplied(String, serde_json::Value), // pod_name, pod_json
     /// Controller pod was deleted
@@ -155,61 +206,25 @@ impl ResourceWatcher {
             };
 
             // In kube 2.0, watcher handles initial resource loading via InitApply events
-            // We no longer need to manually list resources - the watcher does this automatically
-            let mut w = Box::pin(watcher(api, watcher::Config::default()));
+            // We no longer need to manually list resources - the watcher does this automatically.
+            // CappedBackoff paces retries exponentially (resets on success), so a network blip
+            // or API-server restart recovers automatically without a tight error loop.
+            let mut w =
+                Box::pin(watcher(api, watcher::Config::default()).backoff(CappedBackoff::new()));
             let mut error_count = 0u32;
-            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
 
             while let Some(event) = w.next().await {
-                match event {
-                    // Initial apply events (for existing resources when watcher starts)
-                    Ok(watcher::Event::InitApply(obj)) => {
-                        error_count = 0; // Reset error count on success
-                        let name = obj.name_any();
-                        let ns = obj.namespace().unwrap_or_default();
-                        // Send initial resources - namespace filtering happens in TUI
-                        let obj_json = serde_json::to_value(&obj).unwrap_or_default();
-                        let _ = event_tx.send(WatchEvent::Applied(
-                            resource_type.clone(),
-                            ns,
-                            name,
-                            obj_json,
-                        ));
-                    }
-                    // Regular apply events (for updates and new resources)
-                    Ok(watcher::Event::Apply(obj)) => {
-                        error_count = 0; // Reset error count on success
-                        let name = obj.name_any();
-                        let ns = obj.namespace().unwrap_or_default();
-                        // Send all resources - namespace filtering happens in TUI
-                        let obj_json = serde_json::to_value(&obj).unwrap_or_default();
-                        let _ = event_tx.send(WatchEvent::Applied(
-                            resource_type.clone(),
-                            ns,
-                            name,
-                            obj_json,
-                        ));
-                    }
-                    // Delete events
-                    Ok(watcher::Event::Delete(obj)) => {
-                        error_count = 0; // Reset error count on success
-                        let name = obj.name_any();
-                        let ns = obj.namespace().unwrap_or_default();
-                        // Send all deletions - namespace filtering happens in TUI
-                        let _ = event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
-                    }
-                    // Init and InitDone events - watcher lifecycle events, no action needed
-                    Ok(watcher::Event::Init) => {
-                        error_count = 0; // Reset error count on successful initialization
-                        tracing::debug!("{} watcher initialized", display_name);
-                    }
-                    Ok(watcher::Event::InitDone) => {
-                        error_count = 0; // Reset error count on successful initialization
-                        tracing::debug!("{} watcher initialization complete", display_name);
-                    }
+                let ev = match event {
+                    Ok(ev) => ev,
                     Err(e) => {
                         if is_version_missing_error(&format!("{}", e)) {
-                            // CRD not installed or version not served — stop, don't retry
+                            // CRD not installed or version not served — stop, don't retry.
+                            // Clear any degraded state: this watcher is intentionally
+                            // stopping, not reconnecting.
+                            if error_count > 0 {
+                                let _ = event_tx
+                                    .send(WatchEvent::WatcherRecovered(display_name.clone()));
+                            }
                             tracing::info!(
                                 "{} CRD not available in cluster, stopping watcher",
                                 display_name
@@ -222,7 +237,14 @@ impl ResourceWatcher {
                         }
 
                         error_count += 1;
-                        // Only log errors occasionally to avoid spam
+                        if error_count == 1 {
+                            // First error after healthy operation: flag as degraded
+                            let _ =
+                                event_tx.send(WatchEvent::WatcherDegraded(display_name.clone()));
+                        }
+                        // Keep watching: backoff paces the retries, so transient
+                        // outages (laptop sleep, VPN reconnect, API-server restart)
+                        // recover automatically. Only log occasionally to avoid spam.
                         if error_count == 1 || error_count.is_multiple_of(10) {
                             tracing::warn!(
                                 "{} watcher error ({}): {}",
@@ -242,21 +264,39 @@ impl ResourceWatcher {
                                 e
                             );
                         }
-                        // Stop watcher if too many consecutive errors (likely CRD removed)
-                        if error_count >= MAX_CONSECUTIVE_ERRORS {
-                            tracing::error!(
-                                "{} watcher stopped after {} consecutive errors",
-                                display_name,
-                                error_count
-                            );
-                            let _ = event_tx.send(WatchEvent::Error(format!(
-                                "{} watcher stopped after {} consecutive errors",
-                                display_name, error_count
-                            )));
-                            break;
-                        }
-                        // Add small delay before retrying to avoid spam
-                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                };
+
+                // Any successful event after errors means the watch recovered.
+                // Init is excluded: it fires before the HTTP request, so counting it
+                // would flap the degraded state on every retry cycle.
+                if error_count > 0 && !matches!(ev, watcher::Event::Init) {
+                    error_count = 0;
+                    let _ = event_tx.send(WatchEvent::WatcherRecovered(display_name.clone()));
+                }
+
+                match ev {
+                    // Apply events (initial sync and updates) — namespace filtering happens in TUI
+                    watcher::Event::InitApply(obj) | watcher::Event::Apply(obj) => {
+                        let name = obj.name_any();
+                        let ns = obj.namespace().unwrap_or_default();
+                        let obj_json = serde_json::to_value(&obj).unwrap_or_default();
+                        let _ = event_tx.send(WatchEvent::Applied(
+                            resource_type.clone(),
+                            ns,
+                            name,
+                            obj_json,
+                        ));
+                    }
+                    watcher::Event::Delete(obj) => {
+                        let name = obj.name_any();
+                        let ns = obj.namespace().unwrap_or_default();
+                        let _ = event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
+                    }
+                    // Watcher lifecycle events, no action needed
+                    watcher::Event::Init | watcher::Event::InitDone => {
+                        tracing::debug!("{} watcher init event", display_name);
                     }
                 }
             }
@@ -278,45 +318,50 @@ impl ResourceWatcher {
             // that may use different labels
             let config = watcher::Config::default();
 
-            let mut w = Box::pin(watcher(api, config));
+            let mut w = Box::pin(watcher(api, config).backoff(CappedBackoff::new()));
             let mut error_count = 0u32;
-            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
 
             tracing::debug!(
                 "Starting Flux controller pod watcher for namespace: {}",
                 namespace
             );
 
+            const WATCHER_NAME: &str = "Controller pods";
             while let Some(event) = w.next().await {
-                match event {
-                    Ok(watcher::Event::InitApply(pod)) | Ok(watcher::Event::Apply(pod)) => {
-                        error_count = 0;
+                let ev = match event {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        error_count += 1;
+                        if error_count == 1 {
+                            let _ = event_tx
+                                .send(WatchEvent::WatcherDegraded(WATCHER_NAME.to_string()));
+                        }
+                        // Keep watching: backoff paces the retries.
+                        if error_count == 1 || error_count.is_multiple_of(10) {
+                            tracing::warn!("Pod watcher error ({}): {}", error_count, e);
+                        }
+                        continue;
+                    }
+                };
+
+                // Init is excluded: it fires before the HTTP request succeeds
+                if error_count > 0 && !matches!(ev, watcher::Event::Init) {
+                    error_count = 0;
+                    let _ = event_tx.send(WatchEvent::WatcherRecovered(WATCHER_NAME.to_string()));
+                }
+
+                match ev {
+                    watcher::Event::InitApply(pod) | watcher::Event::Apply(pod) => {
                         let name = pod.name_any();
                         let pod_json = serde_json::to_value(&pod).unwrap_or_default();
                         let _ = event_tx.send(WatchEvent::PodApplied(name, pod_json));
                     }
-                    Ok(watcher::Event::Delete(pod)) => {
-                        error_count = 0;
+                    watcher::Event::Delete(pod) => {
                         let name = pod.name_any();
                         let _ = event_tx.send(WatchEvent::PodDeleted(name));
                     }
-                    Ok(watcher::Event::Init) | Ok(watcher::Event::InitDone) => {
-                        error_count = 0;
+                    watcher::Event::Init | watcher::Event::InitDone => {
                         tracing::debug!("Flux controller pod watcher initialized");
-                    }
-                    Err(e) => {
-                        error_count += 1;
-                        if error_count == 1 || error_count.is_multiple_of(10) {
-                            tracing::warn!("Pod watcher error ({}): {}", error_count, e);
-                        }
-                        if error_count >= MAX_CONSECUTIVE_ERRORS {
-                            tracing::error!(
-                                "Pod watcher stopped after {} consecutive errors",
-                                error_count
-                            );
-                            break;
-                        }
-                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                     }
                 }
             }
@@ -336,20 +381,40 @@ impl ResourceWatcher {
             let api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
             let config = watcher::Config::default();
 
-            let mut w = Box::pin(watcher(api, config));
+            let mut w = Box::pin(watcher(api, config).backoff(CappedBackoff::new()));
             let mut error_count = 0u32;
-            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
 
             tracing::debug!(
                 "Starting Flux controller deployment watcher for namespace: {}",
                 namespace
             );
 
+            const WATCHER_NAME: &str = "Controller deployments";
             while let Some(event) = w.next().await {
-                match event {
-                    Ok(watcher::Event::InitApply(deployment))
-                    | Ok(watcher::Event::Apply(deployment)) => {
-                        error_count = 0;
+                let ev = match event {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        error_count += 1;
+                        if error_count == 1 {
+                            let _ = event_tx
+                                .send(WatchEvent::WatcherDegraded(WATCHER_NAME.to_string()));
+                        }
+                        // Keep watching: backoff paces the retries.
+                        if error_count == 1 || error_count.is_multiple_of(10) {
+                            tracing::warn!("Deployment watcher error ({}): {}", error_count, e);
+                        }
+                        continue;
+                    }
+                };
+
+                // Init is excluded: it fires before the HTTP request succeeds
+                if error_count > 0 && !matches!(ev, watcher::Event::Init) {
+                    error_count = 0;
+                    let _ = event_tx.send(WatchEvent::WatcherRecovered(WATCHER_NAME.to_string()));
+                }
+
+                match ev {
+                    watcher::Event::InitApply(deployment) | watcher::Event::Apply(deployment) => {
                         // Only track Flux deployments (with app.kubernetes.io/part-of: flux label)
                         if let Some(labels) = &deployment.metadata.labels {
                             if labels.get("app.kubernetes.io/part-of") == Some(&"flux".to_string())
@@ -361,27 +426,11 @@ impl ResourceWatcher {
                             }
                         }
                     }
-                    Ok(watcher::Event::Delete(_)) => {
-                        error_count = 0;
+                    watcher::Event::Delete(_) => {
                         // We don't need to track deletion - version will just become unavailable
                     }
-                    Ok(watcher::Event::Init) | Ok(watcher::Event::InitDone) => {
-                        error_count = 0;
+                    watcher::Event::Init | watcher::Event::InitDone => {
                         tracing::debug!("Flux controller deployment watcher initialized");
-                    }
-                    Err(e) => {
-                        error_count += 1;
-                        if error_count == 1 || error_count.is_multiple_of(10) {
-                            tracing::warn!("Deployment watcher error ({}): {}", error_count, e);
-                        }
-                        if error_count >= MAX_CONSECUTIVE_ERRORS {
-                            tracing::error!(
-                                "Deployment watcher stopped after {} consecutive errors",
-                                error_count
-                            );
-                            break;
-                        }
-                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                     }
                 }
             }
@@ -406,6 +455,9 @@ impl ResourceWatcher {
         let resource_type = display_name.to_string();
 
         let handle = tokio::spawn(async move {
+            // Tracks the degraded banner across version attempts so a recovery
+            // (or giving up) on a later version still clears it.
+            let mut degraded_sent = false;
             for api_resource in api_resources {
                 let version = api_resource.version.clone();
                 let api: Api<DynamicObject> = match namespace {
@@ -428,71 +480,16 @@ impl ResourceWatcher {
                     }
                 };
 
-                let mut w = Box::pin(watcher(api, watcher::Config::default()));
+                let mut w = Box::pin(
+                    watcher(api, watcher::Config::default()).backoff(CappedBackoff::new()),
+                );
                 let mut error_count = 0u32;
-                const MAX_CONSECUTIVE_ERRORS: u32 = 5;
                 let mut version_working = false;
 
                 loop {
-                    match w.next().await {
-                        Some(Ok(watcher::Event::InitApply(obj))) => {
-                            error_count = 0;
-                            version_working = true;
-                            let name = obj.name_any();
-                            let ns = obj.namespace().unwrap_or_default();
-                            let obj_json = serde_json::to_value(&obj).unwrap_or_default();
-                            let _ = event_tx.send(WatchEvent::Applied(
-                                resource_type.clone(),
-                                ns,
-                                name,
-                                obj_json,
-                            ));
-                        }
-                        Some(Ok(watcher::Event::Apply(obj))) => {
-                            error_count = 0;
-                            version_working = true;
-                            let name = obj.name_any();
-                            let ns = obj.namespace().unwrap_or_default();
-                            let obj_json = serde_json::to_value(&obj).unwrap_or_default();
-                            let _ = event_tx.send(WatchEvent::Applied(
-                                resource_type.clone(),
-                                ns,
-                                name,
-                                obj_json,
-                            ));
-                        }
-                        Some(Ok(watcher::Event::Delete(obj))) => {
-                            error_count = 0;
-                            version_working = true;
-                            let name = obj.name_any();
-                            let ns = obj.namespace().unwrap_or_default();
-                            let _ =
-                                event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
-                        }
-                        Some(Ok(watcher::Event::Init)) => {
-                            // Init fires before the HTTP request — does NOT confirm the version
-                            // exists. Only reset the error counter so transient failures during
-                            // an already-working watch don't accumulate toward MAX_CONSECUTIVE_ERRORS.
-                            error_count = 0;
-                            tracing::debug!(
-                                "{} watcher (version {}) starting",
-                                display_name,
-                                version
-                            );
-                        }
-                        Some(Ok(watcher::Event::InitDone)) => {
-                            // InitDone fires after a successful initial list — confirms the version
-                            // exists on this cluster (even if there are no resources yet).
-                            error_count = 0;
-                            version_working = true;
-                            tracing::debug!(
-                                "{} watcher (version {}) confirmed available",
-                                display_name,
-                                version
-                            );
-                        }
+                    let ev = match w.next().await {
+                        Some(Ok(ev)) => ev,
                         Some(Err(e)) => {
-                            error_count += 1;
                             if is_version_missing_error(&format!("{}", e)) && !version_working {
                                 tracing::debug!(
                                     "{} version {} not available, trying next version",
@@ -502,21 +499,36 @@ impl ResourceWatcher {
                                 break; // Try next version
                             }
 
-                            if error_count >= MAX_CONSECUTIVE_ERRORS {
-                                tracing::error!(
-                                    "{} watcher (version {}) stopped after {} consecutive errors",
+                            error_count += 1;
+                            if !degraded_sent {
+                                degraded_sent = true;
+                                let _ = event_tx
+                                    .send(WatchEvent::WatcherDegraded(resource_type.clone()));
+                            }
+                            // Keep watching: backoff paces the retries, so transient
+                            // outages recover automatically instead of killing the watcher.
+                            if error_count == 1 || error_count.is_multiple_of(10) {
+                                tracing::warn!(
+                                    "{} watcher (version {}) error ({}): {}",
                                     display_name,
                                     version,
-                                    error_count
+                                    error_count,
+                                    e
                                 );
                                 let _ = event_tx.send(WatchEvent::Error(format!(
-                                    "{} watcher stopped after {} consecutive errors",
-                                    display_name, error_count
+                                    "{} watcher error ({}): {}",
+                                    display_name, error_count, e
                                 )));
-                                return;
+                            } else {
+                                tracing::debug!(
+                                    "{} watcher (version {}) error ({}): {}",
+                                    display_name,
+                                    version,
+                                    error_count,
+                                    e
+                                );
                             }
-
-                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                            continue;
                         }
                         None => {
                             tracing::debug!(
@@ -525,6 +537,58 @@ impl ResourceWatcher {
                                 version
                             );
                             break;
+                        }
+                    };
+
+                    // Any successful event after errors means the watch recovered.
+                    // Init is excluded: it fires before the HTTP request succeeds.
+                    if !matches!(ev, watcher::Event::Init) {
+                        error_count = 0;
+                        if degraded_sent {
+                            degraded_sent = false;
+                            let _ =
+                                event_tx.send(WatchEvent::WatcherRecovered(resource_type.clone()));
+                        }
+                    }
+
+                    match ev {
+                        watcher::Event::InitApply(obj) | watcher::Event::Apply(obj) => {
+                            version_working = true;
+                            let name = obj.name_any();
+                            let ns = obj.namespace().unwrap_or_default();
+                            let obj_json = serde_json::to_value(&obj).unwrap_or_default();
+                            let _ = event_tx.send(WatchEvent::Applied(
+                                resource_type.clone(),
+                                ns,
+                                name,
+                                obj_json,
+                            ));
+                        }
+                        watcher::Event::Delete(obj) => {
+                            version_working = true;
+                            let name = obj.name_any();
+                            let ns = obj.namespace().unwrap_or_default();
+                            let _ =
+                                event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
+                        }
+                        watcher::Event::Init => {
+                            // Init fires before the HTTP request — does NOT confirm the
+                            // version exists on this cluster.
+                            tracing::debug!(
+                                "{} watcher (version {}) starting",
+                                display_name,
+                                version
+                            );
+                        }
+                        watcher::Event::InitDone => {
+                            // InitDone fires after a successful initial list — confirms the version
+                            // exists on this cluster (even if there are no resources yet).
+                            version_working = true;
+                            tracing::debug!(
+                                "{} watcher (version {}) confirmed available",
+                                display_name,
+                                version
+                            );
                         }
                     }
                 }
@@ -535,6 +599,11 @@ impl ResourceWatcher {
                 }
             }
 
+            // Clear any degraded state before giving up: the watcher is stopping
+            // for good (CRD absent), not reconnecting.
+            if degraded_sent {
+                let _ = event_tx.send(WatchEvent::WatcherRecovered(resource_type.clone()));
+            }
             let _ = event_tx.send(WatchEvent::Error(format!(
                 "{} watcher: no supported API version found on this cluster",
                 display_name
@@ -609,6 +678,15 @@ impl ResourceWatcher {
             handle.abort();
         }
         self.handles.clear();
+    }
+}
+
+/// Dropping a `JoinHandle` only detaches the task, so without this the watch
+/// streams would keep running against the old cluster after a context switch
+/// replaces the watcher.
+impl Drop for ResourceWatcher {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -738,5 +816,39 @@ impl std::fmt::Debug for ResourceWatcher {
             .field("client", &"<kube::Client>")
             .field("event_tx", &"<mpsc::UnboundedSender>")
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::*;
+
+    #[test]
+    fn test_capped_backoff_grows_then_caps() {
+        let mut b = CappedBackoff::new();
+        assert_eq!(b.next(), Some(WATCH_BACKOFF_MIN)); // 800ms
+        assert_eq!(b.next(), Some(Duration::from_millis(1600)));
+        // Next step would be 3.2s but is capped at the 3s max
+        assert_eq!(b.next(), Some(WATCH_BACKOFF_MAX));
+        assert_eq!(b.next(), Some(WATCH_BACKOFF_MAX));
+    }
+
+    #[test]
+    fn test_capped_backoff_never_gives_up() {
+        // A watcher must never be permanently abandoned: next() is always Some.
+        let mut b = CappedBackoff::new();
+        for _ in 0..1000 {
+            assert!(b.next().is_some());
+        }
+    }
+
+    #[test]
+    fn test_capped_backoff_reset_returns_to_min() {
+        let mut b = CappedBackoff::new();
+        for _ in 0..10 {
+            b.next();
+        }
+        b.reset();
+        assert_eq!(b.next(), Some(WATCH_BACKOFF_MIN));
     }
 }

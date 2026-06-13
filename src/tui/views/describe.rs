@@ -1,11 +1,13 @@
 //! Describe view rendering
 
+use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
+use crate::tui::views::yaml::{apply_text_search, decorate_title_with_search, find_match_lines};
 use crate::watcher::ResourceState;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
@@ -222,6 +224,7 @@ pub fn render_resource_describe(
     describe_fetched: &Option<serde_json::Value>,
     describe_fetch_pending: &Option<String>,
     describe_scroll_offset: &mut usize,
+    search: &mut TextSearchState,
     theme: &Theme,
 ) {
     let key = match selected_resource_key {
@@ -269,7 +272,7 @@ pub fn render_resource_describe(
 
     let cleaned_json = crate::tui::views::helpers::clean_resource_json(&obj_json);
     let resource = state.get(key);
-    let title = if let Some(ref resource) = resource {
+    let mut title = if let Some(ref resource) = resource {
         format!("Describe - {} - {}", resource.resource_type, resource.name)
     } else {
         "Describe".to_string()
@@ -277,14 +280,40 @@ pub fn render_resource_describe(
 
     let all_lines = build_describe_lines(resource.as_ref(), &cleaned_json, theme);
     let visible_height = area.height.saturating_sub(2) as usize;
+
+    // Text search: match against the plain-text content of each line
+    let line_texts: Vec<String> = all_lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+    let match_lines = find_match_lines(&line_texts, &search.query);
+    let current_match_line =
+        apply_text_search(search, &match_lines, describe_scroll_offset, visible_height);
+    decorate_title_with_search(&mut title, search);
+
     let max_scroll = all_lines.len().saturating_sub(visible_height);
     *describe_scroll_offset = (*describe_scroll_offset).min(max_scroll);
 
     let visible_lines: Vec<Line> = all_lines
         .iter()
+        .enumerate()
         .skip(*describe_scroll_offset)
         .take(visible_height)
-        .cloned()
+        .map(|(idx, line)| {
+            let line = line.clone();
+            if Some(idx) == current_match_line {
+                line.style(Style::default().add_modifier(Modifier::REVERSED))
+            } else if match_lines.binary_search(&idx).is_ok() {
+                line.style(Style::default().add_modifier(Modifier::UNDERLINED))
+            } else {
+                line
+            }
+        })
         .collect();
 
     let block = crate::tui::views::helpers::create_themed_block(&title, theme);

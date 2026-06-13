@@ -299,7 +299,7 @@ impl ClusterSession {
                         name,
                         namespace: ns,
                         resource_type,
-                        age: Some(chrono::Utc::now()),
+                        age: crate::watcher::extract_creation_timestamp(&obj_json),
                         suspended,
                         ready,
                         message,
@@ -318,6 +318,12 @@ impl ClusterSession {
             // Pod/Deployment events are TUI-specific (controller status bar)
             WatchEvent::Error(msg) => {
                 tracing::warn!("Watch event error: {}", msg);
+            }
+            WatchEvent::WatcherDegraded(name) => {
+                tracing::warn!("Watcher degraded (retrying with backoff): {}", name);
+            }
+            WatchEvent::WatcherRecovered(name) => {
+                tracing::info!("Watcher recovered: {}", name);
             }
             WatchEvent::PodApplied(_, _)
             | WatchEvent::PodDeleted(_)

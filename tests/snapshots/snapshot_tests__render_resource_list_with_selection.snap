@@ -3,10 +3,10 @@ source: tests/snapshot_tests.rs
 expression: terminal.backend()
 ---
 "┌All Resources (3)─────────────────────────────────────────────────────────────────────────────────────────────────────┐"
-"│STATUS NAMESPACE       NAME                           TYPE                 SUSPENDED  READY  MESSAGE                  │"
-"│✗      default         my-helmrelease                 HelmRelease          True       False  Suspended                │"
-"│●      flux-system     my-gitrepo                     GitRepository        False      True   Fetched revision: main@sh│"
-"│●      flux-system     my-kustomization               Kustomization        False      True   Applied revision: main@sh│"
+"│STATUS  NAMESPACE       NAME                           TYPE                 SUSPENDED  READY  AGE     MESSAGE         │"
+"│✗       default         my-helmrelease                 HelmRelease          True       False  3h      Suspended       │"
+"│●       flux-system     my-gitrepo                     GitRepository        False      True   1h      Fetched revision│"
+"│●       flux-system     my-kustomization               Kustomization        False      True   2h      Applied revision│"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"

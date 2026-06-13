@@ -115,7 +115,9 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `j` / `k` - Navigate up/down
 - `:` - Command mode (e.g., `:kustomization`, `:gitrepository`)
 - `Enter` - View resource details
-- `/` - Filter resources by name
+- `/` - Filter resources by name (list views) or search text (YAML/describe/trace views)
+- `n` / `N` - Next/previous search match (in text views)
+- `Shift+N` / `Shift+A` / `Shift+T` / `Shift+S` - Sort by name/age/type/status (press again to reverse)
 - `s` - Suspend resource
 - `r` - Resume resource
 - `R` - Reconcile resource

@@ -5,7 +5,7 @@
 
 use flux9s::config::{Config, UiConfig};
 use flux9s::tui::Theme;
-use flux9s::tui::app::state::ControllerPodState;
+use flux9s::tui::app::state::{ControllerPodState, SortField, TextSearchState};
 use flux9s::tui::views::{
     render_footer, render_header, render_resource_describe, render_resource_detail,
     render_resource_list, render_resource_yaml,
@@ -229,6 +229,8 @@ fn test_render_footer_navigation() {
                 false,
                 "",
                 false,
+                "",
+                false,
                 false,
                 &None,
                 &None,
@@ -261,6 +263,8 @@ fn test_render_footer_command_mode() {
                 area,
                 true,
                 ":kustomization",
+                false,
+                "",
                 false,
                 "",
                 false,
@@ -298,6 +302,8 @@ fn test_render_footer_filter_mode() {
                 "",
                 true,
                 "my-",
+                false,
+                "",
                 false,
                 false,
                 &None,
@@ -348,6 +354,8 @@ fn test_render_resource_list() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                SortField::Default,
+                false,
             );
         })
         .unwrap();
@@ -388,6 +396,8 @@ fn test_render_resource_list_with_selection() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                SortField::Default,
+                false,
             );
         })
         .unwrap();
@@ -425,6 +435,8 @@ fn test_render_resource_list_with_resource_type_filter() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                SortField::Default,
+                false,
             );
         })
         .unwrap();
@@ -455,6 +467,8 @@ fn test_render_resource_list_empty() {
                 &theme,
                 config.ui.no_icons,
                 &HashSet::new(),
+                SortField::Default,
+                false,
             );
         })
         .unwrap();
@@ -564,6 +578,7 @@ fn test_render_resource_describe_with_data() {
                 &Some(resource_json),
                 &None,
                 &mut describe_scroll_offset,
+                &mut TextSearchState::default(),
                 &theme,
             );
         })
@@ -593,6 +608,7 @@ fn test_render_resource_yaml_no_selection() {
                 &None,
                 &None,
                 &mut yaml_scroll_offset,
+                &mut TextSearchState::default(),
                 &theme,
             );
         })
@@ -622,6 +638,7 @@ fn test_render_resource_yaml_pending() {
                 &None,
                 &Some("Kustomization:flux-system:my-kustomization".to_string()),
                 &mut yaml_scroll_offset,
+                &mut TextSearchState::default(),
                 &theme,
             );
         })
@@ -677,6 +694,7 @@ fn test_render_resource_yaml_with_data() {
                 &Some(resource_json),
                 &None,
                 &mut yaml_scroll_offset,
+                &mut TextSearchState::default(),
                 &theme,
             );
         })
@@ -699,6 +717,8 @@ fn test_render_footer_connection_error() {
             render_footer(
                 frame,
                 area,
+                false,
+                "",
                 false,
                 "",
                 false,

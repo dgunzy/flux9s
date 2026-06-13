@@ -129,3 +129,44 @@ pub fn create_themed_block<'a>(title: &'a str, theme: &Theme) -> Block<'a> {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.text_label))
 }
+
+/// Format a resource age (creation timestamp) as a compact k9s-style duration.
+///
+/// Uses the largest applicable unit: `42s`, `5m`, `3h`, `12d`, `2y`.
+/// Returns `-` when the timestamp is unknown.
+pub fn format_age(age: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    let Some(created) = age else {
+        return "-".to_string();
+    };
+    let seconds = (chrono::Utc::now() - created).num_seconds().max(0);
+    match seconds {
+        s if s < 60 => format!("{}s", s),
+        s if s < 60 * 60 => format!("{}m", s / 60),
+        s if s < 24 * 60 * 60 => format!("{}h", s / (60 * 60)),
+        s if s < 365 * 24 * 60 * 60 => format!("{}d", s / (24 * 60 * 60)),
+        s => format!("{}y", s / (365 * 24 * 60 * 60)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn test_format_age_units() {
+        assert_eq!(format_age(None), "-");
+        assert_eq!(format_age(Some(Utc::now())), "0s");
+        assert_eq!(format_age(Some(Utc::now() - Duration::seconds(42))), "42s");
+        assert_eq!(format_age(Some(Utc::now() - Duration::minutes(5))), "5m");
+        assert_eq!(format_age(Some(Utc::now() - Duration::hours(3))), "3h");
+        assert_eq!(format_age(Some(Utc::now() - Duration::days(12))), "12d");
+        assert_eq!(format_age(Some(Utc::now() - Duration::days(800))), "2y");
+    }
+
+    #[test]
+    fn test_format_age_future_timestamp_clamps_to_zero() {
+        // Clock skew between client and API server should not render negative ages
+        assert_eq!(format_age(Some(Utc::now() + Duration::seconds(30))), "0s");
+    }
+}

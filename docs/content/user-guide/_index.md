@@ -55,7 +55,12 @@ Use these keyboard shortcuts to navigate flux9s:
 | `j` / `k` | Navigate up/down                                        |
 | `:`       | Command mode (e.g., `:kustomization`, `:gitrepository`) |
 | `Enter`   | View resource details                                   |
-| `/`       | Filter resources by name                                |
+| `/`       | Filter resources by name (in list views) or search text (in YAML/describe/trace views) |
+| `n` / `N` | Jump to next/previous search match (in YAML/describe/trace views) |
+| `Shift+N` | Sort list by name (press again to reverse, third press restores default order) |
+| `Shift+A` | Sort list by age                                        |
+| `Shift+T` | Sort list by type                                       |
+| `Shift+S` | Sort list by status (problems first)                    |
 | `s`       | Suspend reconciliation                                  |
 | `r`       | Resume reconciliation                                   |
 | `R`       | Reconcile resource                                      |
@@ -164,6 +169,30 @@ The header displays a health percentage indicator showing the overall health of 
 - **Green (●)** - 90% or higher health
 - **Yellow (⚠)** - 70-89% health
 - **Red (✗)** - Below 70% health
+
+## Sorting
+
+Sort the resource list k9s-style with shift-key shortcuts: `Shift+N` (name), `Shift+A` (age), `Shift+T` (type), or `Shift+S` (status, problems first). Press the same key again to reverse the order, and a third time to restore the default namespace/type/name ordering. The active sort column is marked with an arrow (`↑`/`↓`) in the table header, and favorites always stay grouped at the top.
+
+## Searching Text Views
+
+Inside the YAML (`y`), describe (`d`), and trace (`t`) views, press `/` to search:
+
+- Type a query and press `Enter` to jump to the first match (matching is case-insensitive)
+- `n` / `N` - Jump to the next/previous match
+- `Esc` - Clear the search (press again to leave the view)
+
+The view title shows the active query and match position (e.g., `/spec (2/7)`), and matching lines are highlighted.
+
+## Watch Status Banner
+
+flux9s watches the cluster continuously. If the connection to the API server degrades (network outage, VPN reconnect, laptop sleep), a red banner appears in the top-right corner of the resource list:
+
+```
+⚠ Watch degraded (N) — data may be stale, reconnecting...
+```
+
+Watchers retry automatically with exponential backoff; the banner disappears as soon as the watch streams recover. While the banner is visible, the displayed resources may be out of date.
 
 ## Resource Views
 

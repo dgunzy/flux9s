@@ -56,6 +56,43 @@ pub struct Config {
     pub connect_timeout_seconds: u64,
 }
 
+impl Config {
+    /// Resolve which skin to use for the given context.
+    ///
+    /// Priority order:
+    /// 1. `FLUX9S_SKIN` environment variable (highest)
+    /// 2. Context-specific skin from `contextSkins`
+    /// 3. Readonly-specific skin (`ui.skinReadOnly`) when `readOnly` is true
+    /// 4. Default skin (`ui.skin`)
+    pub fn resolve_skin_name(&self, context_name: Option<&str>) -> String {
+        if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
+            tracing::debug!(
+                "Using skin from FLUX9S_SKIN environment variable: {}",
+                env_skin
+            );
+            return env_skin;
+        }
+        if let Some(context) = context_name {
+            if let Some(context_skin) = self.context_skins.get(context) {
+                tracing::debug!(
+                    "Using context-specific skin for '{}': {}",
+                    context,
+                    context_skin
+                );
+                return context_skin.clone();
+            }
+        }
+        if self.read_only {
+            if let Some(ref skin) = self.ui.skin_read_only {
+                tracing::debug!("Using readonly-specific skin: {}", skin);
+                return skin.clone();
+            }
+        }
+        tracing::debug!("Using default skin: {}", self.ui.skin);
+        self.ui.skin.clone()
+    }
+}
+
 /// UI configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

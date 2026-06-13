@@ -104,49 +104,8 @@ async fn main() -> Result<()> {
 
     let read_only = config.read_only;
 
-    // Determine which skin to use (priority order):
-    // 1. FLUX9S_SKIN environment variable (highest priority)
-    // 2. Context-specific skin from config.context_skins
-    // 3. Readonly-specific skin (config.ui.skin_read_only) if readonly mode
-    // 4. Default skin (config.ui.skin)
-    let skin_name = if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
-        tracing::debug!(
-            "Using skin from FLUX9S_SKIN environment variable: {}",
-            env_skin
-        );
-        env_skin
-    } else if let Some(context) = context_name {
-        if let Some(context_skin) = config.context_skins.get(context) {
-            tracing::debug!(
-                "Using context-specific skin for '{}': {}",
-                context,
-                context_skin
-            );
-            context_skin.clone()
-        } else if read_only {
-            if let Some(ref skin) = config.ui.skin_read_only {
-                tracing::debug!("Using readonly-specific skin: {}", skin);
-                skin.clone()
-            } else {
-                tracing::debug!("Using default skin: {}", config.ui.skin);
-                config.ui.skin.clone()
-            }
-        } else {
-            tracing::debug!("Using default skin: {}", config.ui.skin);
-            config.ui.skin.clone()
-        }
-    } else if read_only {
-        if let Some(ref skin) = config.ui.skin_read_only {
-            tracing::debug!("Using readonly-specific skin: {}", skin);
-            skin.clone()
-        } else {
-            tracing::debug!("Using default skin: {}", config.ui.skin);
-            config.ui.skin.clone()
-        }
-    } else {
-        tracing::debug!("Using default skin: {}", config.ui.skin);
-        config.ui.skin.clone()
-    };
+    // Determine which skin to use (env var > context skin > readonly skin > default)
+    let skin_name = config.resolve_skin_name(context_name);
 
     // Load theme based on determined skin name
     let theme = config::ThemeLoader::load_theme(&skin_name).unwrap_or_else(|e| {
