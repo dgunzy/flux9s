@@ -41,7 +41,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         ("<Q>", "Quit immediately"),
         ("<?>", "Show/hide help"),
         ("<:>", "Command mode"),
-        ("</>", "Filter resources"),
+        ("</>", "Filter list / search text views"),
         ("<Tab>", "Autocomplete command"),
         (":help", "Show/hide help"),
         (":readonly", "Toggle readonly mode"),
@@ -66,6 +66,9 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         ("<Ctrl+f>/<PgDn>", "Page down"),
         ("<Ctrl+b>/<PgUp>", "Page up"),
         ("<Enter>", "View details"),
+        ("<N>/<A>/<T>/<S>", "Sort name/age/type/status"),
+        ("</>", "Search in YAML/describe/trace"),
+        ("<n>/<N>", "Next/prev search match"),
         ("<q>/<Esc>", "Back / quit at root"),
     ];
     render_help_column(f, column_chunks[2], "NAVIGATION", &nav_items, theme);

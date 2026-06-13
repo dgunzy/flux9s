@@ -1,5 +1,6 @@
 //! Resource list view rendering
 
+use crate::tui::app::state::SortField;
 use crate::tui::theme::Theme;
 use crate::tui::views::{extract_resource_specific_fields, get_resource_type_columns};
 use crate::watcher::ResourceInfo;
@@ -13,6 +14,21 @@ use ratatui::{
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 
+/// Decorate a header column name with a sort arrow when it is the active sort.
+fn decorate_header(col: &str, sort_field: SortField, sort_reverse: bool, no_icons: bool) -> String {
+    if sort_field.column_name() == Some(col) {
+        let arrow = match (sort_reverse, no_icons) {
+            (false, false) => "↑",
+            (true, false) => "↓",
+            (false, true) => "^",
+            (true, true) => "v",
+        };
+        format!("{}{}", col, arrow)
+    } else {
+        col.to_string()
+    }
+}
+
 /// Render the resource list table
 pub fn render_resource_list(
     f: &mut Frame,
@@ -25,6 +41,8 @@ pub fn render_resource_list(
     theme: &Theme,
     no_icons: bool,
     favorites: &HashSet<String>,
+    sort_field: SortField,
+    sort_reverse: bool,
 ) {
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling
@@ -67,16 +85,20 @@ pub fn render_resource_list(
 
     let (rows, header, constraints): (Vec<Row>, Row, Vec<Constraint>) = if is_unified {
         // Unified view: show common fields with status indicator
-        let header = Row::new(vec![
+        let header_cells: Vec<String> = [
             "STATUS",
             "NAMESPACE",
             "NAME",
             "TYPE",
             "SUSPENDED",
             "READY",
+            "AGE",
             "MESSAGE",
-        ])
-        .style(
+        ]
+        .iter()
+        .map(|col| decorate_header(col, sort_field, sort_reverse, no_icons))
+        .collect();
+        let header = Row::new(header_cells).style(
             Style::default()
                 .fg(theme.table_header)
                 .add_modifier(Modifier::BOLD),
@@ -144,14 +166,15 @@ pub fn render_resource_list(
                     Cell::from(r.resource_type.clone()),
                     Cell::from(suspended_str),
                     Cell::from(ready_str),
+                    Cell::from(crate::tui::views::helpers::format_age(r.age)),
                     Cell::from(message_display),
                 ])
                 .style(style)
             })
             .collect();
 
-        // Status column width: "STATUS" header needs 6 chars (icon is only 1 char, so fits fine)
-        let status_width = 6;
+        // Status column width: 7 chars fits "STATUS" plus a sort arrow
+        let status_width = 7;
         let constraints: Vec<Constraint> = vec![
             Constraint::Length(status_width), // STATUS
             Constraint::Min(15),              // NAMESPACE
@@ -159,15 +182,21 @@ pub fn render_resource_list(
             Constraint::Min(20),              // TYPE
             Constraint::Length(10),           // SUSPENDED
             Constraint::Length(6),            // READY
+            Constraint::Length(7),            // AGE
             Constraint::Percentage(40),       // MESSAGE
         ];
 
         (rows, header, constraints)
     } else {
-        // Resource-type-specific view: show type-specific fields
+        // Resource-type-specific view: show type-specific fields (plus AGE)
         let resource_type = selected_resource_type.as_ref().unwrap();
-        let column_names = get_resource_type_columns(resource_type);
-        let header = Row::new(column_names.clone()).style(
+        let mut column_names = get_resource_type_columns(resource_type);
+        column_names.push("AGE");
+        let header_cells: Vec<String> = column_names
+            .iter()
+            .map(|col| decorate_header(col, sort_field, sort_reverse, no_icons))
+            .collect();
+        let header = Row::new(header_cells).style(
             Style::default()
                 .fg(theme.table_header)
                 .add_modifier(Modifier::BOLD),
@@ -257,6 +286,7 @@ pub fn render_resource_list(
                                 .unwrap_or_else(|| "?".to_string()),
                         ),
                         "REVISION" => Cell::from(r.revision.clone().unwrap_or("-".to_string())),
+                        "AGE" => Cell::from(crate::tui::views::helpers::format_age(r.age)),
                         "MESSAGE" => {
                             let msg = r.message.as_deref().unwrap_or("-");
                             let display = if msg.len() > 50 {
@@ -284,10 +314,12 @@ pub fn render_resource_list(
         let constraints: Vec<Constraint> = column_names
             .iter()
             .map(|col| match *col {
-                "STATUS" => Constraint::Length(if no_icons { 6 } else { 3 }),
+                // 7 chars fits "STATUS" plus a sort arrow (and "PAUSED" in no-icons mode)
+                "STATUS" => Constraint::Length(7),
                 "NAMESPACE" => Constraint::Min(15),
                 "NAME" => Constraint::Min(30),
                 "TYPE" => Constraint::Min(20),
+                "AGE" => Constraint::Length(7),
                 "SUSPENDED" | "READY" => Constraint::Length(10),
                 "REVISION" => Constraint::Min(20),
                 "URL" | "PATH" | "CHART" | "IMAGE" | "SOURCE" | "ENDPOINT" | "ADDRESS"

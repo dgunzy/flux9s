@@ -33,6 +33,9 @@ pub struct App {
     pub(crate) controller_pods: ControllerPodState,
     /// Path to the active log file, shown on the connection error screen.
     pub(crate) log_path: Option<std::path::PathBuf>,
+    /// Watchers currently in a degraded (erroring/reconnecting) state.
+    /// Non-empty set drives the "watch degraded" banner.
+    pub(crate) degraded_watchers: HashSet<String>,
 }
 
 impl App {
@@ -78,13 +81,36 @@ impl App {
             pending_context_switch: None,
             controller_pods: ControllerPodState::default(),
             log_path: None,
+            degraded_watchers: HashSet::new(),
         }
+    }
+
+    /// Mark a watcher as degraded (erroring and retrying with backoff).
+    pub fn watch_degraded(&mut self, watcher: String) {
+        self.degraded_watchers.insert(watcher);
+    }
+
+    /// Mark a watcher as recovered after a successful watch event.
+    pub fn watch_recovered(&mut self, watcher: &str) {
+        self.degraded_watchers.remove(watcher);
+    }
+
+    /// Whether any watcher is currently degraded (drives the warning banner).
+    pub fn is_watch_degraded(&self) -> bool {
+        !self.degraded_watchers.is_empty()
+    }
+
+    /// Number of degraded watchers (shown in the warning banner).
+    pub fn degraded_watcher_count(&self) -> usize {
+        self.degraded_watchers.len()
     }
 
     /// Mark the connection as established (clears the connecting state).
     pub fn set_connected(&mut self) {
         self.ui_state.connection_status = crate::tui::app::state::ConnectionStatus::Connected;
         self.ui_state.cached_terminal_size = None;
+        // Fresh watchers — any degraded state belongs to the old set.
+        self.degraded_watchers.clear();
     }
 
     /// Record a fatal connection error to display on the error screen.
@@ -240,44 +266,7 @@ impl App {
     /// Reload skin based on current readonly mode and config
     /// Uses the same priority logic as startup: env var > context > readonly > default
     pub fn reload_skin_for_readonly_mode(&mut self, context_name: Option<&str>) {
-        let skin_name = if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
-            tracing::debug!(
-                "Using skin from FLUX9S_SKIN environment variable: {}",
-                env_skin
-            );
-            env_skin
-        } else if let Some(context) = context_name {
-            if let Some(context_skin) = self.config.context_skins.get(context) {
-                tracing::debug!(
-                    "Using context-specific skin for '{}': {}",
-                    context,
-                    context_skin
-                );
-                context_skin.clone()
-            } else if self.config.read_only {
-                if let Some(ref skin) = self.config.ui.skin_read_only {
-                    tracing::debug!("Using readonly-specific skin: {}", skin);
-                    skin.clone()
-                } else {
-                    tracing::debug!("Using default skin: {}", self.config.ui.skin);
-                    self.config.ui.skin.clone()
-                }
-            } else {
-                tracing::debug!("Using default skin: {}", self.config.ui.skin);
-                self.config.ui.skin.clone()
-            }
-        } else if self.config.read_only {
-            if let Some(ref skin) = self.config.ui.skin_read_only {
-                tracing::debug!("Using readonly-specific skin: {}", skin);
-                skin.clone()
-            } else {
-                tracing::debug!("Using default skin: {}", self.config.ui.skin);
-                self.config.ui.skin.clone()
-            }
-        } else {
-            tracing::debug!("Using default skin: {}", self.config.ui.skin);
-            self.config.ui.skin.clone()
-        };
+        let skin_name = self.config.resolve_skin_name(context_name);
 
         match crate::config::ThemeLoader::load_theme(&skin_name) {
             Ok(theme) => {
@@ -331,10 +320,45 @@ impl App {
         self.state.clear();
         self.resource_objects.clear();
         self.controller_pods.clear();
+        self.degraded_watchers.clear();
         self.view_state.selected_index = 0;
         self.view_state.scroll_offset = 0;
         self.view_state.selected_resource_type = None;
         self.async_state.clear_pending();
+    }
+
+    /// Cycle the sort for the resource list: ascending → descending → default.
+    ///
+    /// Pressing a different sort key switches to that field (ascending).
+    pub(crate) fn toggle_sort(&mut self, field: crate::tui::app::state::SortField) {
+        use crate::tui::app::state::SortField;
+        if self.view_state.sort_field == field {
+            if self.view_state.sort_reverse {
+                self.view_state.sort_field = SortField::Default;
+                self.view_state.sort_reverse = false;
+            } else {
+                self.view_state.sort_reverse = true;
+            }
+        } else {
+            self.view_state.sort_field = field;
+            self.view_state.sort_reverse = false;
+        }
+        self.view_state.selected_index = 0;
+        self.view_state.scroll_offset = 0;
+
+        let msg = match self.view_state.sort_field {
+            SortField::Default => "Sort: default (namespace/type/name)".to_string(),
+            f => format!(
+                "Sort: {}{}",
+                f.display_name(),
+                if self.view_state.sort_reverse {
+                    " (reversed)"
+                } else {
+                    ""
+                }
+            ),
+        };
+        self.set_status_message((msg, false));
     }
 
     pub fn state(&mut self) -> &mut ResourceState {
@@ -438,6 +462,7 @@ impl App {
     pub fn set_view_trace(&mut self) {
         self.view_state.current_view = View::ResourceTrace;
         self.view_state.trace_scroll_offset = 0;
+        self.view_state.text_search.clear();
     }
 
     /// Toggle favorite status for a resource
@@ -547,24 +572,77 @@ impl App {
             HealthFilter::All => {}
         }
 
+        let sort_field = self.view_state.sort_field;
+        let sort_reverse = self.view_state.sort_reverse;
         resources.sort_by(|a, b| {
             let a_key = crate::watcher::resource_key(&a.namespace, &a.name, &a.resource_type);
             let b_key = crate::watcher::resource_key(&b.namespace, &b.name, &b.resource_type);
             let a_is_favorite = self.selection_state.favorites.contains(&a_key);
             let b_is_favorite = self.selection_state.favorites.contains(&b_key);
 
+            // Favorites always group first, regardless of the active sort
             match (a_is_favorite, b_is_favorite) {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
-                _ => a
-                    .namespace
-                    .cmp(&b.namespace)
-                    .then_with(|| a.resource_type.cmp(&b.resource_type))
-                    .then_with(|| a.name.cmp(&b.name)),
+                _ => {
+                    let ord = compare_by_sort_field(a, b, sort_field);
+                    if sort_reverse { ord.reverse() } else { ord }
+                }
             }
         });
 
         resources
+    }
+}
+
+/// Compare two resources by the given sort field (ascending).
+fn compare_by_sort_field(
+    a: &crate::watcher::ResourceInfo,
+    b: &crate::watcher::ResourceInfo,
+    field: crate::tui::app::state::SortField,
+) -> std::cmp::Ordering {
+    use crate::tui::app::state::SortField;
+    use std::cmp::Ordering;
+    match field {
+        SortField::Default => a
+            .namespace
+            .cmp(&b.namespace)
+            .then_with(|| a.resource_type.cmp(&b.resource_type))
+            .then_with(|| a.name.cmp(&b.name)),
+        SortField::Name => a
+            .name
+            .cmp(&b.name)
+            .then_with(|| a.namespace.cmp(&b.namespace)),
+        SortField::Age => {
+            // Oldest first; resources with unknown age sort last
+            match (a.age, b.age) {
+                (Some(x), Some(y)) => x.cmp(&y),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            }
+            .then_with(|| a.name.cmp(&b.name))
+        }
+        SortField::Type => a
+            .resource_type
+            .cmp(&b.resource_type)
+            .then_with(|| a.namespace.cmp(&b.namespace))
+            .then_with(|| a.name.cmp(&b.name)),
+        SortField::Status => {
+            // Problems first: not-ready, then suspended, then unknown, then ready
+            fn status_rank(r: &crate::watcher::ResourceInfo) -> u8 {
+                match (r.ready, r.suspended.unwrap_or(false)) {
+                    (Some(false), _) => 0,
+                    (_, true) => 1,
+                    (None, _) => 2,
+                    (Some(true), _) => 3,
+                }
+            }
+            status_rank(a)
+                .cmp(&status_rank(b))
+                .then_with(|| a.namespace.cmp(&b.namespace))
+                .then_with(|| a.name.cmp(&b.name))
+        }
     }
 }
 
@@ -820,6 +898,105 @@ mod tests {
         }
         // Theme should be applied regardless of save success
         let _ = app.theme.header_context;
+    }
+
+    fn make_resource(
+        name: &str,
+        namespace: &str,
+        resource_type: &str,
+        ready: Option<bool>,
+        suspended: Option<bool>,
+        age: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> crate::watcher::ResourceInfo {
+        crate::watcher::ResourceInfo {
+            name: name.to_string(),
+            namespace: namespace.to_string(),
+            resource_type: resource_type.to_string(),
+            age,
+            suspended,
+            ready,
+            message: None,
+            revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_toggle_sort_cycles_asc_desc_default() {
+        use crate::tui::app::state::SortField;
+        let mut app = create_test_app();
+        assert_eq!(app.view_state.sort_field, SortField::Default);
+
+        app.toggle_sort(SortField::Name);
+        assert_eq!(app.view_state.sort_field, SortField::Name);
+        assert!(!app.view_state.sort_reverse);
+
+        app.toggle_sort(SortField::Name);
+        assert_eq!(app.view_state.sort_field, SortField::Name);
+        assert!(app.view_state.sort_reverse);
+
+        app.toggle_sort(SortField::Name);
+        assert_eq!(app.view_state.sort_field, SortField::Default);
+        assert!(!app.view_state.sort_reverse);
+
+        // Switching fields resets to ascending
+        app.toggle_sort(SortField::Age);
+        app.toggle_sort(SortField::Status);
+        assert_eq!(app.view_state.sort_field, SortField::Status);
+        assert!(!app.view_state.sort_reverse);
+    }
+
+    #[test]
+    fn test_compare_by_sort_field_age_unknown_last() {
+        use crate::tui::app::state::SortField;
+        use std::cmp::Ordering;
+        let old = make_resource(
+            "old",
+            "ns",
+            "Kustomization",
+            None,
+            None,
+            Some(chrono::Utc::now() - chrono::Duration::hours(5)),
+        );
+        let new = make_resource(
+            "new",
+            "ns",
+            "Kustomization",
+            None,
+            None,
+            Some(chrono::Utc::now()),
+        );
+        let unknown = make_resource("unknown", "ns", "Kustomization", None, None, None);
+
+        assert_eq!(
+            compare_by_sort_field(&old, &new, SortField::Age),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_by_sort_field(&new, &unknown, SortField::Age),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn test_compare_by_sort_field_status_problems_first() {
+        use crate::tui::app::state::SortField;
+        use std::cmp::Ordering;
+        let failing = make_resource("a", "ns", "Kustomization", Some(false), Some(false), None);
+        let suspended = make_resource("b", "ns", "Kustomization", Some(true), Some(true), None);
+        let ready = make_resource("c", "ns", "Kustomization", Some(true), Some(false), None);
+
+        assert_eq!(
+            compare_by_sort_field(&failing, &suspended, SortField::Status),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_by_sort_field(&suspended, &ready, SortField::Status),
+            Ordering::Less
+        );
     }
 
     #[test]

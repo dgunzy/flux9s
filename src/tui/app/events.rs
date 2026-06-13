@@ -9,6 +9,61 @@ use crate::watcher::ResourceKey;
 use crossterm::event::KeyEvent;
 
 impl App {
+    /// Scroll the active view down by `amount` lines, or advance the list
+    /// selection when a list view is active. Shared by j/Down, PageDown and
+    /// Ctrl+F so all scroll keys behave identically in every view.
+    fn scroll_down(&mut self, amount: usize) {
+        match self.view_state.current_view {
+            View::ResourceYAML => self.view_state.yaml_scroll_offset += amount,
+            View::ResourceDescribe => self.view_state.describe_scroll_offset += amount,
+            View::ResourceTrace => self.view_state.trace_scroll_offset += amount,
+            View::ResourceHistory => self.view_state.history_scroll_offset += amount,
+            View::ResourceGraph => self.view_state.graph_scroll_offset += amount,
+            _ => {
+                let resources = self.get_filtered_resources();
+                let max_index = resources.len().saturating_sub(1);
+                self.view_state.selected_index =
+                    (self.view_state.selected_index + amount).min(max_index);
+            }
+        }
+    }
+
+    /// Scroll the active view up by `amount` lines, or move the list selection
+    /// up when a list view is active (keeping the selection visible).
+    fn scroll_up(&mut self, amount: usize) {
+        match self.view_state.current_view {
+            View::ResourceYAML => {
+                self.view_state.yaml_scroll_offset =
+                    self.view_state.yaml_scroll_offset.saturating_sub(amount);
+            }
+            View::ResourceDescribe => {
+                self.view_state.describe_scroll_offset = self
+                    .view_state
+                    .describe_scroll_offset
+                    .saturating_sub(amount);
+            }
+            View::ResourceTrace => {
+                self.view_state.trace_scroll_offset =
+                    self.view_state.trace_scroll_offset.saturating_sub(amount);
+            }
+            View::ResourceHistory => {
+                self.view_state.history_scroll_offset =
+                    self.view_state.history_scroll_offset.saturating_sub(amount);
+            }
+            View::ResourceGraph => {
+                self.view_state.graph_scroll_offset =
+                    self.view_state.graph_scroll_offset.saturating_sub(amount);
+            }
+            _ => {
+                self.view_state.selected_index =
+                    self.view_state.selected_index.saturating_sub(amount);
+                if self.view_state.selected_index < self.view_state.scroll_offset {
+                    self.view_state.scroll_offset = self.view_state.selected_index;
+                }
+            }
+        }
+    }
+
     /// Main keyboard event handler
     ///
     /// Returns Some(true) to quit, Some(false) to continue with special action,
@@ -144,6 +199,11 @@ impl App {
             return self.handle_filter_key(key);
         }
 
+        // Text-view search input (typing the query after pressing / in YAML/describe/trace)
+        if self.view_state.text_search.input_mode {
+            return self.handle_text_search_key(key);
+        }
+
         // Handle namespace hotkeys (0-9)
         if let crossterm::event::KeyCode::Char(c) = key.code {
             if c.is_ascii_digit() {
@@ -163,6 +223,9 @@ impl App {
                         self.state.clear();
                         self.resource_objects.clear();
                         self.controller_pods.clear();
+                        // Restarted watchers start clean; stale degraded state
+                        // from the old set would otherwise never clear.
+                        self.degraded_watchers.clear();
                         if let Some(ref mut watcher) = self.watcher {
                             if let Err(e) = watcher.set_namespace(new_namespace) {
                                 self.set_status_message((
@@ -197,55 +260,11 @@ impl App {
                     return Some(true); // Unconditional quit, matching terminal convention
                 }
                 crossterm::event::KeyCode::Char('f') => {
-                    if self.view_state.current_view == View::ResourceYAML {
-                        self.view_state.yaml_scroll_offset += page_size;
-                    } else if self.view_state.current_view == View::ResourceDescribe {
-                        self.view_state.describe_scroll_offset += page_size;
-                    } else if self.view_state.current_view == View::ResourceTrace {
-                        self.view_state.trace_scroll_offset += page_size;
-                    } else if self.view_state.current_view == View::ResourceHistory {
-                        self.view_state.history_scroll_offset += page_size;
-                    } else if self.view_state.current_view == View::ResourceGraph {
-                        self.view_state.graph_scroll_offset += page_size;
-                    } else {
-                        let resources = self.get_filtered_resources();
-                        let max_index = resources.len().saturating_sub(1);
-                        self.view_state.selected_index =
-                            (self.view_state.selected_index + page_size).min(max_index);
-                    }
+                    self.scroll_down(page_size);
                     return None;
                 }
                 crossterm::event::KeyCode::Char('b') => {
-                    if self.view_state.current_view == View::ResourceYAML {
-                        self.view_state.yaml_scroll_offset =
-                            self.view_state.yaml_scroll_offset.saturating_sub(page_size);
-                    } else if self.view_state.current_view == View::ResourceDescribe {
-                        self.view_state.describe_scroll_offset = self
-                            .view_state
-                            .describe_scroll_offset
-                            .saturating_sub(page_size);
-                    } else if self.view_state.current_view == View::ResourceTrace {
-                        self.view_state.trace_scroll_offset = self
-                            .view_state
-                            .trace_scroll_offset
-                            .saturating_sub(page_size);
-                    } else if self.view_state.current_view == View::ResourceHistory {
-                        self.view_state.history_scroll_offset = self
-                            .view_state
-                            .history_scroll_offset
-                            .saturating_sub(page_size);
-                    } else if self.view_state.current_view == View::ResourceGraph {
-                        self.view_state.graph_scroll_offset = self
-                            .view_state
-                            .graph_scroll_offset
-                            .saturating_sub(page_size);
-                    } else {
-                        self.view_state.selected_index =
-                            self.view_state.selected_index.saturating_sub(page_size);
-                        if self.view_state.selected_index < self.view_state.scroll_offset {
-                            self.view_state.scroll_offset = self.view_state.selected_index;
-                        }
-                    }
+                    self.scroll_up(page_size);
                     return None;
                 }
                 crossterm::event::KeyCode::Char('d') => {
@@ -261,55 +280,11 @@ impl App {
             let page_size = self.view_state.page_size;
             match key.code {
                 crossterm::event::KeyCode::PageDown => {
-                    if self.view_state.current_view == View::ResourceYAML {
-                        self.view_state.yaml_scroll_offset += page_size;
-                    } else if self.view_state.current_view == View::ResourceDescribe {
-                        self.view_state.describe_scroll_offset += page_size;
-                    } else if self.view_state.current_view == View::ResourceTrace {
-                        self.view_state.trace_scroll_offset += page_size;
-                    } else if self.view_state.current_view == View::ResourceHistory {
-                        self.view_state.history_scroll_offset += page_size;
-                    } else if self.view_state.current_view == View::ResourceGraph {
-                        self.view_state.graph_scroll_offset += page_size;
-                    } else {
-                        let resources = self.get_filtered_resources();
-                        let max_index = resources.len().saturating_sub(1);
-                        self.view_state.selected_index =
-                            (self.view_state.selected_index + page_size).min(max_index);
-                    }
+                    self.scroll_down(page_size);
                     return None;
                 }
                 crossterm::event::KeyCode::PageUp => {
-                    if self.view_state.current_view == View::ResourceYAML {
-                        self.view_state.yaml_scroll_offset =
-                            self.view_state.yaml_scroll_offset.saturating_sub(page_size);
-                    } else if self.view_state.current_view == View::ResourceDescribe {
-                        self.view_state.describe_scroll_offset = self
-                            .view_state
-                            .describe_scroll_offset
-                            .saturating_sub(page_size);
-                    } else if self.view_state.current_view == View::ResourceTrace {
-                        self.view_state.trace_scroll_offset = self
-                            .view_state
-                            .trace_scroll_offset
-                            .saturating_sub(page_size);
-                    } else if self.view_state.current_view == View::ResourceHistory {
-                        self.view_state.history_scroll_offset = self
-                            .view_state
-                            .history_scroll_offset
-                            .saturating_sub(page_size);
-                    } else if self.view_state.current_view == View::ResourceGraph {
-                        self.view_state.graph_scroll_offset = self
-                            .view_state
-                            .graph_scroll_offset
-                            .saturating_sub(page_size);
-                    } else {
-                        self.view_state.selected_index =
-                            self.view_state.selected_index.saturating_sub(page_size);
-                        if self.view_state.selected_index < self.view_state.scroll_offset {
-                            self.view_state.scroll_offset = self.view_state.selected_index;
-                        }
-                    }
+                    self.scroll_up(page_size);
                     return None;
                 }
                 _ => {}
@@ -330,6 +305,11 @@ impl App {
                 return Some(true);
             }
             crossterm::event::KeyCode::Esc => {
+                // In a text view with an active search, Esc clears the search first
+                if self.is_text_search_view() && self.view_state.text_search.is_active() {
+                    self.view_state.text_search.clear();
+                    return None;
+                }
                 // Navigate back a level, closer to k9s behaviour where Esc never
                 // exits directly. At the top-level view a confirmation dialog is shown.
                 return self.navigate_back_or_confirm_quit();
@@ -367,64 +347,50 @@ impl App {
                 self.ui_state.command_buffer.clear();
             }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') => {
-                if self.view_state.current_view == View::ResourceYAML {
-                    // Scroll up in YAML view
-                    if self.view_state.yaml_scroll_offset > 0 {
-                        self.view_state.yaml_scroll_offset -= 1;
-                    }
-                } else if self.view_state.current_view == View::ResourceDescribe {
-                    self.view_state.describe_scroll_offset =
-                        self.view_state.describe_scroll_offset.saturating_sub(1);
-                } else if self.view_state.current_view == View::ResourceTrace {
-                    // Scroll up in trace view
-                    self.view_state.trace_scroll_offset =
-                        self.view_state.trace_scroll_offset.saturating_sub(1);
-                } else if self.view_state.current_view == View::ResourceHistory {
-                    // Scroll up in history view
-                    self.view_state.history_scroll_offset =
-                        self.view_state.history_scroll_offset.saturating_sub(1);
-                } else if self.view_state.current_view == View::ResourceGraph {
-                    // Scroll up in graph view (line-based, like YAML)
-                    self.view_state.graph_scroll_offset =
-                        self.view_state.graph_scroll_offset.saturating_sub(1);
-                } else {
-                    // Normal navigation
-                    if self.view_state.selected_index > 0 {
-                        self.view_state.selected_index -= 1;
-                        if self.view_state.selected_index < self.view_state.scroll_offset {
-                            self.view_state.scroll_offset = self.view_state.selected_index;
-                        }
-                    }
-                }
+                self.scroll_up(1);
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j') => {
-                if self.view_state.current_view == View::ResourceYAML {
-                    // Scroll down in YAML view - we'll handle max scroll in render
-                    self.view_state.yaml_scroll_offset += 1;
-                } else if self.view_state.current_view == View::ResourceDescribe {
-                    self.view_state.describe_scroll_offset += 1;
-                } else if self.view_state.current_view == View::ResourceTrace {
-                    // Scroll down in trace view
-                    self.view_state.trace_scroll_offset += 1;
-                } else if self.view_state.current_view == View::ResourceHistory {
-                    // Scroll down in history view
-                    self.view_state.history_scroll_offset += 1;
-                } else if self.view_state.current_view == View::ResourceGraph {
-                    // Scroll down in graph view (line-based, like YAML)
-                    self.view_state.graph_scroll_offset += 1;
-                } else {
-                    // Normal navigation
-                    let resources = self.get_filtered_resources();
-                    if self.view_state.selected_index < resources.len().saturating_sub(1) {
-                        self.view_state.selected_index += 1;
-                    }
-                }
+                // Max scroll in scrollable views is clamped during render
+                self.scroll_down(1);
             }
             crossterm::event::KeyCode::Char('/') => {
-                // Enter filter mode
-                self.view_state.filter_mode = true;
-                self.view_state.filter.clear();
-                self.invalidate_layout_cache(); // Filter state affects header height
+                if self.is_text_search_view() {
+                    // Search within the current text view (YAML/describe/trace)
+                    self.view_state.text_search.clear();
+                    self.view_state.text_search.input_mode = true;
+                } else {
+                    // Enter filter mode
+                    self.view_state.filter_mode = true;
+                    self.view_state.filter.clear();
+                    self.invalidate_layout_cache(); // Filter state affects header height
+                }
+            }
+            // Cycle search matches in text views (vim-style n/N)
+            crossterm::event::KeyCode::Char('n')
+                if self.is_text_search_view() && self.view_state.text_search.is_active() =>
+            {
+                self.advance_text_search(1);
+            }
+            crossterm::event::KeyCode::Char('N')
+                if self.is_text_search_view() && self.view_state.text_search.is_active() =>
+            {
+                self.advance_text_search(-1);
+            }
+            // Column sorting in list views (k9s-style shift-key sort)
+            crossterm::event::KeyCode::Char(c @ ('N' | 'A' | 'T' | 'S'))
+                if matches!(
+                    self.view_state.current_view,
+                    View::ResourceList | View::ResourceFavorites
+                ) =>
+            {
+                use crate::tui::app::state::SortField;
+                let field = match c {
+                    'N' => SortField::Name,
+                    'A' => SortField::Age,
+                    'T' => SortField::Type,
+                    _ => SortField::Status,
+                };
+                self.toggle_sort(field);
             }
             crossterm::event::KeyCode::Char('y') => {
                 // View YAML - trigger async fetch
@@ -432,6 +398,7 @@ impl App {
                     self.async_state.yaml_fetch_pending = Some(key);
                     self.async_state.yaml_fetched = None;
                     self.view_state.yaml_scroll_offset = 0;
+                    self.view_state.text_search.clear();
                     self.view_state.current_view = View::ResourceYAML;
                 }
             }
@@ -440,6 +407,7 @@ impl App {
                     self.async_state.describe_fetch_pending = Some(key);
                     self.async_state.describe_fetched = None;
                     self.view_state.describe_scroll_offset = 0;
+                    self.view_state.text_search.clear();
                     self.view_state.current_view = View::ResourceDescribe;
                 }
             }
@@ -592,6 +560,7 @@ impl App {
                     // Return to previous list view (favorites if we came from there, otherwise list)
                     self.view_state.current_view = self.view_state.previous_list_view;
                     self.selection_state.selected_resource_key = None;
+                    self.view_state.text_search.clear();
                 } else if self.view_state.current_view == View::ResourceFavorites {
                     self.view_state.current_view = View::ResourceList;
                     self.selection_state.selected_resource_key = None;
@@ -647,6 +616,52 @@ impl App {
             }
             _ => None,
         }
+    }
+
+    /// Whether the current view supports text search (`/`)
+    fn is_text_search_view(&self) -> bool {
+        matches!(
+            self.view_state.current_view,
+            View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace
+        )
+    }
+
+    /// Handle a key press while typing a text-view search query
+    fn handle_text_search_key(&mut self, key: KeyEvent) -> Option<bool> {
+        match key.code {
+            crossterm::event::KeyCode::Esc => {
+                self.view_state.text_search.clear();
+            }
+            crossterm::event::KeyCode::Enter => {
+                let search = &mut self.view_state.text_search;
+                search.input_mode = false;
+                if search.is_active() {
+                    search.current_match = 0;
+                    search.pending_jump = true;
+                } else {
+                    search.clear();
+                }
+            }
+            crossterm::event::KeyCode::Backspace => {
+                self.view_state.text_search.query.pop();
+            }
+            crossterm::event::KeyCode::Char(c) => {
+                self.view_state.text_search.query.push(c);
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Move to the next (+1) or previous (-1) search match, wrapping around
+    fn advance_text_search(&mut self, delta: isize) {
+        let search = &mut self.view_state.text_search;
+        if search.total_matches == 0 {
+            return;
+        }
+        let total = search.total_matches as isize;
+        search.current_match = (search.current_match as isize + delta).rem_euclid(total) as usize;
+        search.pending_jump = true;
     }
 
     fn handle_submenu_key(&mut self, key: KeyEvent) -> Option<bool> {
@@ -779,6 +794,7 @@ impl App {
                 // there, otherwise the main resource list).
                 self.view_state.current_view = self.view_state.previous_list_view;
                 self.selection_state.selected_resource_key = None;
+                self.view_state.text_search.clear();
                 None
             }
             View::ResourceFavorites => {
@@ -1084,20 +1100,7 @@ impl App {
                 }
                 None => {
                     // No argument - show submenu or list themes
-                    let current_theme = if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
-                        env_skin
-                    } else if let Some(context_skin) = self.config.context_skins.get(&self.context)
-                    {
-                        context_skin.clone()
-                    } else if self.config.read_only {
-                        if let Some(ref skin) = self.config.ui.skin_read_only {
-                            skin.clone()
-                        } else {
-                            self.config.ui.skin.clone()
-                        }
-                    } else {
-                        self.config.ui.skin.clone()
-                    };
+                    let current_theme = self.config.resolve_skin_name(Some(&self.context));
 
                     if let Some(submenu) = crate::tui::commands::get_command_submenu(
                         cmd,
@@ -1201,20 +1204,7 @@ impl App {
                 }
                 None => {
                     // Get current theme name (considering readonly mode and env vars)
-                    let current_theme = if let Ok(env_skin) = std::env::var("FLUX9S_SKIN") {
-                        env_skin
-                    } else if let Some(context_skin) = self.config.context_skins.get(&self.context)
-                    {
-                        context_skin.clone()
-                    } else if self.config.read_only {
-                        if let Some(ref skin) = self.config.ui.skin_read_only {
-                            skin.clone()
-                        } else {
-                            self.config.ui.skin.clone()
-                        }
-                    } else {
-                        self.config.ui.skin.clone()
-                    };
+                    let current_theme = self.config.resolve_skin_name(Some(&self.context));
 
                     // Check if command supports submenu
                     if let Some(submenu) = crate::tui::commands::get_command_submenu(
@@ -1278,6 +1268,10 @@ impl App {
                 // Clear state when switching namespaces (will repopulate from new watchers)
                 self.state().clear();
                 self.resource_objects.clear();
+                self.controller_pods.clear();
+                // Restarted watchers start clean; stale degraded state
+                // from the old set would otherwise never clear.
+                self.degraded_watchers.clear();
 
                 // Restart watchers with new namespace (more efficient than watching all)
                 if let Some(ref mut watcher) = self.watcher {
@@ -1346,6 +1340,14 @@ impl App {
             self.view_state.selected_index = 0;
             self.view_state.scroll_offset = 0;
             self.invalidate_layout_cache(); // Resource type filter affects header display
+        } else if !cmd.is_empty() {
+            self.set_status_message((
+                format!(
+                    "Unknown command: '{}'. Type :help for available commands",
+                    cmd
+                ),
+                true,
+            ));
         }
 
         None
@@ -1518,5 +1520,96 @@ mod tests {
                 false
             ))
         );
+    }
+
+    #[test]
+    fn test_sort_keys_in_list_view() {
+        use crate::tui::app::state::SortField;
+        let mut app = create_test_app(false);
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+
+        app.handle_key(make_key(KeyCode::Char('N')));
+        assert_eq!(app.view_state.sort_field, SortField::Name);
+        assert!(!app.view_state.sort_reverse);
+
+        app.handle_key(make_key(KeyCode::Char('N')));
+        assert!(app.view_state.sort_reverse);
+
+        app.handle_key(make_key(KeyCode::Char('A')));
+        assert_eq!(app.view_state.sort_field, SortField::Age);
+        assert!(!app.view_state.sort_reverse);
+
+        app.handle_key(make_key(KeyCode::Char('S')));
+        assert_eq!(app.view_state.sort_field, SortField::Status);
+        app.handle_key(make_key(KeyCode::Char('T')));
+        assert_eq!(app.view_state.sort_field, SortField::Type);
+    }
+
+    #[test]
+    fn test_sort_keys_ignored_outside_list_views() {
+        use crate::tui::app::state::SortField;
+        let mut app = create_test_app(false);
+        app.view_state.current_view = View::ResourceYAML;
+
+        app.handle_key(make_key(KeyCode::Char('A')));
+        assert_eq!(app.view_state.sort_field, SortField::Default);
+    }
+
+    #[test]
+    fn test_text_search_input_flow_in_yaml_view() {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = View::ResourceYAML;
+
+        // '/' opens search input
+        app.handle_key(make_key(KeyCode::Char('/')));
+        assert!(app.view_state.text_search.input_mode);
+        // Filter mode must NOT be entered in text views
+        assert!(!app.view_state.filter_mode);
+
+        // Type a query and apply it
+        app.handle_key(make_key(KeyCode::Char('a')));
+        app.handle_key(make_key(KeyCode::Char('b')));
+        app.handle_key(make_key(KeyCode::Backspace));
+        app.handle_key(make_key(KeyCode::Enter));
+        assert!(!app.view_state.text_search.input_mode);
+        assert_eq!(app.view_state.text_search.query, "a");
+        assert!(app.view_state.text_search.pending_jump);
+
+        // Esc clears the active search before navigating back
+        app.handle_key(make_key(KeyCode::Esc));
+        assert!(app.view_state.text_search.query.is_empty());
+        assert_eq!(app.view_state.current_view, View::ResourceYAML);
+
+        // Second Esc navigates back to the list
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+    }
+
+    #[test]
+    fn test_text_search_next_prev_match_keys() {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = View::ResourceDescribe;
+        app.view_state.text_search.query = "spec".to_string();
+        app.view_state.text_search.total_matches = 3;
+        app.view_state.text_search.current_match = 0;
+
+        app.handle_key(make_key(KeyCode::Char('n')));
+        assert_eq!(app.view_state.text_search.current_match, 1);
+        assert!(app.view_state.text_search.pending_jump);
+
+        // 'N' wraps backwards from 1 -> 0 -> 2
+        app.handle_key(make_key(KeyCode::Char('N')));
+        app.handle_key(make_key(KeyCode::Char('N')));
+        assert_eq!(app.view_state.text_search.current_match, 2);
+    }
+
+    #[test]
+    fn test_slash_in_list_view_still_enters_filter_mode() {
+        let mut app = create_test_app(false);
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+
+        app.handle_key(make_key(KeyCode::Char('/')));
+        assert!(app.view_state.filter_mode);
+        assert!(!app.view_state.text_search.input_mode);
     }
 }

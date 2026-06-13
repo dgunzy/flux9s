@@ -121,7 +121,6 @@ openssl = { version = "0.10", optional = true }
 # Logging (tracing is already a transitive dependency via kube-rs, but we need it explicitly for macros)
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
-insta = "1.46.0"
 
 # Version update notifications
 update-informer = "1.1"
@@ -129,6 +128,7 @@ update-informer = "1.1"
 [dev-dependencies]
 # Testing
 mockall = "0.13"
+insta = "1.46.0"
 
 [package.metadata.binstall]
 # cargo-binstall configuration for pre-built binary installation

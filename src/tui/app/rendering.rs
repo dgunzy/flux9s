@@ -214,6 +214,8 @@ impl App {
             &self.ui_state.command_buffer,
             self.view_state.filter_mode,
             &self.view_state.filter,
+            self.view_state.text_search.input_mode,
+            &self.view_state.text_search.query,
             self.ui_state.show_help,
             self.ui_state.show_quit_confirm,
             &self.async_state.confirmation_pending,
@@ -346,6 +348,8 @@ impl App {
                         &self.theme,
                         self.config.ui.no_icons,
                         &self.selection_state.favorites,
+                        self.view_state.sort_field,
+                        self.view_state.sort_reverse,
                     );
                 }
                 View::ResourceFavorites => {
@@ -361,6 +365,8 @@ impl App {
                         &self.theme,
                         self.config.ui.no_icons,
                         &self.selection_state.favorites,
+                        self.view_state.sort_field,
+                        self.view_state.sort_reverse,
                     );
                 }
                 _ => {
@@ -384,6 +390,8 @@ impl App {
                         &self.theme,
                         self.config.ui.no_icons,
                         &self.selection_state.favorites,
+                        self.view_state.sort_field,
+                        self.view_state.sort_reverse,
                     );
                 }
                 View::ResourceDetail => {
@@ -406,6 +414,7 @@ impl App {
                         &self.async_state.describe_fetched,
                         &self.async_state.describe_fetch_pending,
                         &mut self.view_state.describe_scroll_offset,
+                        &mut self.view_state.text_search,
                         &self.theme,
                     );
                 }
@@ -419,6 +428,7 @@ impl App {
                         &self.async_state.yaml_fetched,
                         &self.async_state.yaml_fetch_pending,
                         &mut self.view_state.yaml_scroll_offset,
+                        &mut self.view_state.text_search,
                         &self.theme,
                     );
                 }
@@ -430,6 +440,7 @@ impl App {
                         &self.async_state.trace_result,
                         &self.async_state.trace_pending,
                         &mut self.view_state.trace_scroll_offset,
+                        &mut self.view_state.text_search,
                         &self.theme,
                     );
                 }
@@ -446,6 +457,8 @@ impl App {
                         &self.theme,
                         self.config.ui.no_icons,
                         &self.selection_state.favorites,
+                        self.view_state.sort_field,
+                        self.view_state.sort_reverse,
                     );
                 }
                 View::ResourceGraph => {
@@ -503,10 +516,47 @@ impl App {
             }
         }
 
+        // Watch-degraded banner: overlaid on the content's top border (no layout
+        // shift) so the user knows displayed data may be stale while reconnecting.
+        self.render_watch_degraded_banner(f, area);
+
         // Quit confirm renders as a popup overlay on top of the current view,
         // so it must come last — after the background view has been drawn.
         if self.ui_state.show_quit_confirm {
             render_quit_confirm(f, area, &self.theme);
         }
+    }
+
+    /// Render the "watch degraded" warning banner in the top-right corner of
+    /// the content area while one or more watchers are erroring/reconnecting.
+    fn render_watch_degraded_banner(&self, f: &mut Frame, area: Rect) {
+        if !self.is_watch_degraded() || self.has_connection_error() {
+            return;
+        }
+
+        let icon = if self.config.ui.no_icons { "!" } else { "⚠" };
+        let msg = format!(
+            " {} Watch degraded ({}) — data may be stale, reconnecting... ",
+            icon,
+            self.degraded_watcher_count()
+        );
+        let width = msg.chars().count() as u16;
+        if area.width <= width + 2 || area.height == 0 {
+            return;
+        }
+
+        let banner_area = Rect {
+            x: area.x + area.width - width - 2,
+            y: area.y,
+            width,
+            height: 1,
+        };
+        let banner = Paragraph::new(Line::from(ratatui::text::Span::styled(
+            msg,
+            Style::default()
+                .fg(self.theme.status_error)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        )));
+        f.render_widget(banner, banner_area);
     }
 }

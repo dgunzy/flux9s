@@ -238,6 +238,38 @@ pub fn get_flux_api_resources_with_fallback(
         .collect())
 }
 
+/// Classification of a failed GET used while probing API versions.
+#[derive(Debug, PartialEq, Eq)]
+enum NotFoundKind {
+    /// The API version itself is not served on this cluster (404 for the API path).
+    VersionMissing,
+    /// The version is served but the named resource does not exist.
+    ResourceMissing,
+    /// Any other failure (auth, network, server error, ...).
+    Other,
+}
+
+/// Distinguish "this API version is not served" from "the named resource does
+/// not exist". Both surface as HTTP 404, but the API server uses a generic
+/// "could not find the requested resource" (or "404 page not found") message
+/// for unserved versions, and names the object (`<plural>.<group> "<name>"
+/// not found`) when only the object is missing — in which case the version IS
+/// served and there is no point probing fallback versions.
+fn classify_not_found(error: &kube::Error) -> NotFoundKind {
+    if let kube::Error::Api(api_err) = error {
+        if api_err.code == 404 {
+            let msg = api_err.message.to_lowercase();
+            if msg.contains("could not find the requested resource")
+                || msg.contains("page not found")
+            {
+                return NotFoundKind::VersionMissing;
+            }
+            return NotFoundKind::ResourceMissing;
+        }
+    }
+    NotFoundKind::Other
+}
+
 /// Get ApiResource for a resource type with version fallback
 ///
 /// **Why kubectl works without versions but kube-rs doesn't:**
@@ -286,12 +318,17 @@ pub async fn get_api_resource_with_fallback(
             // Default version works!
             return Ok(api_resource);
         }
-        Err(e) => {
-            if !is_version_missing_error(&format!("{}", e)) {
+        Err(e) => match classify_not_found(&e) {
+            // Version doesn't exist on this cluster, try fallback versions below
+            NotFoundKind::VersionMissing => {}
+            // The API answered for this GVR, so the version is served — the named
+            // resource just doesn't exist. Return immediately instead of probing
+            // fallback versions; the caller's own GET produces the proper error.
+            NotFoundKind::ResourceMissing => return Ok(api_resource),
+            NotFoundKind::Other => {
                 return Err(anyhow::anyhow!("Failed to fetch {}: {}", resource_type, e));
             }
-            // Version doesn't exist on this cluster, try fallback versions
-        }
+        },
     }
 
     // Generate fallback versions dynamically based on the default version
@@ -322,12 +359,14 @@ pub async fn get_api_resource_with_fallback(
                 );
                 return Ok(fallback_api_resource);
             }
-            Err(e) => {
-                if !is_version_missing_error(&format!("{}", e)) {
-                    // Non-"not found" error means this version exists but the resource doesn't
-                    return Ok(fallback_api_resource);
+            Err(e) => match classify_not_found(&e) {
+                NotFoundKind::VersionMissing => {} // Try the next version
+                // Version is served; resource doesn't exist at any version.
+                NotFoundKind::ResourceMissing => return Ok(fallback_api_resource),
+                NotFoundKind::Other => {
+                    return Err(anyhow::anyhow!("Failed to fetch {}: {}", resource_type, e));
                 }
-            }
+            },
         }
     }
 
@@ -442,5 +481,52 @@ mod tests {
         assert!(!is_version_missing_error("connection refused"));
         assert!(!is_version_missing_error("timeout waiting for response"));
         assert!(!is_version_missing_error("unauthorized: token expired"));
+    }
+
+    fn api_error(code: u16, message: &str) -> kube::Error {
+        kube::Error::Api(Box::new(
+            kube::core::Status::failure(message, "NotFound").with_code(code),
+        ))
+    }
+
+    #[test]
+    fn test_classify_not_found_version_missing() {
+        // The message the API server returns when an apiVersion is not served
+        assert_eq!(
+            classify_not_found(&api_error(
+                404,
+                "the server could not find the requested resource"
+            )),
+            NotFoundKind::VersionMissing
+        );
+        // Raw 404 from a missing API group path
+        assert_eq!(
+            classify_not_found(&api_error(404, "404 page not found")),
+            NotFoundKind::VersionMissing
+        );
+    }
+
+    #[test]
+    fn test_classify_not_found_resource_missing() {
+        // The message when the GVR is served but the named object doesn't exist
+        assert_eq!(
+            classify_not_found(&api_error(
+                404,
+                "helmreleases.helm.toolkit.fluxcd.io \"my-release\" not found"
+            )),
+            NotFoundKind::ResourceMissing
+        );
+    }
+
+    #[test]
+    fn test_classify_not_found_other_errors() {
+        assert_eq!(
+            classify_not_found(&api_error(403, "forbidden")),
+            NotFoundKind::Other
+        );
+        assert_eq!(
+            classify_not_found(&api_error(500, "internal error")),
+            NotFoundKind::Other
+        );
     }
 }

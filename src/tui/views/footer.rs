@@ -22,6 +22,8 @@ pub fn render_footer(
     command_buffer: &str,
     filter_mode: bool,
     filter: &str,
+    search_input_mode: bool,
+    search_query: &str,
     show_help: bool,
     show_quit_confirm: bool,
     confirmation_pending: &Option<PendingOperation>,
@@ -39,6 +41,10 @@ pub fn render_footer(
 
     if filter_mode {
         return render_filter_footer(f, area, filter, theme);
+    }
+
+    if search_input_mode {
+        return render_search_footer(f, area, search_query, theme);
     }
 
     // While the quit confirm dialog is visible, show only its relevant keys so
@@ -161,6 +167,21 @@ fn render_filter_footer(f: &mut Frame, area: Rect, filter: &str, theme: &Theme) 
     ];
     let footer =
         Paragraph::new(Line::from(filter_line)).block(Block::default().borders(Borders::ALL));
+    f.render_widget(footer, area);
+    1
+}
+
+/// Footer shown while typing a text-view search query (`/` in YAML/describe/trace)
+fn render_search_footer(f: &mut Frame, area: Rect, query: &str, theme: &Theme) -> usize {
+    let search_line = vec![
+        Span::raw("Search "),
+        Span::styled("/", theme.filter_prompt_style()),
+        Span::raw(query),
+        Span::raw("_"), // Cursor
+        Span::raw(" (Enter to search, n/N next/prev, Esc to cancel)"),
+    ];
+    let footer =
+        Paragraph::new(Line::from(search_line)).block(Block::default().borders(Borders::ALL));
     f.render_widget(footer, area);
     1
 }

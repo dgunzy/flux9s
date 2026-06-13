@@ -1,7 +1,9 @@
 //! Trace view rendering
 
+use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
 use crate::tui::trace::{TraceNode, TraceResult};
+use crate::tui::views::yaml::decorate_title_with_search;
 use crate::watcher::ResourceKey;
 use ratatui::{
     Frame,
@@ -11,6 +13,23 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
+/// Whether any of a trace node's displayed text matches the search query.
+fn node_matches(node: &TraceNode, query_lower: &str) -> bool {
+    let mut haystacks: Vec<&str> = vec![&node.kind, &node.name, &node.namespace];
+    if let Some(ref spec) = node.spec {
+        haystacks.extend(spec.path.as_deref());
+        haystacks.extend(spec.url.as_deref());
+        haystacks.extend(spec.branch.as_deref());
+    }
+    if let Some(ref status) = node.status {
+        haystacks.extend(status.revision.as_deref());
+        haystacks.extend(status.message.as_deref());
+    }
+    haystacks
+        .iter()
+        .any(|text| text.to_lowercase().contains(query_lower))
+}
+
 /// Render the trace view
 pub fn render_resource_trace(
     f: &mut Frame,
@@ -19,10 +38,9 @@ pub fn render_resource_trace(
     trace_result: &Option<TraceResult>,
     trace_pending: &Option<ResourceKey>,
     scroll_offset: &mut usize,
+    search: &mut TextSearchState,
     theme: &Theme,
 ) {
-    let outer_block = crate::tui::views::helpers::create_themed_block("Trace", theme);
-
     if trace_pending.is_some() {
         crate::tui::views::helpers::render_loading_state(
             f,
@@ -48,10 +66,6 @@ pub fn render_resource_trace(
             return;
         }
     };
-
-    // Inner area (excluding border)
-    let inner_area = outer_block.inner(area);
-    f.render_widget(outer_block, area);
 
     // Build list of nodes to display
     let mut nodes: Vec<(&TraceNode, &str)> = Vec::new();
@@ -85,8 +99,46 @@ pub fn render_resource_trace(
         nodes.push((source, "sourced from"));
     }
 
-    // Calculate required height for all nodes
+    // Text search: match whole nodes (the trace view is block-based, not line-based)
     let arrow_height = 3; // Space for arrow between blocks
+    let query_lower = search.query.to_lowercase();
+    let match_indexes: Vec<usize> = if query_lower.is_empty() {
+        Vec::new()
+    } else {
+        nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, (node, _))| node_matches(node, &query_lower))
+            .map(|(idx, _)| idx)
+            .collect()
+    };
+    search.total_matches = match_indexes.len();
+    if !match_indexes.is_empty() {
+        search.current_match = search.current_match.min(match_indexes.len() - 1);
+    }
+    let current_match_node = match_indexes.get(search.current_match).copied();
+
+    let mut title = "Trace".to_string();
+    decorate_title_with_search(&mut title, search);
+    let outer_block = crate::tui::views::helpers::create_themed_block(&title, theme);
+
+    // Inner area (excluding border)
+    let inner_area = outer_block.inner(area);
+    f.render_widget(outer_block, area);
+
+    // Jump the scroll offset to the start of the current match's block
+    if search.pending_jump {
+        search.pending_jump = false;
+        if let Some(node_idx) = current_match_node {
+            let mut y_offset: u16 = 0;
+            for (node, _) in nodes.iter().take(node_idx) {
+                y_offset += calculate_block_height(node, inner_area.width) + arrow_height;
+            }
+            *scroll_offset = y_offset as usize;
+        }
+    }
+
+    // Calculate required height for all nodes
     let block_min_height = 4; // Minimum height for a block
     let total_height: u16 = nodes
         .iter()
@@ -105,6 +157,7 @@ pub fn render_resource_trace(
 
     for (i, (node, relationship)) in nodes.iter().enumerate() {
         let is_first = i == 0;
+        let is_current_match = Some(i) == current_match_node;
 
         // Draw arrow before this node (except for the first)
         if !is_first {
@@ -140,7 +193,7 @@ pub fn render_resource_trace(
                 height: block_y_end.saturating_sub(block_y_start.max(inner_area.y)),
             };
 
-            render_trace_node(f, block_area, node, is_first, theme);
+            render_trace_node(f, block_area, node, is_first, is_current_match, theme);
         }
 
         current_y += block_height;
@@ -205,7 +258,14 @@ fn calculate_block_height(node: &TraceNode, _width: u16) -> u16 {
 }
 
 /// Render a trace node as a block
-fn render_trace_node(f: &mut Frame, area: Rect, node: &TraceNode, is_primary: bool, theme: &Theme) {
+fn render_trace_node(
+    f: &mut Frame,
+    area: Rect,
+    node: &TraceNode,
+    is_primary: bool,
+    is_current_match: bool,
+    theme: &Theme,
+) {
     let mut content = Vec::new();
 
     // Title line: Kind/Name
@@ -278,8 +338,12 @@ fn render_trace_node(f: &mut Frame, area: Rect, node: &TraceNode, is_primary: bo
         }
     }
 
-    // Create block with appropriate styling
-    let block_style = if is_primary {
+    // Create block with appropriate styling; the current search match is emphasized
+    let block_style = if is_current_match {
+        Style::default()
+            .fg(theme.text_value)
+            .add_modifier(Modifier::BOLD)
+    } else if is_primary {
         Style::default().fg(theme.text_label)
     } else {
         Style::default().fg(theme.text_secondary)

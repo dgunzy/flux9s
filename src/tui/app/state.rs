@@ -38,6 +38,74 @@ pub enum ConnectionStatus {
     Failed(Box<crate::kube::health::ConnectionError>),
 }
 
+/// Sort field for the resource list (k9s-style shift-key sorting).
+///
+/// Cycle per key press: ascending → descending → back to `Default` ordering.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SortField {
+    /// Default ordering: namespace, then type, then name
+    #[default]
+    Default,
+    Name,
+    Age,
+    Type,
+    Status,
+}
+
+impl SortField {
+    /// Header column name this sort field corresponds to (for the sort arrow)
+    pub fn column_name(&self) -> Option<&'static str> {
+        match self {
+            SortField::Default => None,
+            SortField::Name => Some("NAME"),
+            SortField::Age => Some("AGE"),
+            SortField::Type => Some("TYPE"),
+            SortField::Status => Some("STATUS"),
+        }
+    }
+
+    /// Human-readable name for status messages
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SortField::Default => "default",
+            SortField::Name => "name",
+            SortField::Age => "age",
+            SortField::Type => "type",
+            SortField::Status => "status",
+        }
+    }
+}
+
+/// Search state for text views (YAML, describe, trace).
+///
+/// Matches are recomputed each render (the views own the line data); the
+/// event handler only moves `current_match` and requests a jump.
+#[derive(Debug, Default, Clone)]
+pub struct TextSearchState {
+    /// Active search query (empty = no search)
+    pub query: String,
+    /// Whether the user is currently typing the query
+    pub input_mode: bool,
+    /// Index of the current match within the matches found at render time
+    pub current_match: usize,
+    /// Total matches found by the last render
+    pub total_matches: usize,
+    /// When true, the next render scrolls to the current match
+    pub pending_jump: bool,
+}
+
+impl TextSearchState {
+    /// Whether a search is active (query entered and applied)
+    pub fn is_active(&self) -> bool {
+        !self.query.is_empty()
+    }
+
+    /// Reset to the inactive state
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Health filter for resources
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum HealthFilter {
@@ -84,6 +152,12 @@ pub struct ViewState {
     pub preview_original_theme: Option<String>,
     /// Cached page size for PageUp/PageDown navigation (updated each render from content area height)
     pub page_size: usize,
+    /// Active sort field for the resource list (Shift+N/A/T/S)
+    pub sort_field: SortField,
+    /// Whether the active sort is reversed (second press of the same key)
+    pub sort_reverse: bool,
+    /// Search state for text views (YAML, describe, trace)
+    pub text_search: TextSearchState,
 }
 
 impl Default for ViewState {
@@ -105,6 +179,9 @@ impl Default for ViewState {
             submenu_state: None,
             preview_original_theme: None,
             page_size: 10,
+            sort_field: SortField::default(),
+            sort_reverse: false,
+            text_search: TextSearchState::default(),
         }
     }
 }
