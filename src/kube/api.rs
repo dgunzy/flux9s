@@ -387,6 +387,20 @@ pub fn is_version_missing_error(error: &str) -> bool {
         || lower.contains("page not found")
 }
 
+/// Returns true if an error string indicates the user is forbidden (RBAC 403)
+/// from watching this resource type.
+///
+/// A 403 means the credentials are valid but lack permission to list/watch the
+/// resource — e.g. RBAC denies access to a particular CRD. Unlike a transient
+/// outage, this won't recover by retrying within the session, so watchers treat
+/// it like a missing CRD: log it once and stop, rather than flagging the
+/// "watch degraded" banner. kube-rs surfaces these as
+/// "... is forbidden: User \"...\" cannot list resource ..." (HTTP 403).
+pub fn is_forbidden_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("forbidden") || lower.contains("403")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,6 +495,28 @@ mod tests {
         assert!(!is_version_missing_error("connection refused"));
         assert!(!is_version_missing_error("timeout waiting for response"));
         assert!(!is_version_missing_error("unauthorized: token expired"));
+    }
+
+    #[test]
+    fn test_is_forbidden_error_rbac_message() {
+        // The message kube-rs surfaces when RBAC denies list/watch on a CRD
+        assert!(is_forbidden_error(
+            "failed to perform initial watch: Api error: artifactgenerators.swp.fluxcd.io is forbidden: User \"u\" cannot list resource \"artifactgenerators\" in API group \"swp.fluxcd.io\" at the cluster scope"
+        ));
+    }
+
+    #[test]
+    fn test_is_forbidden_error_numeric_code() {
+        assert!(is_forbidden_error("error 403 from server"));
+    }
+
+    #[test]
+    fn test_is_forbidden_error_unrelated_error() {
+        assert!(!is_forbidden_error("connection refused"));
+        assert!(!is_forbidden_error(
+            "the server could not find the requested resource"
+        ));
+        assert!(!is_forbidden_error("timeout waiting for response"));
     }
 
     fn api_error(code: u16, message: &str) -> kube::Error {

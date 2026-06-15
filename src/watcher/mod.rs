@@ -23,7 +23,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::kube::api::{get_flux_api_resources_with_fallback, is_version_missing_error};
+use crate::kube::api::{
+    get_flux_api_resources_with_fallback, is_forbidden_error, is_version_missing_error,
+};
 use crate::models::FluxResourceKind;
 
 /// Maximum interval between watch-reconnect attempts.
@@ -217,7 +219,8 @@ impl ResourceWatcher {
                 let ev = match event {
                     Ok(ev) => ev,
                     Err(e) => {
-                        if is_version_missing_error(&format!("{}", e)) {
+                        let err_str = format!("{}", e);
+                        if is_version_missing_error(&err_str) {
                             // CRD not installed or version not served — stop, don't retry.
                             // Clear any degraded state: this watcher is intentionally
                             // stopping, not reconnecting.
@@ -232,6 +235,26 @@ impl ResourceWatcher {
                             let _ = event_tx.send(WatchEvent::Error(format!(
                                 "{} CRD not available in cluster",
                                 display_name
+                            )));
+                            break;
+                        }
+
+                        if is_forbidden_error(&err_str) {
+                            // RBAC denies access to this resource — retrying won't help
+                            // within the session, so stop rather than flag the watch
+                            // as degraded. Clear any degraded state from earlier errors.
+                            if error_count > 0 {
+                                let _ = event_tx
+                                    .send(WatchEvent::WatcherRecovered(display_name.clone()));
+                            }
+                            tracing::info!(
+                                "{} watch forbidden by RBAC, stopping watcher: {}",
+                                display_name,
+                                e
+                            );
+                            let _ = event_tx.send(WatchEvent::Error(format!(
+                                "{} watch forbidden by RBAC: {}",
+                                display_name, e
                             )));
                             break;
                         }
@@ -331,6 +354,16 @@ impl ResourceWatcher {
                 let ev = match event {
                     Ok(ev) => ev,
                     Err(e) => {
+                        if is_forbidden_error(&format!("{}", e)) {
+                            // RBAC denies access — retrying won't help, so stop rather
+                            // than flag the watch as degraded. Clear earlier degraded state.
+                            if error_count > 0 {
+                                let _ = event_tx
+                                    .send(WatchEvent::WatcherRecovered(WATCHER_NAME.to_string()));
+                            }
+                            tracing::info!("Pod watcher forbidden by RBAC, stopping: {}", e);
+                            break;
+                        }
                         error_count += 1;
                         if error_count == 1 {
                             let _ = event_tx
@@ -394,6 +427,16 @@ impl ResourceWatcher {
                 let ev = match event {
                     Ok(ev) => ev,
                     Err(e) => {
+                        if is_forbidden_error(&format!("{}", e)) {
+                            // RBAC denies access — retrying won't help, so stop rather
+                            // than flag the watch as degraded. Clear earlier degraded state.
+                            if error_count > 0 {
+                                let _ = event_tx
+                                    .send(WatchEvent::WatcherRecovered(WATCHER_NAME.to_string()));
+                            }
+                            tracing::info!("Deployment watcher forbidden by RBAC, stopping: {}", e);
+                            break;
+                        }
                         error_count += 1;
                         if error_count == 1 {
                             let _ = event_tx
@@ -490,13 +533,34 @@ impl ResourceWatcher {
                     let ev = match w.next().await {
                         Some(Ok(ev)) => ev,
                         Some(Err(e)) => {
-                            if is_version_missing_error(&format!("{}", e)) && !version_working {
+                            let err_str = format!("{}", e);
+                            if is_version_missing_error(&err_str) && !version_working {
                                 tracing::debug!(
                                     "{} version {} not available, trying next version",
                                     display_name,
                                     version
                                 );
                                 break; // Try next version
+                            }
+
+                            if is_forbidden_error(&err_str) {
+                                // RBAC denies access to this resource — every version
+                                // would be forbidden too, so stop rather than flag the
+                                // watch as degraded. Clear any degraded state first.
+                                if degraded_sent {
+                                    let _ = event_tx
+                                        .send(WatchEvent::WatcherRecovered(resource_type.clone()));
+                                }
+                                tracing::info!(
+                                    "{} watch forbidden by RBAC, stopping watcher: {}",
+                                    display_name,
+                                    e
+                                );
+                                let _ = event_tx.send(WatchEvent::Error(format!(
+                                    "{} watch forbidden by RBAC: {}",
+                                    display_name, e
+                                )));
+                                return;
                             }
 
                             error_count += 1;
