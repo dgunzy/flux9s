@@ -2,9 +2,11 @@
 
 A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flux GitOps resources in real-time.
 
-![flux9s](https://img.shields.io/crates/v/flux9s)
-![License](https://img.shields.io/crates/l/flux9s)
-![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)
+[![CI](https://img.shields.io/github/actions/workflow/status/dgunzy/flux9s/ci.yml?branch=main&logo=github&label=CI)](https://github.com/dgunzy/flux9s/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/flux9s?logo=rust&color=blue)](https://crates.io/crates/flux9s)
+[![Downloads](https://img.shields.io/crates/d/flux9s?logo=rust&label=downloads)](https://crates.io/crates/flux9s)
+[![License](https://img.shields.io/github/license/dgunzy/flux9s?color=green)](LICENSE)
+[![Rust edition](https://img.shields.io/badge/edition-2024-orange?logo=rust)](https://doc.rust-lang.org/edition-guide/rust-2024/index.html)
 
 ### Full View
 
