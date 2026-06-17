@@ -10,9 +10,9 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 
 ![flux9s screenshot](docs/images/screenshot.png)
 
-### Flux9s Trace Implementation
+### Flux9s Graph View 
 
-![flux9s trace](docs/images/trace-screenshot.png)
+![flux9s graph view](docs/images/graph-screenshot-new.png)
 
 ### Flux9s Name filter
 
