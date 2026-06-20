@@ -93,6 +93,16 @@ pub fn user_skins_dir() -> PathBuf {
     data_dir().join("skins")
 }
 
+/// Get the path to the update-notifier state file
+///
+/// Tracks the last time an update notification was displayed (and for which
+/// version) so the banner is shown at most once per interval rather than on
+/// every invocation. Lives in the data dir so it honors `FLUX9S_DATA_DIR` /
+/// `XDG_DATA_HOME` / Windows Known Folders like other persisted state.
+pub fn update_notifier_state_path() -> PathBuf {
+    data_dir().join("update_notifier.json")
+}
+
 /// Get the cluster-specific config directory path
 pub fn cluster_config_dir(cluster: &str, context: Option<&str>) -> PathBuf {
     let mut path = data_dir().join("clusters").join(cluster);
