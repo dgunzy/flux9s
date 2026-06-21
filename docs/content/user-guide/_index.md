@@ -285,45 +285,50 @@ Not all K9s skins are compatible with flux9s. flux9s skins follow a similar form
 
 flux9s supports all Flux CD resources from the official Flux controllers and Flux Operator:
 
+flux9s resolves the API version for each resource at runtime, so it stays compatible as Flux promotes CRDs across versions.
+
 ### Source Controller (`source.toolkit.fluxcd.io`)
 
-- **GitRepository** (v1) - Git repository sources
-- **OCIRepository** (v1, v1beta2) - OCI artifact sources
-- **HelmRepository** (v1) - Helm chart repositories
-- **Bucket** (v1) - S3-compatible bucket sources
-- **HelmChart** (v1) - Helm chart artifacts
-- **ExternalArtifact** (v1) - External artifact sources
-- **ArtifactGenerator** (v1) - Artifact generation
+- **GitRepository** - Git repository sources
+- **OCIRepository** - OCI artifact sources
+- **HelmRepository** - Helm chart repositories
+- **Bucket** - S3-compatible bucket sources
+- **HelmChart** - Helm chart artifacts
+- **ExternalArtifact** - External artifact sources
+
+### Source Watcher (`source.extensions.fluxcd.io`)
+
+- **ArtifactGenerator** - Artifact generation
 
 ### Kustomize Controller (`kustomize.toolkit.fluxcd.io`)
 
-- **Kustomization** (v1) - Kustomize-based deployments
+- **Kustomization** - Kustomize-based deployments
 
 ### Helm Controller (`helm.toolkit.fluxcd.io`)
 
-- **HelmRelease** (v2beta2) - Helm release management
+- **HelmRelease** - Helm release management
 
 ### Image Reflector Controller (`image.toolkit.fluxcd.io`)
 
-- **ImageRepository** (v1) - Container image repositories
-- **ImagePolicy** (v1) - Image version policies
+- **ImageRepository** - Container image repositories
+- **ImagePolicy** - Image version policies
 
 ### Image Automation Controller (`image.toolkit.fluxcd.io`)
 
-- **ImageUpdateAutomation** (v1) - Automated image updates
+- **ImageUpdateAutomation** - Automated image updates
 
 ### Notification Controller (`notification.toolkit.fluxcd.io`)
 
-- **Alert** (v1beta3) - Alert configurations
-- **Provider** (v1beta3) - Notification providers
-- **Receiver** (v1) - Webhook receivers
+- **Alert** - Alert configurations
+- **Provider** - Notification providers
+- **Receiver** - Webhook receivers
 
 ### Flux Operator (`fluxcd.controlplane.io`)
 
-- **ResourceSet** (v1) - Declarative resource sets
-- **ResourceSetInputProvider** (v1) - Input providers for ResourceSets
-- **FluxReport** (v1) - Flux reports
-- **FluxInstance** (v1) - Flux instances
+- **ResourceSet** - Declarative resource sets
+- **ResourceSetInputProvider** - Input providers for ResourceSets
+- **FluxReport** - Flux reports
+- **FluxInstance** - Flux instances
 
 ## Screenshots
 
