@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-06-15T14:55:18Z",
+  "generated_at": "2026-06-22T14:25:09Z",
   "flux_versions": {
-    "source-controller": "v1.8.5",
-    "kustomize-controller": "v1.8.5",
-    "helm-controller": "v1.5.5",
-    "notification-controller": "v1.8.4",
-    "image-reflector-controller": "v1.1.2",
-    "image-automation-controller": "v1.1.4",
+    "source-controller": "v1.9.0",
+    "kustomize-controller": "v1.9.0",
+    "helm-controller": "v1.6.0",
+    "notification-controller": "v1.9.0",
+    "image-reflector-controller": "v1.2.0",
+    "image-automation-controller": "v1.2.0",
     "source-watcher": "v2.1.1"
   },
   "flux_operator_crds": [
