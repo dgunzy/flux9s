@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: helmreleases.helm.toolkit.fluxcd.io
 spec:
   group: helm.toolkit.fluxcd.io
@@ -243,16 +243,17 @@ spec:
                   references to HelmRelease resources that must be ready before this HelmRelease
                   can be reconciled.
                 items:
-                  description: DependencyReference defines a HelmRelease dependency
-                    on another HelmRelease resource.
+                  description: |-
+                    DependencyReference contains enough information to locate the referenced Kubernetes resource object
+                    and optional CEL expression to assess its readiness.
                   properties:
                     name:
                       description: Name of the referent.
                       type: string
                     namespace:
                       description: |-
-                        Namespace of the referent, defaults to the namespace of the HelmRelease
-                        resource object that contains the reference.
+                        Namespace of the referent, defaults to the namespace of the resource
+                        object that contains the reference.
                       type: string
                     readyExpr:
                       description: |-
@@ -383,7 +384,6 @@ spec:
                   required:
                   - apiVersion
                   - current
-                  - kind
                   type: object
                 type: array
               install:
@@ -621,6 +621,18 @@ spec:
 
                   If not set, it defaults to true.
                 type: boolean
+              postRenderStrategy:
+                description: |-
+                  PostRenderStrategy defines the strategy for sending hooks to post-renderers.
+                  Valid values are 'nohooks' (hooks not sent to post-renderers, Helm 3 behavior),
+                  'combined' (hooks and templates sent together, Helm 4 default), and 'separate'
+                  (hooks and templates sent in separate streams, Helm 4.2 opt-in).
+                  Defaults to 'combined', or 'nohooks' when the UseHelm3Defaults feature gate is enabled.
+                enum:
+                - nohooks
+                - combined
+                - separate
+                type: string
               postRenderers:
                 description: |-
                   PostRenderers holds an array of Helm PostRenderers, which will be applied in order
@@ -906,6 +918,18 @@ spec:
                 description: Upgrade holds the configuration for Helm upgrade actions
                   for this HelmRelease.
                 properties:
+                  chartNameChangeStrategy:
+                    description: |-
+                      ChartNameChangeStrategy defines the strategy to use when a Helm chart name changes.
+                      Valid values are 'Reinstall' or 'InPlaceUpdate'. Defaults to 'Reinstall' if omitted.
+
+                      Reinstall: Reinstall the Helm release, uninstalling the existing Helm release.
+
+                      InPlaceUpdate: Update the Helm release in place.
+                    enum:
+                    - InPlaceUpdate
+                    - Reinstall
+                    type: string
                   cleanupOnFail:
                     description: |-
                       CleanupOnFail allows deletion of new resources created during the Helm
@@ -1068,6 +1092,17 @@ spec:
                       - Secret
                       - ConfigMap
                       type: string
+                    literal:
+                      description: |-
+                        Literal marks this ValuesReference as a literal value. When set in
+                        combination with TargetPath, the referenced value is merged at the target
+                        path without interpreting Helm's `--set` syntax (commas, brackets, dots,
+                        equal signs, etc.), mirroring the behavior of `helm --set-literal`. This
+                        is the only safe way to inject arbitrary file content (config files, JSON
+                        blobs, multi-line strings containing special characters) through
+                        `valuesFrom`. Has no effect when TargetPath is empty: in that mode the
+                        referenced value is always YAML-merged at the root.
+                      type: boolean
                     name:
                       description: |-
                         Name of the values referent. Should reside in the same namespace as the
