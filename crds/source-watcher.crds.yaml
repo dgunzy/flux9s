@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: artifactgenerators.source.extensions.fluxcd.io
 spec:
   group: source.extensions.fluxcd.io
@@ -67,7 +67,10 @@ spec:
                           exclude:
                             description: |-
                               Exclude specifies a list of glob patterns to exclude
-                              files and dirs matched by the 'From' field.
+                              files and dirs matched by the 'From' field. Patterns are matched
+                              against paths relative to the source alias root or to the non-glob
+                              prefix of 'From'. Patterns without a separator (e.g. "*.md") match
+                              the file name at any depth.
                             items:
                               type: string
                             maxItems: 100
@@ -75,8 +78,10 @@ spec:
                           from:
                             description: |-
                               From specifies the source (by alias) and the glob pattern to match files.
-                              The format is "@<alias>/<glob-pattern>".
+                              The format is "@<alias>/<glob-pattern>". When pathPattern is set,
+                              the path may use capture placeholders such as "{app}".
                             maxLength: 1024
+                            minLength: 1
                             pattern: ^@([a-z0-9]([a-z0-9_-]*[a-z0-9])?)/(.*)$
                             type: string
                           strategy:
@@ -97,8 +102,10 @@ spec:
                             description: |-
                               To specifies the destination path within the artifact.
                               The format is "@artifact/path", the alias "artifact"
-                              refers to the root path of the generated artifact.
+                              refers to the root path of the generated artifact. When pathPattern
+                              is set, the path may use capture placeholders such as "{app}".
                             maxLength: 1024
+                            minLength: 1
                             pattern: ^@(artifact)/(.*)$
                             type: string
                         required:
@@ -108,9 +115,11 @@ spec:
                       minItems: 1
                       type: array
                     name:
-                      description: Name is the name of the generated artifact.
+                      description: |-
+                        Name is the name of the generated artifact.
+                        When pathPattern is set, this field may use capture placeholders such as "{app}".
                       maxLength: 253
-                      pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+                      minLength: 1
                       type: string
                     originRevision:
                       description: |-
@@ -138,6 +147,31 @@ spec:
                 maxItems: 1000
                 minItems: 1
                 type: array
+              commonMetadata:
+                description: |-
+                  CommonMetadata specifies the common labels and annotations that are
+                  applied to all resources. Any existing label or annotation will be
+                  overridden if its key matches a common one.
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: Annotations to be added to the object's metadata.
+                    type: object
+                  labels:
+                    additionalProperties:
+                      type: string
+                    description: Labels to be added to the object's metadata.
+                    type: object
+                type: object
+              pathPattern:
+                description: |-
+                  PathPattern specifies a directory traversal pattern to match within the sources.
+                  The format is "@<alias>/<pattern>". Named captures in the pattern (e.g. "{app}")
+                  can be used as placeholders in OutputArtifacts fields.
+                maxLength: 1024
+                pattern: ^@([a-z0-9]([a-z0-9_-]*[a-z0-9])?)/(.*)$
+                type: string
               sources:
                 description: |-
                   Sources is a list of references to the Flux source-controller
@@ -189,6 +223,11 @@ spec:
             - artifacts
             - sources
             type: object
+            x-kubernetes-validations:
+            - message: artifact names must be valid Kubernetes object names when pathPattern
+                is not set
+              rule: has(self.pathPattern) && size(self.pathPattern) > 0 || self.artifacts.all(a,
+                a.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'))
           status:
             description: ArtifactGeneratorStatus defines the observed state of ArtifactGenerator.
             properties:
