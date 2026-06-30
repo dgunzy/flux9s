@@ -215,6 +215,14 @@ The graph view displays:
 - **Resource groups** (aggregated by type)
 - **Workload groups** (aggregated workloads with status)
 
+**Navigating the graph:**
+
+- `j` / `k` (or `↓` / `↑`) - Move the highlighted focus between nodes; the view scrolls to keep the focused node visible.
+- `Enter` - Open the focused node's resource in the detail view. Aggregate nodes (workload/resource groups) and external upstream URLs aren't directly openable.
+- `Esc` / `Backspace` - Return to the graph (when you opened a detail view from it), then back to the resource list.
+
+Focus starts on the resource you opened the graph from, so you can immediately walk its sources and dependencies.
+
 ### Reconciliation History (`h`)
 
 View reconciliation history for resources that track it.

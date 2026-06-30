@@ -22,6 +22,52 @@ pub enum View {
     Help,
 }
 
+impl View {
+    /// Mutable line-scroll offset for the simple text/log views that scroll one
+    /// line at a time. Returns `None` for views with bespoke navigation: lists
+    /// use a selection index and the graph view uses node focus. This is the
+    /// single place that maps a view to its scroll field, so the scroll handlers
+    /// don't each repeat the per-view match.
+    pub fn scroll_offset_mut(self, vs: &mut ViewState) -> Option<&mut usize> {
+        match self {
+            View::ResourceYAML => Some(&mut vs.yaml_scroll_offset),
+            View::ResourceDescribe => Some(&mut vs.describe_scroll_offset),
+            View::ResourceTrace => Some(&mut vs.trace_scroll_offset),
+            View::ResourceHistory => Some(&mut vs.history_scroll_offset),
+            _ => None,
+        }
+    }
+
+    /// Whether this is a list-style view (the main resource list or favorites)
+    /// from which resources are selected and opened.
+    pub fn is_list_view(self) -> bool {
+        matches!(self, View::ResourceList | View::ResourceFavorites)
+    }
+
+    /// Whether `/` opens an in-view text search (YAML/describe/trace) rather than
+    /// the resource-list filter.
+    pub fn is_text_search_view(self) -> bool {
+        matches!(
+            self,
+            View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace
+        )
+    }
+
+    /// Whether this is a nested detail-style view opened from a list — i.e. one
+    /// that Back/Esc should pop back to the list (or graph) rather than quit.
+    pub fn is_nested_view(self) -> bool {
+        matches!(
+            self,
+            View::ResourceDetail
+                | View::ResourceDescribe
+                | View::ResourceYAML
+                | View::ResourceTrace
+                | View::ResourceHistory
+                | View::ResourceGraph
+        )
+    }
+}
+
 /// Connection status to the Kubernetes API server.
 ///
 /// Drives the startup connection-error screen: while `Connecting` the splash is
@@ -144,8 +190,15 @@ pub struct ViewState {
     pub history_scroll_offset: usize,
     /// Scroll offset for graph view
     pub graph_scroll_offset: usize,
+    /// Index (into the graph's node list) of the currently focused graph node.
+    /// `None` until a graph is built; set to the object node when one loads.
+    pub graph_focus_index: Option<usize>,
     /// Track previous list view for navigation (ResourceList or ResourceFavorites)
     pub previous_list_view: View,
+    /// When the detail view was entered by drilling into a node from the graph,
+    /// this holds `ResourceGraph` so that Back returns to the graph instead of
+    /// all the way to the list. Consumed (taken) on the next Back.
+    pub detail_back_view: Option<View>,
     /// Active submenu state (if a submenu is currently being displayed)
     pub submenu_state: Option<SubmenuState>,
     /// Original theme name when previewing themes in submenu (for restoration on cancel)
@@ -175,7 +228,9 @@ impl Default for ViewState {
             trace_scroll_offset: 0,
             history_scroll_offset: 0,
             graph_scroll_offset: 0,
+            graph_focus_index: None,
             previous_list_view: View::ResourceList,
+            detail_back_view: None,
             submenu_state: None,
             preview_original_theme: None,
             page_size: 10,
@@ -384,5 +439,51 @@ impl ControllerPodState {
     /// This represents the overall Flux release version, not individual controller versions
     pub fn get_flux_version(&self) -> Option<&str> {
         self.flux_bundle_version.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn view_classifiers_partition_views_as_expected() {
+        assert!(View::ResourceList.is_list_view());
+        assert!(View::ResourceFavorites.is_list_view());
+        assert!(!View::ResourceGraph.is_list_view());
+
+        assert!(View::ResourceYAML.is_text_search_view());
+        assert!(View::ResourceDescribe.is_text_search_view());
+        assert!(View::ResourceTrace.is_text_search_view());
+        assert!(!View::ResourceHistory.is_text_search_view());
+        assert!(!View::ResourceList.is_text_search_view());
+
+        for v in [
+            View::ResourceDetail,
+            View::ResourceDescribe,
+            View::ResourceYAML,
+            View::ResourceTrace,
+            View::ResourceHistory,
+            View::ResourceGraph,
+        ] {
+            assert!(v.is_nested_view(), "{v:?} should be a nested view");
+        }
+        assert!(!View::ResourceList.is_nested_view());
+        assert!(!View::ResourceFavorites.is_nested_view());
+    }
+
+    #[test]
+    fn scroll_offset_mut_targets_the_right_field() {
+        let mut vs = ViewState::default();
+
+        // Text/log views expose a line-scroll offset.
+        *View::ResourceYAML.scroll_offset_mut(&mut vs).unwrap() = 7;
+        assert_eq!(vs.yaml_scroll_offset, 7);
+        *View::ResourceHistory.scroll_offset_mut(&mut vs).unwrap() = 3;
+        assert_eq!(vs.history_scroll_offset, 3);
+
+        // List and graph views have bespoke navigation, so no scroll offset.
+        assert!(View::ResourceList.scroll_offset_mut(&mut vs).is_none());
+        assert!(View::ResourceGraph.scroll_offset_mut(&mut vs).is_none());
     }
 }

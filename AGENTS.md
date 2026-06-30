@@ -97,6 +97,19 @@ source of truth and prevents inconsistencies when Flux versions change.
 4. Add to help text (`src/tui/views/help.rs`)
 5. Write operation tests
 
+### Adding a Command
+
+`:` commands are dispatched from a data-driven table, not a long `if`/`match` chain.
+
+1. Add a focused `cmd_<name>(&mut self, cmd: &str)` handler on `App` (`src/tui/app/events.rs`)
+2. Add a predicate in `src/tui/commands.rs` (e.g. `is_<name>_command`)
+3. Register the `(predicate, handler)` pair in `COMMAND_TABLE` at the top of `events.rs`
+4. Update help text (`src/tui/views/help.rs`) and the docs site
+5. Write a test that drives `execute_command()` (see the `events.rs` test module)
+
+Special commands handled directly in `execute_command` (help/quit/readonly and the
+connection-error gate) and the resource-type fallback stay outside the table.
+
 ### View Components
 
 - Keep views stateless - they receive all needed data as parameters
@@ -106,6 +119,10 @@ source of truth and prevents inconsistencies when Flux versions change.
 - Submenu overlays render as centered popups on top of the current view
 - State management for submenus lives in `ViewState.submenu_state`
 - Event handling priority: confirmation → submenu → filter → normal commands
+- Per-view behavior is consolidated on `impl View` (`src/tui/app/state.rs`):
+  `scroll_offset_mut`, `is_list_view`, `is_text_search_view`, `is_nested_view`.
+  Add a new view's scroll/back/classification there instead of scattering
+  `match current_view` arms across the event handlers.
 
 ## Testing Requirements
 
@@ -205,3 +222,4 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
 - Update both `NO_PROXY` and `no_proxy` for environment compatibility
 - Generated models are version-controlled for reproducible builds
 - **Never hardcode Flux resource types, API groups, versions, or plural names** - always use `FluxResourceKind` enum and `get_gvk_for_resource_type()` helper function to ensure single source of truth
+- **Graph node dimensions have one source of truth**: `GraphNode::render_width`/`render_height` (`src/trace/graph.rs`). Both layout (`calculate_layout`) and drawing (`src/tui/views/graph.rs`) call them - never recompute node size inline. Connector geometry is produced by the pure, `Frame`-free `fanout_routes()` so it can be unit tested, separate from the drawing pass.

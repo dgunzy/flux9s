@@ -139,10 +139,18 @@ Terminal user interface built with ratatui.
 - Non-blocking async operations using `tokio::spawn`
 - Modular app structure with separated concerns (state, events, rendering, async)
 - Separate scroll offsets for different views
+- Per-view behavior (scroll target, back navigation, classification) lives on
+  `impl View` (`src/tui/app/state.rs`) rather than scattered `match` arms
 - Dynamic footer wrapping for smaller screens
 - Extensible operation system via trait-based design
-- Command mode with autocomplete support
+- Command mode with autocomplete support; `:` commands dispatch through a
+  data-driven `COMMAND_TABLE` of `(predicate, handler)` pairs in `events.rs`
 - Interactive submenu overlays for command selection
+- Graph view separates pure layout/geometry from drawing: node sizing lives on
+  `GraphNode::render_width`/`render_height`, and connector routing is computed by
+  the `Frame`-free `fanout_routes()` so it can be unit tested
+- Graph view supports keyboard focus navigation (`j`/`k` move focus, `Enter`
+  opens the focused node, `Esc` returns to the graph)
 
 #### 3. Models Module (`src/models/`)
 

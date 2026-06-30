@@ -5,6 +5,18 @@
 
 use std::collections::HashMap;
 
+/// Minimum rendered width of a graph node, in terminal columns.
+pub const MIN_NODE_WIDTH: u16 = 30;
+/// Maximum rendered width of a graph node, in terminal columns.
+pub const MAX_NODE_WIDTH: u16 = 60;
+/// Vertical gap (rows) between stacked nodes. Two is the minimum the fan-out edge
+/// routing needs: one row for the drop line and one for the horizontal branch.
+pub const NODE_VERTICAL_SPACING: u16 = 2;
+/// Horizontal gap (columns) between side-by-side inventory groups.
+pub const INVENTORY_GROUP_GAP: u16 = 4;
+/// Border + padding overhead reserved around a node's content, in columns.
+const NODE_HORIZONTAL_CHROME: u16 = 4;
+
 /// A node in the resource graph
 #[derive(Debug, Clone)]
 pub struct GraphNode {
@@ -24,6 +36,85 @@ pub struct GraphNode {
     pub position: Option<(u16, u16)>,
     /// Optional description/snippet about the resource (e.g., URL, path, etc.)
     pub description: Option<String>,
+}
+
+impl GraphNode {
+    /// Width of the widest line of content this node will render, in columns.
+    fn content_width(&self) -> u16 {
+        let desc = self
+            .description
+            .as_ref()
+            .map(|d| d.len() as u16)
+            .unwrap_or(0);
+        (self.name.len() as u16)
+            .max(self.kind.len() as u16)
+            .max(desc)
+    }
+
+    /// Rendered width in columns, clamped to sane bounds and the available width.
+    /// Single source of truth for node width across layout and drawing.
+    pub fn render_width(&self, available_width: u16) -> u16 {
+        self.content_width()
+            .clamp(MIN_NODE_WIDTH, MAX_NODE_WIDTH)
+            .min(available_width.saturating_sub(NODE_HORIZONTAL_CHROME))
+    }
+
+    /// Rendered height in rows: title section + content + borders. Single source
+    /// of truth for node height across layout and drawing.
+    pub fn render_height(&self) -> u16 {
+        // Group nodes show only a name + separator inside the borders (4 rows of
+        // chrome); other nodes also carry a kind label (5 rows).
+        let mut height = if matches!(
+            self.node_type,
+            NodeType::WorkloadGroup | NodeType::ResourceGroup
+        ) {
+            4
+        } else {
+            5
+        };
+
+        match self.node_type {
+            NodeType::Workload => {
+                if self.description.is_some() {
+                    height += 2; // description line + namespace subtitle
+                }
+            }
+            NodeType::WorkloadGroup => {
+                if let Some(desc) = &self.description {
+                    let lines: Vec<&str> = desc.lines().collect();
+                    let count = lines.len();
+                    if count > 0 {
+                        // A namespace line is shown per workload only when they differ.
+                        let show_namespace = count > 1 && {
+                            let first = lines[0].split('|').nth(2).unwrap_or("");
+                            !lines
+                                .iter()
+                                .all(|l| l.split('|').nth(2).unwrap_or("") == first)
+                        };
+                        let per_workload = if show_namespace { 4 } else { 3 };
+                        let blanks = count.saturating_sub(1);
+                        height += (count * per_workload + blanks) as u16;
+                    }
+                }
+            }
+            NodeType::ResourceGroup => {
+                if let Some(desc) = &self.description {
+                    // One line per resource kind ("Kind: count", joined by ", ").
+                    height += (desc.matches(", ").count() + 1) as u16;
+                }
+            }
+            _ => {
+                if self.description.is_some() {
+                    height += 1; // description line
+                }
+                if self.ready.is_some() {
+                    height += 1; // status line
+                }
+            }
+        }
+
+        height
+    }
 }
 
 /// Type of node in the graph
@@ -104,222 +195,140 @@ impl ResourceGraph {
         self.edges.push(edge);
     }
 
-    /// Calculate a simple hierarchical layout for the graph
-    /// Returns (width, height) needed for the layout
+    /// Vertical layer a node type occupies in the layout, used to order keyboard
+    /// focus from top to bottom (sources at the top, inventory at the bottom).
+    /// Mirrors the ordering applied in [`Self::calculate_layout`].
+    fn node_layer(node_type: NodeType) -> u8 {
+        match node_type {
+            NodeType::Upstream => 0,
+            NodeType::Source => 1,
+            NodeType::Chain => 2,
+            NodeType::Object => 3,
+            NodeType::FluxResource => 4,
+            NodeType::Workload | NodeType::WorkloadGroup => 5,
+            NodeType::ResourceGroup => 6,
+        }
+    }
+
+    /// Node indices in visual top-to-bottom order, used for keyboard focus
+    /// navigation. Within a layer, insertion order is preserved (stable sort).
+    pub fn focus_order(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.nodes.len()).collect();
+        order.sort_by_key(|&i| (Self::node_layer(self.nodes[i].node_type), i));
+        order
+    }
+
+    /// Index of the primary "object" node (the resource being viewed), if any.
+    /// Used as the initial focus target so the graph is navigable immediately.
+    pub fn object_node_index(&self) -> Option<usize> {
+        self.nodes
+            .iter()
+            .position(|n| n.node_type == NodeType::Object)
+    }
+
+    /// Position `indices` as a vertical, horizontally-centered stack starting at
+    /// `*current_y`, advancing `*current_y` past the placed nodes.
+    fn stack_centered(
+        &mut self,
+        indices: &[usize],
+        available_width: u16,
+        center_x: u16,
+        current_y: &mut u16,
+    ) {
+        for &idx in indices {
+            if let Some(node) = self.nodes.get_mut(idx) {
+                let x = center_x.saturating_sub(node.render_width(available_width) / 2);
+                node.position = Some((x, *current_y));
+                *current_y += node.render_height() + NODE_VERTICAL_SPACING;
+            }
+        }
+    }
+
+    /// Position `indices` as a vertical stack at a fixed `x`, returning the `y`
+    /// just past the last placed node.
+    fn stack_at(&mut self, indices: &[usize], x: u16, start_y: u16) -> u16 {
+        let mut y = start_y;
+        for &idx in indices {
+            if let Some(node) = self.nodes.get_mut(idx) {
+                node.position = Some((x, y));
+                y += node.render_height() + NODE_VERTICAL_SPACING;
+            }
+        }
+        y
+    }
+
+    /// Widest rendered width among `indices`, falling back to the minimum width.
+    fn max_render_width(&self, indices: &[usize], available_width: u16) -> u16 {
+        indices
+            .iter()
+            .filter_map(|&idx| self.nodes.get(idx))
+            .map(|node| node.render_width(available_width))
+            .max()
+            .unwrap_or(MIN_NODE_WIDTH)
+    }
+
+    /// Calculate a simple hierarchical layout for the graph.
+    /// Sources sit at the top, the object in the middle, inventory at the bottom.
+    /// Returns the (width, height) the layout occupies.
     pub fn calculate_layout(&mut self, available_width: u16, _available_height: u16) -> (u16, u16) {
         if self.nodes.is_empty() {
             return (0, 0);
         }
 
-        // Flexible layout with dynamic sizing
-        // UPSTREAM FIRST (sources at top), then object, then workloads/resources at bottom
-        let min_node_width = 30u16; // Minimum width per node
-        let max_node_width = available_width.saturating_sub(4).min(60); // Max width, leave margins
-        let vertical_spacing = 3u16; // Space between nodes (increased from 2)
-
-        // Group nodes by type
-        let mut object_nodes = Vec::new();
-        let mut chain_nodes = Vec::new();
-        let mut source_nodes = Vec::new();
-        let mut upstream_nodes = Vec::new();
-        let mut flux_resource_nodes = Vec::new();
-        let mut workload_nodes = Vec::new();
-        let mut workload_group_nodes = Vec::new();
-        let mut resource_group_nodes = Vec::new();
-
+        // Bucket node indices by type so each layer can be positioned in turn.
+        // Individual Workload nodes are never placed directly (they're aggregated
+        // into a WorkloadGroup by the builder), so they're intentionally skipped.
+        let mut upstream = Vec::new();
+        let mut sources = Vec::new();
+        let mut chain = Vec::new();
+        let mut object = Vec::new();
+        let mut flux = Vec::new();
+        let mut workload_groups = Vec::new();
+        let mut resource_groups = Vec::new();
         for (idx, node) in self.nodes.iter().enumerate() {
             match node.node_type {
-                NodeType::Object => object_nodes.push(idx),
-                NodeType::Chain => chain_nodes.push(idx),
-                NodeType::Source => source_nodes.push(idx),
-                NodeType::Upstream => upstream_nodes.push(idx),
-                NodeType::FluxResource => flux_resource_nodes.push(idx),
-                NodeType::Workload => workload_nodes.push(idx),
-                NodeType::WorkloadGroup => workload_group_nodes.push(idx),
-                NodeType::ResourceGroup => resource_group_nodes.push(idx),
+                NodeType::Upstream => upstream.push(idx),
+                NodeType::Source => sources.push(idx),
+                NodeType::Chain => chain.push(idx),
+                NodeType::Object => object.push(idx),
+                NodeType::FluxResource => flux.push(idx),
+                NodeType::WorkloadGroup => workload_groups.push(idx),
+                NodeType::ResourceGroup => resource_groups.push(idx),
+                NodeType::Workload => {}
             }
         }
 
-        // Calculate positions with flexible layout
-        // UPSTREAM FIRST (sources at top), then object, then workloads/resources at bottom
         let center_x = available_width / 2;
         let mut current_y = 1u16;
 
-        // Calculate node dimensions based on content
-        let calculate_node_width = |node: &GraphNode| -> u16 {
-            let name_len = node.name.len() as u16;
-            let kind_len = node.kind.len() as u16;
-            let desc_len = node
-                .description
-                .as_ref()
-                .map(|d| d.len() as u16)
-                .unwrap_or(0);
-            let max_content = name_len.max(kind_len).max(desc_len);
-            max_content.max(min_node_width).min(max_node_width)
-        };
-
-        let calculate_node_height = |node: &GraphNode| -> u16 {
-            // Calculate height: title section + content + borders
-            // For WorkloadGroup/ResourceGroup: name (1) + separator (1) + borders (2) = 4
-            // For other nodes: kind label (1) + name (1) + separator (1) + borders (2) = 5
-            let mut height = if matches!(
-                node.node_type,
-                NodeType::WorkloadGroup | NodeType::ResourceGroup
-            ) {
-                4u16 // name + separator + borders
-            } else {
-                5u16 // kind label + name + separator + borders
-            };
-
-            // Workload nodes have: type label + name + description (replica count) + resource name subtitle
-            if matches!(node.node_type, NodeType::Workload) {
-                if node.description.is_some() {
-                    height += 2; // description line + resource name subtitle
-                }
-            } else if matches!(node.node_type, NodeType::WorkloadGroup) {
-                // Workload group nodes show each workload as 4-5 lines (kind, name, status, optional namespace) + 1 blank line between
-                if let Some(ref desc) = node.description {
-                    // Count the number of workloads (separated by newlines)
-                    let workload_lines: Vec<&str> = desc.lines().collect();
-                    let workload_count = workload_lines.len();
-
-                    if workload_count > 0 {
-                        // Check if namespaces differ (if so, namespace line will be shown for each workload)
-                        let show_namespace = if workload_count > 1 {
-                            let first_namespace = workload_lines[0].split('|').nth(2).unwrap_or("");
-                            !workload_lines
-                                .iter()
-                                .all(|line| line.split('|').nth(2).unwrap_or("") == first_namespace)
-                        } else {
-                            false
-                        };
-
-                        // Each workload: kind (1) + name (1) + status (1) + namespace (0-1) = 3-4 lines
-                        // Plus 1 blank line between workloads (workload_count - 1 blank lines)
-                        let lines_per_workload = if show_namespace { 4 } else { 3 };
-                        let blank_lines = workload_count.saturating_sub(1);
-                        height += (workload_count * lines_per_workload + blank_lines) as u16;
-                    }
-                }
-            } else if matches!(node.node_type, NodeType::ResourceGroup) {
-                // Resource group nodes show each resource kind on a separate line
-                if let Some(ref desc) = node.description {
-                    // Count the number of resource items (separated by ", ")
-                    let item_count = desc.matches(", ").count() + 1;
-                    height += item_count as u16;
-                }
-            } else {
-                if node.description.is_some() {
-                    height += 1; // description line
-                }
-                if node.ready.is_some() {
-                    height += 1; // status line
-                }
-            }
-            height
-        };
-
-        // Position upstream nodes at VERY TOP (external sources like GitHub URLs)
-        for &idx in &upstream_nodes {
-            if let Some(node) = self.nodes.get_mut(idx) {
-                let node_width = calculate_node_width(node);
-                let node_height = calculate_node_height(node);
-                node.position = Some((center_x.saturating_sub(node_width / 2), current_y));
-                current_y += node_height + vertical_spacing;
-            }
+        // Centered single-column layers, top to bottom.
+        for layer in [&upstream, &sources, &chain, &object, &flux] {
+            self.stack_centered(layer, available_width, center_x, &mut current_y);
         }
 
-        // Position source nodes (Flux source resources)
-        for &idx in &source_nodes {
-            if let Some(node) = self.nodes.get_mut(idx) {
-                let node_width = calculate_node_width(node);
-                let node_height = calculate_node_height(node);
-                node.position = Some((center_x.saturating_sub(node_width / 2), current_y));
-                current_y += node_height + vertical_spacing;
-            }
-        }
-
-        // Position chain nodes in middle (intermediate resources like HelmChart)
-        for &idx in &chain_nodes {
-            if let Some(node) = self.nodes.get_mut(idx) {
-                let node_width = calculate_node_width(node);
-                let node_height = calculate_node_height(node);
-                node.position = Some((center_x.saturating_sub(node_width / 2), current_y));
-                current_y += node_height + vertical_spacing;
-            }
-        }
-
-        // Position object node (the Kustomization/HelmRelease being viewed)
-        for &idx in &object_nodes {
-            if let Some(node) = self.nodes.get_mut(idx) {
-                let node_width = calculate_node_width(node);
-                let node_height = calculate_node_height(node);
-                node.position = Some((center_x.saturating_sub(node_width / 2), current_y));
-                current_y += node_height + vertical_spacing;
-            }
-        }
-
-        // Position Flux resources managed by this resource (individual items)
-        for &idx in &flux_resource_nodes {
-            if let Some(node) = self.nodes.get_mut(idx) {
-                let node_width = calculate_node_width(node);
-                let node_height = calculate_node_height(node);
-                node.position = Some((center_x.saturating_sub(node_width / 2), current_y));
-                current_y += node_height + vertical_spacing;
-            }
-        }
-
-        // Position inventory nodes at BOTTOM (side by side if multiple categories)
+        // Inventory groups at the bottom.
         let inventory_y = current_y;
-        let has_workload_groups = !workload_group_nodes.is_empty();
-        let has_resource_groups = !resource_group_nodes.is_empty();
+        match (!workload_groups.is_empty(), !resource_groups.is_empty()) {
+            (true, true) => {
+                // Side by side, centered as a pair with a small gap so the fan-out
+                // from the parent stays tight rather than spanning the whole width.
+                let left_w = self.max_render_width(&workload_groups, available_width);
+                let right_w = self.max_render_width(&resource_groups, available_width);
+                let total = left_w + INVENTORY_GROUP_GAP + right_w;
+                let left_x = center_x.saturating_sub(total / 2);
+                let right_x = left_x + left_w + INVENTORY_GROUP_GAP;
 
-        if has_workload_groups && has_resource_groups {
-            // Both workload groups and resource groups exist - place side by side
-            let left_x = center_x.saturating_sub(max_node_width + 5);
-            let right_x = center_x + 5;
-
-            // Workload groups on left
-            let mut workloads_y = inventory_y;
-            for &idx in &workload_group_nodes {
-                if let Some(node) = self.nodes.get_mut(idx) {
-                    let node_height = calculate_node_height(node);
-                    node.position = Some((left_x, workloads_y));
-                    workloads_y += node_height + vertical_spacing;
-                }
+                let left_end = self.stack_at(&workload_groups, left_x, inventory_y);
+                let right_end = self.stack_at(&resource_groups, right_x, inventory_y);
+                current_y = left_end.max(right_end);
             }
-
-            // Resource groups on right
-            let mut resources_y = inventory_y;
-            for &idx in &resource_group_nodes {
-                if let Some(node) = self.nodes.get_mut(idx) {
-                    let node_height = calculate_node_height(node);
-                    node.position = Some((right_x, resources_y));
-                    resources_y += node_height + vertical_spacing;
-                }
+            (true, false) => {
+                self.stack_centered(&workload_groups, available_width, center_x, &mut current_y)
             }
-
-            current_y = workloads_y.max(resources_y);
-        } else if has_workload_groups {
-            // Only workload groups - center them
-            for &idx in &workload_group_nodes {
-                if let Some(node) = self.nodes.get_mut(idx) {
-                    let node_width = calculate_node_width(node);
-                    let node_height = calculate_node_height(node);
-                    node.position = Some((center_x.saturating_sub(node_width / 2), current_y));
-                    current_y += node_height + vertical_spacing;
-                }
+            (false, true) => {
+                self.stack_centered(&resource_groups, available_width, center_x, &mut current_y)
             }
-        } else if has_resource_groups {
-            // Only resource groups - center them
-            for &idx in &resource_group_nodes {
-                if let Some(node) = self.nodes.get_mut(idx) {
-                    let node_width = calculate_node_width(node);
-                    let node_height = calculate_node_height(node);
-                    node.position = Some((center_x.saturating_sub(node_width / 2), current_y));
-                    current_y += node_height + vertical_spacing;
-                }
-            }
+            (false, false) => {}
         }
 
         (available_width, current_y)
@@ -329,5 +338,119 @@ impl ResourceGraph {
 impl Default for ResourceGraph {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(id: &str, node_type: NodeType) -> GraphNode {
+        GraphNode {
+            id: id.to_string(),
+            kind: "Test".to_string(),
+            name: id.to_string(),
+            namespace: "default".to_string(),
+            node_type,
+            ready: None,
+            position: None,
+            description: None,
+        }
+    }
+
+    #[test]
+    fn focus_order_sorts_top_to_bottom_by_layer() {
+        // Insertion order deliberately scrambles the visual layering.
+        let mut graph = ResourceGraph::new();
+        graph.add_node(node("object", NodeType::Object)); // idx 0, layer 3
+        graph.add_node(node("source", NodeType::Source)); // idx 1, layer 1
+        graph.add_node(node("wg", NodeType::WorkloadGroup)); // idx 2, layer 5
+        graph.add_node(node("upstream", NodeType::Upstream)); // idx 3, layer 0
+
+        // Expected visual order: upstream, source, object, workload group.
+        assert_eq!(graph.focus_order(), vec![3, 1, 0, 2]);
+    }
+
+    #[test]
+    fn focus_order_preserves_insertion_within_a_layer() {
+        let mut graph = ResourceGraph::new();
+        graph.add_node(node("flux-a", NodeType::FluxResource));
+        graph.add_node(node("flux-b", NodeType::FluxResource));
+        graph.add_node(node("flux-c", NodeType::FluxResource));
+
+        assert_eq!(graph.focus_order(), vec![0, 1, 2]);
+    }
+
+    fn node_with(node_type: NodeType, description: Option<&str>, ready: Option<bool>) -> GraphNode {
+        GraphNode {
+            id: "id".to_string(),
+            kind: "GitRepository".to_string(),
+            name: "name".to_string(),
+            namespace: "default".to_string(),
+            node_type,
+            ready,
+            position: None,
+            description: description.map(|d| d.to_string()),
+        }
+    }
+
+    #[test]
+    fn render_height_matches_rendered_rows() {
+        // Plain node: 5 rows of chrome only.
+        assert_eq!(node_with(NodeType::Object, None, None).render_height(), 5);
+        // Plain node with a description and a status line: 5 + 1 + 1.
+        assert_eq!(
+            node_with(NodeType::Source, Some("https://x"), Some(true)).render_height(),
+            7
+        );
+        // Resource group: 4 chrome + one row per kind ("A: 1, B: 2, C: 3" => 3).
+        assert_eq!(
+            node_with(NodeType::ResourceGroup, Some("A: 1, B: 2, C: 3"), None).render_height(),
+            7
+        );
+        // Workload group, single workload (no namespace row): 4 + 3.
+        assert_eq!(
+            node_with(
+                NodeType::WorkloadGroup,
+                Some("Deployment|a|ns1|●|1/1"),
+                None
+            )
+            .render_height(),
+            7
+        );
+        // Workload group, two workloads in differing namespaces: 4 + (2*4 + 1).
+        assert_eq!(
+            node_with(
+                NodeType::WorkloadGroup,
+                Some("Deployment|a|ns1|●|1/1\nDeployment|b|ns2|●|2/2"),
+                None,
+            )
+            .render_height(),
+            13
+        );
+    }
+
+    #[test]
+    fn render_width_clamps_to_bounds_and_available() {
+        let short = node_with(NodeType::Object, None, None); // content < MIN
+        assert_eq!(short.render_width(100), MIN_NODE_WIDTH);
+
+        // Long description pushes content past MAX, so it clamps to MAX.
+        let long = node_with(NodeType::Object, Some(&"x".repeat(120)), None);
+        assert_eq!(long.render_width(100), MAX_NODE_WIDTH);
+
+        // A narrow viewport wins over the content-based width.
+        assert_eq!(long.render_width(20), 20 - NODE_HORIZONTAL_CHROME);
+    }
+
+    #[test]
+    fn object_node_index_finds_the_object() {
+        let mut graph = ResourceGraph::new();
+        graph.add_node(node("source", NodeType::Source));
+        graph.add_node(node("object", NodeType::Object));
+        assert_eq!(graph.object_node_index(), Some(1));
+
+        let empty = ResourceGraph::new();
+        assert_eq!(empty.object_node_index(), None);
     }
 }

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Graph view keyboard navigation: `j`/`k` move a highlighted focus between nodes
+  (the view auto-scrolls to keep it visible), `Enter` opens the focused resource's
+  detail view, and `Esc` returns to the graph.
+
+### Changed
+- Graph connectors are redrawn as consistent fan-outs (trunk → branch above the
+  children → drop into each child) using proper box-drawing junctions, and nodes
+  sit closer together for a tighter, clearer layout.
+
+### Internal
+- Single source of truth for graph node sizing (`GraphNode::render_width`/
+  `render_height`); connector geometry extracted into the testable, `Frame`-free
+  `fanout_routes()`.
+- Per-view behavior consolidated onto `impl View` helpers (`scroll_offset_mut`,
+  `is_list_view`, `is_text_search_view`, `is_nested_view`).
+- `:` command handling is now data-driven via `COMMAND_TABLE` with focused
+  `cmd_*` handlers, replacing the long string-matching chain in `execute_command`.
+
 ## [0.10.2] - 2026-06-21
 
 ### Changes\n- Version bump to 0.10.2

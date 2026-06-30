@@ -469,6 +469,7 @@ impl App {
                         &self.async_state.graph_result,
                         &self.async_state.graph_pending,
                         &mut self.view_state.graph_scroll_offset,
+                        self.view_state.graph_focus_index,
                         &self.theme,
                     );
                 }

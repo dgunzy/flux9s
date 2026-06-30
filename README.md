@@ -150,7 +150,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 
 ### Resource Views
 
-- **Graph View (`g`)** - Visualize resource relationships and dependencies. Shows upstream sources and downstream managed resources. Supported for Kustomization, HelmRelease, ArtifactGenerator, FluxInstance, and ResourceSet.
+- **Graph View (`g`)** - Visualize resource relationships and dependencies. Shows upstream sources and downstream managed resources. Move the highlighted focus between nodes with `j`/`k` (the view scrolls to keep it visible), press `Enter` to open the focused resource's detail view, and `Esc` to return to the graph. Supported for Kustomization, HelmRelease, ArtifactGenerator, FluxInstance, and ResourceSet.
 - **History View (`h`)** - View reconciliation history for FluxInstance, ResourceSet, Kustomization, and HelmRelease resources.
 - **Favorites (`f`)** - Mark resources as favorites for quick access. Use `:favorites` command to view all favorites.
 

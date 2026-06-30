@@ -65,7 +65,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         ("<k>/<Up>", "Navigate up"),
         ("<Ctrl+f>/<PgDn>", "Page down"),
         ("<Ctrl+b>/<PgUp>", "Page up"),
-        ("<Enter>", "View details"),
+        ("<Enter>", "Open details / focused graph node"),
         ("<N>/<A>/<T>/<S>", "Sort name/age/type/status"),
         ("</>", "Search in YAML/describe/trace"),
         ("<n>/<N>", "Next/prev search match"),

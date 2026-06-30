@@ -5,61 +5,61 @@
 
 use super::core::App;
 use super::state::{HealthFilter, PendingOperation, View};
+use crate::tui::commands;
 use crate::watcher::ResourceKey;
 use crossterm::event::KeyEvent;
+
+/// A `:` command handler dispatched from [`App::execute_command`]. Receives the
+/// app and the original (case-preserving) command string.
+type CommandHandler = fn(&mut App, &str);
+
+/// Data-driven dispatch for the uniform `(predicate over the lowercased command,
+/// handler)` `:` commands. Checked in order; the first matching predicate wins.
+/// Special commands (help/quit/readonly, the connection gate) and the
+/// resource-type fallback are handled directly in [`App::execute_command`].
+const COMMAND_TABLE: &[(fn(&str) -> bool, CommandHandler)] = &[
+    (commands::is_skin_command, App::cmd_set_skin),
+    (commands::is_trace_command, App::cmd_trace),
+    (commands::is_context_command, App::cmd_switch_context),
+    (commands::is_namespace_command, App::cmd_switch_namespace),
+    (commands::is_healthy_command, App::cmd_filter_healthy),
+    (commands::is_unhealthy_command, App::cmd_filter_unhealthy),
+    (commands::is_favorites_command, App::cmd_show_favorites),
+    (commands::is_all_command, App::cmd_show_all),
+];
 
 impl App {
     /// Scroll the active view down by `amount` lines, or advance the list
     /// selection when a list view is active. Shared by j/Down, PageDown and
     /// Ctrl+F so all scroll keys behave identically in every view.
     fn scroll_down(&mut self, amount: usize) {
-        match self.view_state.current_view {
-            View::ResourceYAML => self.view_state.yaml_scroll_offset += amount,
-            View::ResourceDescribe => self.view_state.describe_scroll_offset += amount,
-            View::ResourceTrace => self.view_state.trace_scroll_offset += amount,
-            View::ResourceHistory => self.view_state.history_scroll_offset += amount,
-            View::ResourceGraph => self.view_state.graph_scroll_offset += amount,
-            _ => {
-                let resources = self.get_filtered_resources();
-                let max_index = resources.len().saturating_sub(1);
-                self.view_state.selected_index =
-                    (self.view_state.selected_index + amount).min(max_index);
-            }
+        let view = self.view_state.current_view;
+        // In the graph, j/Down/PageDown move keyboard focus between nodes instead
+        // of free-scrolling; the renderer scrolls to keep the focused node on screen.
+        if view == View::ResourceGraph {
+            self.move_graph_focus(true);
+        } else if let Some(offset) = view.scroll_offset_mut(&mut self.view_state) {
+            *offset += amount;
+        } else {
+            let resources = self.get_filtered_resources();
+            let max_index = resources.len().saturating_sub(1);
+            self.view_state.selected_index =
+                (self.view_state.selected_index + amount).min(max_index);
         }
     }
 
     /// Scroll the active view up by `amount` lines, or move the list selection
     /// up when a list view is active (keeping the selection visible).
     fn scroll_up(&mut self, amount: usize) {
-        match self.view_state.current_view {
-            View::ResourceYAML => {
-                self.view_state.yaml_scroll_offset =
-                    self.view_state.yaml_scroll_offset.saturating_sub(amount);
-            }
-            View::ResourceDescribe => {
-                self.view_state.describe_scroll_offset = self
-                    .view_state
-                    .describe_scroll_offset
-                    .saturating_sub(amount);
-            }
-            View::ResourceTrace => {
-                self.view_state.trace_scroll_offset =
-                    self.view_state.trace_scroll_offset.saturating_sub(amount);
-            }
-            View::ResourceHistory => {
-                self.view_state.history_scroll_offset =
-                    self.view_state.history_scroll_offset.saturating_sub(amount);
-            }
-            View::ResourceGraph => {
-                self.view_state.graph_scroll_offset =
-                    self.view_state.graph_scroll_offset.saturating_sub(amount);
-            }
-            _ => {
-                self.view_state.selected_index =
-                    self.view_state.selected_index.saturating_sub(amount);
-                if self.view_state.selected_index < self.view_state.scroll_offset {
-                    self.view_state.scroll_offset = self.view_state.selected_index;
-                }
+        let view = self.view_state.current_view;
+        if view == View::ResourceGraph {
+            self.move_graph_focus(false);
+        } else if let Some(offset) = view.scroll_offset_mut(&mut self.view_state) {
+            *offset = offset.saturating_sub(amount);
+        } else {
+            self.view_state.selected_index = self.view_state.selected_index.saturating_sub(amount);
+            if self.view_state.selected_index < self.view_state.scroll_offset {
+                self.view_state.scroll_offset = self.view_state.selected_index;
             }
         }
     }
@@ -412,9 +412,12 @@ impl App {
                 }
             }
             crossterm::event::KeyCode::Enter
-                if (self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites) =>
+                if self.view_state.current_view == View::ResourceGraph =>
             {
+                // Drill into the focused graph node's resource.
+                self.navigate_to_focused_graph_node();
+            }
+            crossterm::event::KeyCode::Enter if self.view_state.current_view.is_list_view() => {
                 // Save current view as previous list view before navigating
                 self.view_state.previous_list_view = self.view_state.current_view;
                 let resources = self.get_filtered_resources();
@@ -425,14 +428,13 @@ impl App {
                         &resource.resource_type,
                     );
                     self.selection_state.selected_resource_key = Some(key);
+                    // Opened from the list, so Back returns to the list.
+                    self.view_state.detail_back_view = None;
                     self.view_state.current_view = View::ResourceDetail;
                 }
             }
             // Toggle favorite - works from list view
-            crossterm::event::KeyCode::Char('f')
-                if (self.view_state.current_view == View::ResourceList
-                    || self.view_state.current_view == View::ResourceFavorites) =>
-            {
+            crossterm::event::KeyCode::Char('f') if self.view_state.current_view.is_list_view() => {
                 let resources = self.get_filtered_resources();
                 if let Some(resource) = resources.get(self.view_state.selected_index) {
                     let key = crate::watcher::resource_key(
@@ -522,9 +524,7 @@ impl App {
                     }
 
                     // Save current view as previous list view before navigating
-                    if self.view_state.current_view == View::ResourceList
-                        || self.view_state.current_view == View::ResourceFavorites
-                    {
+                    if self.view_state.current_view.is_list_view() {
                         self.view_state.previous_list_view = self.view_state.current_view;
                     }
 
@@ -543,6 +543,7 @@ impl App {
                     });
                     self.async_state.graph_result = None; // Clear previous graph
                     self.view_state.graph_scroll_offset = 0; // Reset scroll
+                    self.view_state.graph_focus_index = None; // Reset focus (set when graph loads)
                     self.view_state.current_view = View::ResourceGraph;
                 } else {
                     self.set_status_message(("No resource selected".to_string(), true));
@@ -550,17 +551,16 @@ impl App {
             }
             crossterm::event::KeyCode::Backspace => {
                 // Backspace goes back (same as Escape for detail view)
-                if self.view_state.current_view == View::ResourceDetail
-                    || self.view_state.current_view == View::ResourceDescribe
-                    || self.view_state.current_view == View::ResourceYAML
-                    || self.view_state.current_view == View::ResourceTrace
-                    || self.view_state.current_view == View::ResourceHistory
-                    || self.view_state.current_view == View::ResourceGraph
-                {
-                    // Return to previous list view (favorites if we came from there, otherwise list)
-                    self.view_state.current_view = self.view_state.previous_list_view;
-                    self.selection_state.selected_resource_key = None;
-                    self.view_state.text_search.clear();
+                if self.view_state.current_view.is_nested_view() {
+                    // Mirror Esc: return to the graph if we came from there,
+                    // otherwise to the previous list view.
+                    if let Some(back) = self.detail_graph_back() {
+                        self.view_state.current_view = back;
+                    } else {
+                        self.view_state.current_view = self.view_state.previous_list_view;
+                        self.selection_state.selected_resource_key = None;
+                        self.view_state.text_search.clear();
+                    }
                 } else if self.view_state.current_view == View::ResourceFavorites {
                     self.view_state.current_view = View::ResourceList;
                     self.selection_state.selected_resource_key = None;
@@ -620,10 +620,7 @@ impl App {
 
     /// Whether the current view supports text search (`/`)
     fn is_text_search_view(&self) -> bool {
-        matches!(
-            self.view_state.current_view,
-            View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace
-        )
+        self.view_state.current_view.is_text_search_view()
     }
 
     /// Handle a key press while typing a text-view search query
@@ -772,6 +769,98 @@ impl App {
     /// Shared implementation for `q` and `Esc`, matching k9s behaviour where
     /// neither key exits the application directly. The help overlay is treated as
     /// a navigable layer and is dismissed first before any view transition occurs.
+    /// Move keyboard focus between graph nodes in visual (top-to-bottom) order.
+    /// Clamps at the ends rather than wrapping so the direction stays intuitive.
+    /// Auto-scrolling to keep the focused node visible is handled by the renderer.
+    fn move_graph_focus(&mut self, forward: bool) {
+        let Some(graph) = self.async_state.graph_result.as_ref() else {
+            return;
+        };
+        let order = graph.focus_order();
+        if order.is_empty() {
+            return;
+        }
+
+        // Where the current focus sits within the visual order (start by default).
+        let current_pos = self
+            .view_state
+            .graph_focus_index
+            .and_then(|idx| order.iter().position(|&i| i == idx));
+
+        let next_pos = match current_pos {
+            Some(pos) if forward => (pos + 1).min(order.len() - 1),
+            Some(pos) => pos.saturating_sub(1),
+            None => 0,
+        };
+        self.view_state.graph_focus_index = Some(order[next_pos]);
+    }
+
+    /// Open the detail view for the focused graph node when it maps to a watched
+    /// resource. Aggregate nodes (workload/resource groups) and external upstream
+    /// URLs are not directly navigable and just show a hint instead.
+    fn navigate_to_focused_graph_node(&mut self) {
+        use crate::trace::NodeType;
+
+        // Pull the owned identity out first so the immutable borrow of the graph
+        // ends before we mutate view/selection state below.
+        let Some((node_type, kind, namespace, name)) = self
+            .async_state
+            .graph_result
+            .as_ref()
+            .and_then(|graph| {
+                self.view_state
+                    .graph_focus_index
+                    .and_then(|idx| graph.nodes.get(idx))
+            })
+            .map(|n| {
+                (
+                    n.node_type,
+                    n.kind.clone(),
+                    n.namespace.clone(),
+                    n.name.clone(),
+                )
+            })
+        else {
+            return;
+        };
+
+        if matches!(
+            node_type,
+            NodeType::WorkloadGroup | NodeType::ResourceGroup | NodeType::Upstream
+        ) {
+            self.set_status_message((
+                "Aggregate node — select an individual Flux resource to open it".to_string(),
+                false,
+            ));
+            return;
+        }
+
+        let key = crate::watcher::resource_key(&namespace, &name, &kind);
+        if self.state.get(&key).is_some() {
+            self.selection_state.selected_resource_key = Some(key);
+            // Remember to return to the graph (not the list) when the user backs
+            // out of the detail view.
+            self.view_state.detail_back_view = Some(View::ResourceGraph);
+            self.view_state.current_view = View::ResourceDetail;
+        } else {
+            self.set_status_message((
+                format!("{} {} is not in the current view", kind, name),
+                false,
+            ));
+        }
+    }
+
+    /// If the detail view was entered by drilling into a graph node, consume and
+    /// return the stored back target (the graph). Returns `None` for any other
+    /// view or entry path, leaving normal back-to-list behaviour in place.
+    fn detail_graph_back(&mut self) -> Option<View> {
+        if self.view_state.current_view == View::ResourceDetail {
+            self.view_state.detail_back_view.take()
+        } else {
+            None
+        }
+    }
+
     fn navigate_back_or_confirm_quit(&mut self) -> Option<bool> {
         if self.ui_state.show_help {
             self.ui_state.show_help = false;
@@ -790,11 +879,16 @@ impl App {
             | View::ResourceTrace
             | View::ResourceHistory
             | View::ResourceGraph => {
-                // Go back to the previous list view (favourites if we came from
-                // there, otherwise the main resource list).
-                self.view_state.current_view = self.view_state.previous_list_view;
-                self.selection_state.selected_resource_key = None;
-                self.view_state.text_search.clear();
+                // If we drilled into this detail view from the graph, return to
+                // the graph; otherwise go back to the previous list view
+                // (favourites if we came from there, else the main resource list).
+                if let Some(back) = self.detail_graph_back() {
+                    self.view_state.current_view = back;
+                } else {
+                    self.view_state.current_view = self.view_state.previous_list_view;
+                    self.selection_state.selected_resource_key = None;
+                    self.view_state.text_search.clear();
+                }
                 None
             }
             View::ResourceFavorites => {
@@ -1033,43 +1127,36 @@ impl App {
         }
     }
 
+    /// Execute the command currently in the command buffer.
+    ///
+    /// A few commands are special and handled up front: help/quit toggle global
+    /// state, readonly runs before the connection gate, and the gate blocks most
+    /// commands while disconnected. Everything else is dispatched through
+    /// [`COMMAND_TABLE`] (a data-driven `(predicate, handler)` list); unmatched
+    /// input falls through to resource-type selection or an "unknown command"
+    /// message. Returns `Some(true)` only to quit.
     fn execute_command(&mut self) -> Option<bool> {
-        let cmd = self.ui_state.command_buffer.trim();
+        // Own the command string so the per-command handlers can take `&mut self`
+        // without conflicting with a borrow of the command buffer.
+        let cmd = self.ui_state.command_buffer.trim().to_string();
         let cmd_lower = cmd.to_lowercase();
 
-        // Handle help command
-        if crate::tui::commands::is_help_command(&cmd_lower) {
+        if commands::is_help_command(&cmd_lower) {
             self.ui_state.show_help = !self.ui_state.show_help;
             return None;
         }
-
-        // Handle quit commands
-        if crate::tui::commands::is_quit_command(&cmd_lower) {
-            return Some(true); // Quit
+        if commands::is_quit_command(&cmd_lower) {
+            return Some(true);
         }
-
-        // Handle readonly toggle command
-        if crate::tui::commands::is_readonly_command(&cmd_lower) {
-            self.config.read_only = !self.config.read_only;
-            let status = if self.config.read_only {
-                "enabled"
-            } else {
-                "disabled"
-            };
-
-            // Reload skin based on readonly mode
-            // Clone context name to avoid borrow checker issues
-            let context_name = self.context.clone();
-            self.reload_skin_for_readonly_mode(Some(&context_name));
-
-            self.set_status_message((format!("Readonly mode {}", status), false));
+        if commands::is_readonly_command(&cmd_lower) {
+            self.cmd_toggle_readonly();
             return None;
         }
 
-        // If we have a connection error, block all commands except context and skin commands.
+        // While disconnected, only context/skin commands are allowed through.
         if self.has_connection_error()
-            && !crate::tui::commands::is_context_command(&cmd_lower)
-            && !crate::tui::commands::is_skin_command(&cmd_lower)
+            && !commands::is_context_command(&cmd_lower)
+            && !commands::is_skin_command(&cmd_lower)
         {
             self.set_status_message((
                 "Commands are disabled when disconnected (except :ctx, :skin, :q)".to_string(),
@@ -1078,267 +1165,18 @@ impl App {
             return None;
         }
 
-        // Handle skin/theme change command
-        if crate::tui::commands::is_skin_command(&cmd_lower) {
-            let theme_name = crate::tui::commands::extract_command_arg(cmd, "skin");
-            match theme_name {
-                Some(name) => {
-                    // Argument provided - change theme directly
-                    match self.set_theme(&name) {
-                        Ok(_) => {
-                            let msg = format!("Theme changed to: {}", name);
-                            self.set_status_message((msg, false));
-                        }
-                        Err(e) => {
-                            let msg = format!(
-                                "Failed to load theme '{}': {}. Use `default` to return to default theme",
-                                name, e
-                            );
-                            self.set_status_message((msg, true));
-                        }
-                    }
-                }
-                None => {
-                    // No argument - show submenu or list themes
-                    let current_theme = self.config.resolve_skin_name(Some(&self.context));
-
-                    if let Some(submenu) = crate::tui::commands::get_command_submenu(
-                        cmd,
-                        &self.context,
-                        &current_theme,
-                    ) {
-                        // Store original theme for skin submenu preview
-                        if submenu.command == "skin" {
-                            self.view_state.preview_original_theme = Some(current_theme.clone());
-                            // Preview the first theme immediately
-                            if let Some(first_theme) = submenu.selected_value() {
-                                let _ = self.preview_theme(&first_theme);
-                            }
-                        }
-                        // Open submenu for selection
-                        self.view_state.submenu_state = Some(submenu);
-                    } else {
-                        // Fallback: List available themes
-                        let themes = crate::config::theme_loader::ThemeLoader::list_themes();
-                        let msg = format!(
-                            "Available themes: {}. Current: {}. Usage: :skin <theme-name>",
-                            themes.join(", "),
-                            current_theme
-                        );
-                        self.set_status_message((msg, false));
-                    }
-                }
+        // Data-driven dispatch: first predicate to match owns the command.
+        for (matches, handle) in COMMAND_TABLE {
+            if matches(&cmd_lower) {
+                handle(self, &cmd);
+                return None;
             }
-            return None;
         }
 
-        // Handle trace command - trace ownership chain
-        if crate::tui::commands::is_trace_command(&cmd_lower) {
-            let trace_arg = crate::tui::commands::extract_command_arg(cmd, "trace");
-            if trace_arg.is_none() {
-                // If no args, trace currently selected resource
-                if let Some(key) = &self.selection_state.selected_resource_key {
-                    if let Some(rk) = ResourceKey::parse(key) {
-                        self.async_state.trace_pending = Some(rk);
-                        self.async_state.trace_result = None;
-                    } else {
-                        tracing::warn!("Failed to parse resource key for trace command: {}", key);
-                        self.ui_state.status_message =
-                            Some(("Invalid resource key format".to_string(), true));
-                    }
-                } else {
-                    self.set_status_message(("No resource selected".to_string(), true));
-                }
-            } else if let Some(trace_arg) = trace_arg {
-                // Parse resource type/name format (e.g., "kustomization/cabot-book" or "Kustomization/cabot-book")
-                let resource_parts: Vec<&str> = trace_arg.split('/').collect();
-                if resource_parts.len() == 2 {
-                    let resource_type = resource_parts[0];
-                    let name = resource_parts[1];
-                    use crate::models::FluxResourceKind;
-                    // Normalize resource type to proper case
-                    let resource_type_normalized =
-                        match FluxResourceKind::from_str_case_insensitive(resource_type) {
-                            Some(kind) => kind.as_str(),
-                            None => {
-                                // Handle standard Kubernetes resources
-                                match resource_type.to_lowercase().as_str() {
-                                    "deployment" | "deploy" => "Deployment",
-                                    "service" => "Service",
-                                    "pod" => "Pod",
-                                    _ => resource_type,
-                                }
-                            }
-                        };
-                    let namespace = self
-                        .namespace()
-                        .clone()
-                        .unwrap_or_else(|| "default".to_string());
-                    self.async_state.trace_pending = Some(ResourceKey::new(
-                        resource_type_normalized.to_string(),
-                        namespace,
-                        name.to_string(),
-                    ));
-                    self.async_state.trace_result = None;
-                } else {
-                    self.set_status_message((
-                        "Usage: :trace <resource-type>/<name> or :trace (for selected)".to_string(),
-                        true,
-                    ));
-                }
-            }
-            return None;
-        }
-
-        // Handle context switching - reconnect to different cluster
-        if crate::tui::commands::is_context_command(&cmd_lower) {
-            // Try "context" first, then "ctx" as fallback
-            let context_name = crate::tui::commands::extract_command_arg(cmd, "context")
-                .or_else(|| crate::tui::commands::extract_command_arg(cmd, "ctx"));
-
-            match context_name {
-                Some(ctx) => {
-                    // Mark context switch as pending - will be handled in main loop
-                    self.pending_context_switch = Some(ctx.to_string());
-                    self.set_status_message((format!("Switching to context '{}'...", ctx), false));
-                }
-                None => {
-                    // Get current theme name (considering readonly mode and env vars)
-                    let current_theme = self.config.resolve_skin_name(Some(&self.context));
-
-                    // Check if command supports submenu
-                    if let Some(submenu) = crate::tui::commands::get_command_submenu(
-                        cmd,
-                        &self.context,
-                        &current_theme,
-                    ) {
-                        // Store original theme for skin submenu preview
-                        if submenu.command == "skin" {
-                            self.view_state.preview_original_theme = Some(current_theme.clone());
-                            // Preview the first theme immediately
-                            if let Some(first_theme) = submenu.selected_value() {
-                                let _ = self.preview_theme(&first_theme);
-                            }
-                        }
-                        // Open submenu for selection
-                        self.view_state.submenu_state = Some(submenu);
-                    } else {
-                        // Fallback: List available contexts in status message
-                        match crate::kube::list_contexts() {
-                            Ok(contexts) => {
-                                let current = self.context.clone();
-                                let msg = format!(
-                                    "Available contexts: {}. Current: {}. Usage: :ctx <context-name>",
-                                    contexts.join(", "),
-                                    current
-                                );
-                                self.set_status_message((msg, false));
-                            }
-                            Err(e) => {
-                                self.set_status_message((
-                                    format!("Failed to list contexts: {}", e),
-                                    true,
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-            return None;
-        }
-
-        // Handle namespace switching - restart watchers with new namespace
-        if crate::tui::commands::is_namespace_command(&cmd_lower) {
-            // Try "namespace" first, then "ns" as fallback
-            let ns = crate::tui::commands::extract_command_arg(cmd, "namespace")
-                .or_else(|| crate::tui::commands::extract_command_arg(cmd, "ns"));
-            let new_namespace = match ns.as_deref() {
-                Some("all") | Some("-A") => None,
-                Some(ns_name) => Some(ns_name.to_string()),
-                None => {
-                    // Show current namespace - do nothing
-                    return None;
-                }
-            };
-
-            // Update namespace and restart watchers if changed
-            if self.namespace != new_namespace {
-                self.namespace = new_namespace.clone();
-
-                // Clear state when switching namespaces (will repopulate from new watchers)
-                self.state().clear();
-                self.resource_objects.clear();
-                self.controller_pods.clear();
-                // Restarted watchers start clean; stale degraded state
-                // from the old set would otherwise never clear.
-                self.degraded_watchers.clear();
-
-                // Restart watchers with new namespace (more efficient than watching all)
-                if let Some(ref mut watcher) = self.watcher {
-                    if let Err(e) = watcher.set_namespace(new_namespace) {
-                        tracing::warn!("Failed to switch namespace: {}", e);
-                        self.set_status_message((
-                            format!("Failed to switch namespace: {}", e),
-                            true,
-                        ));
-                    }
-                }
-            }
-
-            self.view_state.selected_index = 0;
-            self.view_state.scroll_offset = 0;
-            return None;
-        }
-
-        // Handle health filter commands
-        if crate::tui::commands::is_healthy_command(&cmd_lower) {
-            self.view_state.health_filter = HealthFilter::Healthy;
-            self.view_state.selected_index = 0;
-            self.view_state.scroll_offset = 0;
-            self.set_status_message(("Showing healthy resources only".to_string(), false));
-            return None;
-        }
-
-        if crate::tui::commands::is_unhealthy_command(&cmd_lower) {
-            self.view_state.health_filter = HealthFilter::Unhealthy;
-            self.view_state.selected_index = 0;
-            self.view_state.scroll_offset = 0;
-            self.set_status_message(("Showing unhealthy resources only".to_string(), false));
-            return None;
-        }
-
-        // Handle favorites command
-        if crate::tui::commands::is_favorites_command(&cmd_lower) {
-            self.view_state.current_view = View::ResourceFavorites;
-            self.view_state.selected_index = 0;
-            self.view_state.scroll_offset = 0;
-            return None;
-        }
-
-        // Use registry for resource type command mapping
-        if crate::tui::commands::is_all_command(&cmd_lower) {
-            // Clear favorites view if active
-            if self.view_state.current_view == View::ResourceFavorites {
-                self.view_state.current_view = View::ResourceList;
-            }
-            if self.view_state.selected_resource_type.is_some() {
-                self.view_state.selected_resource_type = None;
-                self.invalidate_layout_cache(); // Resource type filter affects header display
-            }
-            // Clear health filter when showing all
-            if self.view_state.health_filter != HealthFilter::All {
-                self.view_state.health_filter = HealthFilter::All;
-                self.set_status_message(("Showing all resources".to_string(), false));
-            }
-            self.view_state.selected_index = 0;
-            self.view_state.scroll_offset = 0;
-            return None;
-        }
-
+        // Fallback: a resource-type command (e.g. `:ks`, `:hr`), else unknown.
         if let Some(display_name) = crate::watcher::get_display_name_for_command(&cmd_lower) {
             self.view_state.selected_resource_type = Some(display_name.to_string());
-            self.view_state.selected_index = 0;
-            self.view_state.scroll_offset = 0;
+            self.reset_list_position();
             self.invalidate_layout_cache(); // Resource type filter affects header display
         } else if !cmd.is_empty() {
             self.set_status_message((
@@ -1351,6 +1189,232 @@ impl App {
         }
 
         None
+    }
+
+    /// Reset the list selection and scroll to the top. Shared by the commands
+    /// that change what the list shows (namespace, filters, resource type).
+    fn reset_list_position(&mut self) {
+        self.view_state.selected_index = 0;
+        self.view_state.scroll_offset = 0;
+    }
+
+    /// Toggle read-only mode and reload the matching skin.
+    fn cmd_toggle_readonly(&mut self) {
+        self.config.read_only = !self.config.read_only;
+        let status = if self.config.read_only {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        // Clone context name to avoid borrowing self across the reload.
+        let context_name = self.context.clone();
+        self.reload_skin_for_readonly_mode(Some(&context_name));
+        self.set_status_message((format!("Readonly mode {}", status), false));
+    }
+
+    /// Open the interactive submenu for `cmd` if it has one (contexts, skins, …),
+    /// previewing the first skin entry. Returns whether a submenu was opened, so
+    /// callers can fall back to a status-message listing when it wasn't.
+    fn try_open_command_submenu(&mut self, cmd: &str) -> bool {
+        let current_theme = self.config.resolve_skin_name(Some(&self.context));
+        let Some(submenu) =
+            crate::tui::commands::get_command_submenu(cmd, &self.context, &current_theme)
+        else {
+            return false;
+        };
+        // Skin submenus preview as the user scrolls; remember the original to
+        // restore on cancel, and preview the first entry immediately.
+        if submenu.command == "skin" {
+            self.view_state.preview_original_theme = Some(current_theme.clone());
+            if let Some(first_theme) = submenu.selected_value() {
+                let _ = self.preview_theme(&first_theme);
+            }
+        }
+        self.view_state.submenu_state = Some(submenu);
+        true
+    }
+
+    /// `:skin [name]` — change the theme, or open the skin submenu / list themes.
+    fn cmd_set_skin(&mut self, cmd: &str) {
+        match crate::tui::commands::extract_command_arg(cmd, "skin") {
+            Some(name) => match self.set_theme(&name) {
+                Ok(_) => self.set_status_message((format!("Theme changed to: {}", name), false)),
+                Err(e) => self.set_status_message((
+                    format!(
+                        "Failed to load theme '{}': {}. Use `default` to return to default theme",
+                        name, e
+                    ),
+                    true,
+                )),
+            },
+            None if !self.try_open_command_submenu(cmd) => {
+                let themes = crate::config::theme_loader::ThemeLoader::list_themes();
+                let current = self.config.resolve_skin_name(Some(&self.context));
+                self.set_status_message((
+                    format!(
+                        "Available themes: {}. Current: {}. Usage: :skin <theme-name>",
+                        themes.join(", "),
+                        current
+                    ),
+                    false,
+                ));
+            }
+            None => {}
+        }
+    }
+
+    /// `:trace [type/name]` — trace the ownership chain of the given (or selected)
+    /// resource.
+    fn cmd_trace(&mut self, cmd: &str) {
+        let Some(trace_arg) = crate::tui::commands::extract_command_arg(cmd, "trace") else {
+            // No argument: trace the currently selected resource.
+            if let Some(key) = &self.selection_state.selected_resource_key {
+                if let Some(rk) = ResourceKey::parse(key) {
+                    self.async_state.trace_pending = Some(rk);
+                    self.async_state.trace_result = None;
+                } else {
+                    tracing::warn!("Failed to parse resource key for trace command: {}", key);
+                    self.ui_state.status_message =
+                        Some(("Invalid resource key format".to_string(), true));
+                }
+            } else {
+                self.set_status_message(("No resource selected".to_string(), true));
+            }
+            return;
+        };
+
+        // Parse "<type>/<name>" (e.g. "kustomization/cabot-book").
+        let parts: Vec<&str> = trace_arg.split('/').collect();
+        if parts.len() == 2 {
+            use crate::models::FluxResourceKind;
+            // Normalize the resource type to its canonical kind name.
+            let lowered = parts[0].to_lowercase();
+            let resource_type = match FluxResourceKind::from_str_case_insensitive(parts[0]) {
+                Some(kind) => kind.as_str(),
+                None => match lowered.as_str() {
+                    "deployment" | "deploy" => "Deployment",
+                    "service" => "Service",
+                    "pod" => "Pod",
+                    _ => parts[0],
+                },
+            };
+            let namespace = self
+                .namespace()
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            self.async_state.trace_pending = Some(ResourceKey::new(
+                resource_type.to_string(),
+                namespace,
+                parts[1].to_string(),
+            ));
+            self.async_state.trace_result = None;
+        } else {
+            self.set_status_message((
+                "Usage: :trace <resource-type>/<name> or :trace (for selected)".to_string(),
+                true,
+            ));
+        }
+    }
+
+    /// `:ctx [name]` — switch kube context, or open the context submenu / list
+    /// available contexts.
+    fn cmd_switch_context(&mut self, cmd: &str) {
+        let context_name = commands::extract_command_arg(cmd, "context")
+            .or_else(|| commands::extract_command_arg(cmd, "ctx"));
+
+        let Some(ctx) = context_name else {
+            // No argument: open the submenu, or list contexts as a fallback.
+            if !self.try_open_command_submenu(cmd) {
+                match crate::kube::list_contexts() {
+                    Ok(contexts) => {
+                        let current = self.context.clone();
+                        self.set_status_message((
+                            format!(
+                                "Available contexts: {}. Current: {}. Usage: :ctx <context-name>",
+                                contexts.join(", "),
+                                current
+                            ),
+                            false,
+                        ));
+                    }
+                    Err(e) => {
+                        self.set_status_message((format!("Failed to list contexts: {}", e), true))
+                    }
+                }
+            }
+            return;
+        };
+
+        // Mark the switch as pending; the main loop performs the reconnect.
+        self.pending_context_switch = Some(ctx.to_string());
+        self.set_status_message((format!("Switching to context '{}'...", ctx), false));
+    }
+
+    /// `:ns [name|all]` — switch the watched namespace, restarting watchers.
+    fn cmd_switch_namespace(&mut self, cmd: &str) {
+        let ns = commands::extract_command_arg(cmd, "namespace")
+            .or_else(|| commands::extract_command_arg(cmd, "ns"));
+        let new_namespace = match ns.as_deref() {
+            Some("all") | Some("-A") => None,
+            Some(name) => Some(name.to_string()),
+            None => return, // Showing the current namespace: nothing to do.
+        };
+
+        if self.namespace != new_namespace {
+            self.namespace = new_namespace.clone();
+
+            // Clear state; the restarted watchers repopulate it. Stale degraded
+            // state from the old watcher set would otherwise never clear.
+            self.state().clear();
+            self.resource_objects.clear();
+            self.controller_pods.clear();
+            self.degraded_watchers.clear();
+
+            if let Some(ref mut watcher) = self.watcher {
+                if let Err(e) = watcher.set_namespace(new_namespace) {
+                    tracing::warn!("Failed to switch namespace: {}", e);
+                    self.set_status_message((format!("Failed to switch namespace: {}", e), true));
+                }
+            }
+        }
+
+        self.reset_list_position();
+    }
+
+    /// `:healthy` — filter the list to healthy resources.
+    fn cmd_filter_healthy(&mut self, _cmd: &str) {
+        self.view_state.health_filter = HealthFilter::Healthy;
+        self.reset_list_position();
+        self.set_status_message(("Showing healthy resources only".to_string(), false));
+    }
+
+    /// `:unhealthy` — filter the list to unhealthy resources.
+    fn cmd_filter_unhealthy(&mut self, _cmd: &str) {
+        self.view_state.health_filter = HealthFilter::Unhealthy;
+        self.reset_list_position();
+        self.set_status_message(("Showing unhealthy resources only".to_string(), false));
+    }
+
+    /// `:favorites` — switch to the favorites view.
+    fn cmd_show_favorites(&mut self, _cmd: &str) {
+        self.view_state.current_view = View::ResourceFavorites;
+        self.reset_list_position();
+    }
+
+    /// `:all` — clear resource-type and health filters to show everything.
+    fn cmd_show_all(&mut self, _cmd: &str) {
+        if self.view_state.current_view == View::ResourceFavorites {
+            self.view_state.current_view = View::ResourceList;
+        }
+        if self.view_state.selected_resource_type.is_some() {
+            self.view_state.selected_resource_type = None;
+            self.invalidate_layout_cache(); // Resource type filter affects header display
+        }
+        if self.view_state.health_filter != HealthFilter::All {
+            self.view_state.health_filter = HealthFilter::All;
+            self.set_status_message(("Showing all resources".to_string(), false));
+        }
+        self.reset_list_position();
     }
 }
 
@@ -1523,6 +1587,68 @@ mod tests {
     }
 
     #[test]
+    fn table_command_healthy_sets_filter() {
+        let mut app = create_test_app(false);
+        app.ui_state.command_buffer = "healthy".to_string();
+
+        assert_eq!(app.execute_command(), None);
+        assert_eq!(app.view_state.health_filter, HealthFilter::Healthy);
+    }
+
+    #[test]
+    fn table_command_all_clears_filters() {
+        let mut app = create_test_app(false);
+        app.view_state.selected_resource_type = Some("Kustomization".to_string());
+        app.view_state.health_filter = HealthFilter::Unhealthy;
+        app.ui_state.command_buffer = "all".to_string();
+
+        assert_eq!(app.execute_command(), None);
+        assert_eq!(app.view_state.selected_resource_type, None);
+        assert_eq!(app.view_state.health_filter, HealthFilter::All);
+    }
+
+    #[test]
+    fn table_command_favorites_switches_view() {
+        let mut app = create_test_app(false);
+        app.ui_state.command_buffer = "favorites".to_string();
+
+        assert_eq!(app.execute_command(), None);
+        assert_eq!(app.view_state.current_view, View::ResourceFavorites);
+    }
+
+    #[test]
+    fn quit_command_returns_true() {
+        let mut app = create_test_app(false);
+        app.ui_state.command_buffer = "q".to_string();
+        assert_eq!(app.execute_command(), Some(true));
+    }
+
+    #[test]
+    fn unknown_command_reports_error() {
+        let mut app = create_test_app(false);
+        app.ui_state.command_buffer = "definitely-not-a-command".to_string();
+
+        assert_eq!(app.execute_command(), None);
+        let (msg, is_error) = app.ui_state.status_message.clone().unwrap();
+        assert!(is_error);
+        assert!(msg.contains("Unknown command"));
+    }
+
+    #[test]
+    fn readonly_command_toggles_mode() {
+        let mut app = create_test_app(false);
+        assert!(!app.config.read_only);
+
+        app.ui_state.command_buffer = "readonly".to_string();
+        assert_eq!(app.execute_command(), None);
+        assert!(app.config.read_only);
+
+        app.ui_state.command_buffer = "readonly".to_string();
+        assert_eq!(app.execute_command(), None);
+        assert!(!app.config.read_only);
+    }
+
+    #[test]
     fn test_sort_keys_in_list_view() {
         use crate::tui::app::state::SortField;
         let mut app = create_test_app(false);
@@ -1611,5 +1737,140 @@ mod tests {
         app.handle_key(make_key(KeyCode::Char('/')));
         assert!(app.view_state.filter_mode);
         assert!(!app.view_state.text_search.input_mode);
+    }
+
+    // --- Graph view focus navigation -------------------------------------
+
+    fn graph_node(
+        kind: &str,
+        name: &str,
+        node_type: crate::trace::NodeType,
+    ) -> crate::trace::GraphNode {
+        crate::trace::GraphNode {
+            id: format!("{}:flux-system:{}", kind, name),
+            kind: kind.to_string(),
+            name: name.to_string(),
+            namespace: "flux-system".to_string(),
+            node_type,
+            ready: None,
+            position: None,
+            description: None,
+        }
+    }
+
+    /// Build a small graph: a source (watched), the object (watched), and a
+    /// workload group (aggregate). Returns the app already on the graph view.
+    fn app_on_graph() -> App {
+        use crate::trace::{NodeType, ResourceGraph};
+
+        let mut app = create_test_app(false);
+        add_resource(&mut app); // Kustomization:flux-system:my-kustomization (watched)
+
+        let mut graph = ResourceGraph::new();
+        // idx 0: object (layer 3) — matches the watched resource
+        graph.add_node(graph_node(
+            "Kustomization",
+            "my-kustomization",
+            NodeType::Object,
+        ));
+        // idx 1: source (layer 1) — not in the watched state
+        graph.add_node(graph_node("GitRepository", "my-repo", NodeType::Source));
+        // idx 2: workload group (layer 5) — aggregate, not navigable
+        graph.add_node(graph_node(
+            "Workloads",
+            "Workloads (1)",
+            NodeType::WorkloadGroup,
+        ));
+
+        app.set_graph_result(graph);
+        app.view_state.current_view = View::ResourceGraph;
+        app
+    }
+
+    #[test]
+    fn graph_focus_starts_on_object_node() {
+        let app = app_on_graph();
+        // object_node_index() == 0 in app_on_graph's graph
+        assert_eq!(app.view_state.graph_focus_index, Some(0));
+    }
+
+    #[test]
+    fn graph_j_k_move_focus_in_visual_order() {
+        let mut app = app_on_graph();
+        // Visual order by layer: source(1), object(0), workload group(2).
+        // Focus starts on the object (pos 1 in that order).
+        app.handle_key(make_key(KeyCode::Char('j'))); // down -> workload group
+        assert_eq!(app.view_state.graph_focus_index, Some(2));
+
+        app.handle_key(make_key(KeyCode::Char('j'))); // clamp at the bottom
+        assert_eq!(app.view_state.graph_focus_index, Some(2));
+
+        app.handle_key(make_key(KeyCode::Char('k'))); // up -> object
+        assert_eq!(app.view_state.graph_focus_index, Some(0));
+        app.handle_key(make_key(KeyCode::Char('k'))); // up -> source
+        assert_eq!(app.view_state.graph_focus_index, Some(1));
+        app.handle_key(make_key(KeyCode::Char('k'))); // clamp at the top
+        assert_eq!(app.view_state.graph_focus_index, Some(1));
+    }
+
+    #[test]
+    fn graph_enter_navigates_into_watched_node_and_esc_returns_to_graph() {
+        let mut app = app_on_graph();
+        // Focus is on the object node, which is in the watched state.
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::ResourceDetail);
+        assert_eq!(
+            app.selection_state.selected_resource_key.as_deref(),
+            Some("Kustomization:flux-system:my-kustomization")
+        );
+        assert_eq!(app.view_state.detail_back_view, Some(View::ResourceGraph));
+
+        // Esc from the detail view returns to the graph, not the list.
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceGraph);
+        assert_eq!(app.view_state.detail_back_view, None);
+        // Focus is preserved so the user lands back where they were.
+        assert_eq!(app.view_state.graph_focus_index, Some(0));
+    }
+
+    #[test]
+    fn graph_enter_on_unwatched_node_shows_message_and_stays() {
+        let mut app = app_on_graph();
+        app.view_state.graph_focus_index = Some(1); // the source, not in state
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::ResourceGraph);
+        assert!(app.ui_state.status_message.is_some());
+    }
+
+    #[test]
+    fn graph_enter_on_aggregate_node_shows_message_and_stays() {
+        let mut app = app_on_graph();
+        app.view_state.graph_focus_index = Some(2); // the workload group aggregate
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::ResourceGraph);
+        assert!(app.ui_state.status_message.is_some());
+    }
+
+    #[test]
+    fn list_enter_clears_graph_back_target() {
+        let mut app = app_on_graph();
+        // Simulate having drilled in from the graph earlier.
+        app.view_state.detail_back_view = Some(View::ResourceGraph);
+
+        // Now go back to the list and open a resource the normal way.
+        app.view_state.current_view = View::ResourceList;
+        app.view_state.selected_index = 0;
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::ResourceDetail);
+        // Back target was reset, so Esc here returns to the list.
+        assert_eq!(app.view_state.detail_back_view, None);
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
     }
 }

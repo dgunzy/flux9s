@@ -238,6 +238,9 @@ impl App {
 
     /// Set graph result
     pub fn set_graph_result(&mut self, result: crate::trace::ResourceGraph) {
+        // Start keyboard focus on the resource being viewed (the object node) so
+        // the graph is immediately navigable with j/k and Enter.
+        self.view_state.graph_focus_index = result.object_node_index();
         self.async_state.graph_result = Some(result);
     }
 

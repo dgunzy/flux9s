@@ -9,7 +9,7 @@ use crate::watcher::ResourceKey;
 use ratatui::{
     Frame,
     layout::{Margin, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -21,7 +21,8 @@ pub fn render_resource_graph(
     _selected_resource_key: &Option<String>,
     graph_result: &Option<ResourceGraph>,
     graph_pending: &Option<ResourceKey>,
-    scroll_offset: &mut usize, // Line-based scroll offset (like YAML view)
+    scroll_offset: &mut usize,  // Line-based scroll offset (like YAML view)
+    focus_index: Option<usize>, // Index of the keyboard-focused node, if any
     theme: &Theme,
 ) {
     let outer_block = crate::tui::views::helpers::create_themed_block("Resource Graph", theme);
@@ -81,10 +82,98 @@ pub fn render_resource_graph(
     } else {
         0
     };
+
+    // Auto-scroll so the focused node stays fully on screen. Positions are only
+    // known after layout, so this runs here rather than in the event handler.
+    if let Some((node_y, node_height)) = focus_index.and_then(|idx| {
+        graph.nodes.get(idx).and_then(|node| {
+            node.position.map(|(_, y)| {
+                (
+                    y as usize,
+                    calculate_node_size(node, inner_area.width).1 as usize,
+                )
+            })
+        })
+    }) {
+        if node_y < *scroll_offset {
+            *scroll_offset = node_y;
+        } else if node_y + node_height > *scroll_offset + visible_height {
+            *scroll_offset = (node_y + node_height).saturating_sub(visible_height);
+        }
+    }
+
     *scroll_offset = (*scroll_offset).min(max_scroll);
 
     // Render graph using improved layout with line-based scrolling
-    render_graph_nodes_and_edges(f, inner_area, &graph, *scroll_offset, theme);
+    render_graph_nodes_and_edges(f, inner_area, &graph, *scroll_offset, focus_index, theme);
+}
+
+/// Pure geometry for one parent→children connector, in scroll-adjusted,
+/// area-relative cell coordinates. Separated from drawing so it can be unit
+/// tested without a `Frame`.
+struct FanoutRoute {
+    parent_center_x: u16,
+    parent_bottom_y: u16,
+    /// Each child's connection point: `(center_x, top_y)`.
+    children: Vec<(u16, u16)>,
+    relationship: RelationshipType,
+}
+
+/// Compute the connector route for every parent that has placed children.
+///
+/// Pure function of the (already laid-out) graph, the available width and the
+/// scroll offset — no theme or `Frame` involved — so the geometry is testable in
+/// isolation. Parents and children are visited in node/edge insertion order, so
+/// the result is deterministic.
+fn fanout_routes(graph: &ResourceGraph, area_width: u16, scroll_offset: u16) -> Vec<FanoutRoute> {
+    let mut routes = Vec::new();
+
+    for parent in &graph.nodes {
+        let Some((px, py)) = parent.position else {
+            continue;
+        };
+
+        let mut children = Vec::new();
+        let mut relationship = None;
+        for edge in &graph.edges {
+            if edge.from != parent.id {
+                continue;
+            }
+            if let Some(child) = graph
+                .node_index
+                .get(&edge.to)
+                .and_then(|&i| graph.nodes.get(i))
+            {
+                if let Some((cx, cy)) = child.position {
+                    let center = cx + child.render_width(area_width) / 2;
+                    children.push((center, cy.saturating_sub(scroll_offset)));
+                    relationship.get_or_insert(edge.relationship);
+                }
+            }
+        }
+
+        let Some(relationship) = relationship else {
+            continue; // No placed children for this parent.
+        };
+
+        routes.push(FanoutRoute {
+            parent_center_x: px + parent.render_width(area_width) / 2,
+            parent_bottom_y: (py + parent.render_height()).saturating_sub(scroll_offset),
+            children,
+            relationship,
+        });
+    }
+
+    routes
+}
+
+/// Map an edge relationship to its connector color.
+fn edge_color(relationship: RelationshipType, theme: &Theme) -> Color {
+    match relationship {
+        RelationshipType::SourcedFrom => theme.status_ready,
+        RelationshipType::ManagedBy => theme.text_primary,
+        RelationshipType::Owns => theme.text_label,
+    }
 }
 
 /// Render graph nodes and edges with improved layout
@@ -92,511 +181,179 @@ fn render_graph_nodes_and_edges(
     f: &mut Frame,
     area: Rect,
     graph: &ResourceGraph,
-    scroll_offset: usize, // Line-based scroll offset
+    scroll_offset: usize,       // Line-based scroll offset
+    focus_index: Option<usize>, // Index of the keyboard-focused node, if any
     theme: &Theme,
 ) {
-    // Render edges first (so they appear behind nodes) using Unicode box drawing
-    // Group edges by parent node to render T-junctions properly
-    use std::collections::HashMap;
-    let mut edges_by_parent: HashMap<String, Vec<(&crate::trace::GraphEdge, usize, usize)>> =
-        HashMap::new();
-
-    for edge in &graph.edges {
-        if let (Some(&from_idx), Some(&to_idx)) = (
-            graph.node_index.get(&edge.from),
-            graph.node_index.get(&edge.to),
-        ) {
-            if let (Some(from_node), Some(to_node)) =
-                (graph.nodes.get(from_idx), graph.nodes.get(to_idx))
-            {
-                if from_node.position.is_some() && to_node.position.is_some() {
-                    edges_by_parent
-                        .entry(edge.from.clone())
-                        .or_default()
-                        .push((edge, from_idx, to_idx));
-                }
-            }
-        }
-    }
-
-    // Render grouped edges (for T-junctions) and individual edges
     let scroll_offset_u16 = scroll_offset as u16;
-    for (parent_id, child_edges) in &edges_by_parent {
-        if let Some(&parent_idx) = graph.node_index.get(parent_id) {
-            if let Some(parent_node) = graph.nodes.get(parent_idx) {
-                if let Some((parent_x, parent_y)) = parent_node.position {
-                    // Check if children are side-by-side (need T-junction)
-                    let child_nodes: Vec<(
-                        &crate::trace::GraphEdge,
-                        &crate::trace::GraphNode,
-                        (u16, u16),
-                    )> = child_edges
-                        .iter()
-                        .filter_map(|(edge, _, to_idx)| {
-                            graph
-                                .nodes
-                                .get(*to_idx)
-                                .and_then(|n| n.position.map(|pos| (*edge, n, pos)))
-                        })
-                        .collect();
 
-                    if child_nodes.len() > 1 {
-                        // Check if children are side-by-side
-                        let (parent_w, _parent_h) = calculate_node_size(parent_node, area.width);
-                        let _parent_center_x = parent_x + parent_w / 2;
-
-                        let child_centers: Vec<(u16, u16, u16)> = child_nodes
-                            .iter()
-                            .map(|(_, child_node, (cx, _cy))| {
-                                let (child_w, _child_h) =
-                                    calculate_node_size(child_node, area.width);
-                                let child_center_x = *cx + child_w / 2;
-                                (child_center_x, *cx, child_w)
-                            })
-                            .collect();
-
-                        // Check if children are side-by-side
-                        let min_x = child_centers
-                            .iter()
-                            .map(|(cx, _, _)| *cx)
-                            .min()
-                            .unwrap_or(0);
-                        let max_x = child_centers
-                            .iter()
-                            .map(|(cx, _, _)| *cx)
-                            .max()
-                            .unwrap_or(0);
-                        let avg_width: u16 = child_centers.iter().map(|(_, _, w)| *w).sum::<u16>()
-                            / child_centers.len() as u16;
-                        let is_side_by_side = max_x.saturating_sub(min_x) > avg_width;
-
-                        if is_side_by_side {
-                            // Render T-junction: vertical down, horizontal branch, vertical up to each child
-                            render_t_junction(
-                                f,
-                                area,
-                                parent_x,
-                                parent_y,
-                                parent_node,
-                                &child_nodes,
-                                scroll_offset_u16,
-                                theme,
-                            );
-                        } else {
-                            // Render individual edges (vertically aligned)
-                            for (edge, child_node, (child_x, child_y)) in &child_nodes {
-                                render_edge_improved(
-                                    f,
-                                    area,
-                                    parent_x,
-                                    parent_y,
-                                    *child_x,
-                                    *child_y,
-                                    parent_node,
-                                    child_node,
-                                    edge.relationship,
-                                    scroll_offset_u16,
-                                    theme,
-                                );
-                            }
-                        }
-                    } else {
-                        // Single child - render normally
-                        for (edge, _, to_idx) in child_edges {
-                            if let (Some(child_node), Some((child_x, child_y))) =
-                                (graph.nodes.get(*to_idx), graph.nodes[*to_idx].position)
-                            {
-                                render_edge_improved(
-                                    f,
-                                    area,
-                                    parent_x,
-                                    parent_y,
-                                    child_x,
-                                    child_y,
-                                    parent_node,
-                                    child_node,
-                                    edge.relationship,
-                                    scroll_offset_u16,
-                                    theme,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // Render edges first (behind the nodes) as fan-outs: a trunk down from the
+    // parent, a horizontal branch just above its children, then a short drop into
+    // each child. Routing every parent (one child or many) through the same
+    // renderer keeps the connector lines consistent and unambiguous.
+    for route in fanout_routes(graph, area.width, scroll_offset_u16) {
+        render_fanout(
+            f,
+            area,
+            route.parent_center_x,
+            route.parent_bottom_y,
+            &route.children,
+            edge_color(route.relationship, theme),
+        );
     }
 
     // Render nodes - only those within visible range (like YAML view)
     let visible_height = area.height as usize;
-    let scroll_offset_u16 = scroll_offset as u16;
 
-    for node in &graph.nodes {
+    for (idx, node) in graph.nodes.iter().enumerate() {
         if let Some((x, y)) = node.position {
             // Only render if node's Y position is within visible range
             if y >= scroll_offset_u16 && y < scroll_offset_u16 + visible_height as u16 {
-                render_node_text(f, area, x, y, node, scroll_offset_u16, theme);
+                let is_focused = focus_index == Some(idx);
+                render_node_text(f, area, x, y, node, scroll_offset_u16, is_focused, theme);
             }
         }
     }
 }
 
 /// Calculate node dimensions based on content
+/// Rendered (width, height) of a node. Thin adapter over the single source of
+/// truth on [`crate::trace::GraphNode`] so layout and drawing always agree.
 fn calculate_node_size(node: &crate::trace::GraphNode, area_width: u16) -> (u16, u16) {
-    let name_len = node.name.len() as u16;
-    let kind_len = node.kind.len() as u16;
-    let desc_len = node
-        .description
-        .as_ref()
-        .map(|d| d.len() as u16)
-        .unwrap_or(0);
-    let max_content = name_len.max(kind_len).max(desc_len);
-    let width = max_content.clamp(30, 60).min(area_width.saturating_sub(4));
-
-    // Calculate height: title section + content + borders
-    // For WorkloadGroup/ResourceGroup: name (1) + separator (1) + borders (2) = 4 base
-    // For other nodes: kind label (1) + name (1) + separator (1) + borders (2) = 5 base
-    let mut height = if matches!(
-        node.node_type,
-        NodeType::WorkloadGroup | NodeType::ResourceGroup
-    ) {
-        4u16 // name + separator + borders
-    } else {
-        5u16 // kind label + name + separator + borders
-    };
-
-    // Workload nodes have: kind label + name + separator + description (replica count) + namespace subtitle
-    if matches!(node.node_type, NodeType::Workload) {
-        if node.description.is_some() {
-            height += 2; // description line + namespace subtitle
-        }
-    } else if matches!(node.node_type, NodeType::WorkloadGroup) {
-        // Workload group nodes show each workload as 3-4 lines (kind, name, status, optional namespace) + blank lines between
-        if let Some(ref desc) = node.description {
-            let workload_lines: Vec<&str> = desc.lines().collect();
-            let workload_count = workload_lines.len();
-
-            if workload_count > 0 {
-                // Check if namespaces differ
-                let show_namespace = if workload_count > 1 {
-                    let first_namespace = workload_lines[0].split('|').nth(2).unwrap_or("");
-                    !workload_lines
-                        .iter()
-                        .all(|line| line.split('|').nth(2).unwrap_or("") == first_namespace)
-                } else {
-                    false
-                };
-
-                // Each workload: kind (1) + name (1) + status (1) + namespace (0-1) = 3-4 lines
-                // Plus 1 blank line between workloads (workload_count - 1 blank lines)
-                let lines_per_workload = if show_namespace { 4 } else { 3 };
-                let blank_lines = workload_count.saturating_sub(1);
-                height += (workload_count * lines_per_workload + blank_lines) as u16;
-            }
-        }
-    } else if matches!(node.node_type, NodeType::ResourceGroup) {
-        // Resource group nodes show each resource kind on a separate line
-        if let Some(ref desc) = node.description {
-            // Count the number of resource items (separated by ", ")
-            let item_count = desc.matches(", ").count() + 1;
-            height += item_count as u16;
-        }
-    } else {
-        if node.description.is_some() {
-            height += 1; // description line
-        }
-        if node.ready.is_some() {
-            height += 1; // status line
-        }
-    }
-
-    (width, height)
+    (node.render_width(area_width), node.render_height())
 }
 
-/// Render a T-junction for side-by-side child nodes
-fn render_t_junction(
-    f: &mut Frame,
-    area: Rect,
-    parent_x: u16,
-    parent_y: u16,
-    parent_node: &crate::trace::GraphNode,
-    child_nodes: &[(
-        &crate::trace::GraphEdge,
-        &crate::trace::GraphNode,
-        (u16, u16),
-    )],
-    scroll_offset: u16,
-    theme: &Theme,
-) {
-    let (parent_w, parent_h) = calculate_node_size(parent_node, area.width);
-
-    // Adjust parent position for scroll
-    let fx = parent_x;
-    let fy = parent_y.saturating_sub(scroll_offset);
-
-    let parent_center_x = fx + parent_w / 2;
-    let parent_bottom_y = fy + parent_h;
-
-    // Get child positions and centers
-    let mut child_info: Vec<(u16, u16, u16, u16, RelationshipType)> = Vec::new();
-    for (edge, child_node, (child_x, child_y)) in child_nodes {
-        let (child_w, child_h) = calculate_node_size(child_node, area.width);
-        let tx = child_x;
-        let ty = child_y.saturating_sub(scroll_offset);
-        let child_center_x = tx + child_w / 2;
-        let child_top_y = ty;
-        child_info.push((
-            child_center_x,
-            child_top_y,
-            child_w,
-            child_h,
-            edge.relationship,
-        ));
+/// Draw a vertical run of `height` cells at column `x`, clipped to `area`.
+fn draw_vline(f: &mut Frame, area: Rect, x: u16, y: u16, height: u16, color: Color) {
+    if height == 0 || x >= area.width || y >= area.height {
+        return;
     }
-
-    // Determine edge color (use first edge's relationship)
-    let edge_color = match child_info.first().map(|(_, _, _, _, r)| r) {
-        Some(RelationshipType::SourcedFrom) => theme.status_ready,
-        Some(RelationshipType::ManagedBy) => theme.text_primary,
-        Some(RelationshipType::Owns) => theme.text_label,
-        None => theme.text_label,
+    let h = height.min(area.height - y);
+    let rect = Rect {
+        x: area.x + x,
+        y: area.y + y,
+        width: 1,
+        height: h,
     };
+    let lines: Vec<Line> = (0..h).map(|_| Line::from("│")).collect();
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().fg(color)),
+        rect,
+    );
+}
 
-    // Find leftmost and rightmost children
-    let leftmost_x = child_info
-        .iter()
-        .map(|(cx, _, _, _, _)| *cx)
-        .min()
-        .unwrap_or(0);
-    let rightmost_x = child_info
-        .iter()
-        .map(|(cx, _, _, _, _)| *cx)
-        .max()
-        .unwrap_or(0);
-
-    // Branch Y is 1 line below parent
-    let branch_y = parent_bottom_y + 1;
-
-    // Draw vertical line from parent bottom to branch point
-    if parent_center_x < area.width && branch_y > parent_bottom_y {
-        let vertical_start_y = parent_bottom_y;
-        let vertical_end_y = branch_y.min(area.height);
-        if vertical_end_y > vertical_start_y {
-            let vertical_height = vertical_end_y.saturating_sub(vertical_start_y);
-            if vertical_height > 0 {
-                let vertical_area = Rect {
-                    x: area.x + parent_center_x,
-                    y: area.y + vertical_start_y,
-                    width: 1,
-                    height: vertical_height,
-                };
-                let mut lines = Vec::new();
-                for _ in 0..vertical_area.height {
-                    lines.push(Line::from("│"));
-                }
-                let paragraph = Paragraph::new(lines).style(Style::default().fg(edge_color));
-                f.render_widget(paragraph, vertical_area);
-            }
-        }
+/// Draw a pre-built run of box-drawing glyphs starting at column `x`, clipped to
+/// `area`. The caller composes the glyphs (with junctions) so overlapping cells
+/// don't fight each other.
+fn draw_hline(f: &mut Frame, area: Rect, x: u16, y: u16, glyphs: &str, color: Color) {
+    let width = glyphs.chars().count() as u16;
+    if width == 0 || x >= area.width || y >= area.height {
+        return;
     }
+    let w = width.min(area.width - x);
+    let text: String = glyphs.chars().take(w as usize).collect();
+    let rect = Rect {
+        x: area.x + x,
+        y: area.y + y,
+        width: w,
+        height: 1,
+    };
+    f.render_widget(Paragraph::new(text).style(Style::default().fg(color)), rect);
+}
 
-    // Draw horizontal branch from leftmost to rightmost child
-    if branch_y < area.height {
-        let horizontal_start_x = leftmost_x.min(parent_center_x);
-        let horizontal_end_x = rightmost_x.max(parent_center_x).min(area.width);
-        let horizontal_width = horizontal_end_x.saturating_sub(horizontal_start_x);
-
-        if horizontal_width > 0 && horizontal_start_x < area.width {
-            let horizontal_area = Rect {
-                x: area.x + horizontal_start_x,
-                y: area.y + branch_y,
-                width: horizontal_width,
-                height: 1,
-            };
-
-            let horizontal_line = "─".repeat(horizontal_area.width as usize);
-            let paragraph = Paragraph::new(horizontal_line).style(Style::default().fg(edge_color));
-            f.render_widget(paragraph, horizontal_area);
+/// Pick the box-drawing glyph for a cell from which sides connect.
+fn box_glyph(up: bool, down: bool, left: bool, right: bool) -> char {
+    match (up, down, left, right) {
+        (true, true, true, true) => '┼',
+        (false, true, true, true) => '┬',
+        (true, false, true, true) => '┴',
+        (true, true, true, false) => '┤',
+        (true, true, false, true) => '├',
+        (false, true, false, true) => '┌',
+        (false, true, true, false) => '┐',
+        (true, false, false, true) => '└',
+        (true, false, true, false) => '┘',
+        (true, true, false, false) | (true, false, false, false) | (false, true, false, false) => {
+            '│'
         }
-    }
-
-    // Draw vertical lines from branch to each child
-    for (child_center_x, child_top_y, _child_w, _child_h, _relationship) in &child_info {
-        let vertical_start_y = branch_y + 1;
-        let vertical_end_y = (*child_top_y).min(area.height);
-
-        if vertical_start_y < vertical_end_y && *child_center_x < area.width {
-            let vertical_height = vertical_end_y.saturating_sub(vertical_start_y);
-            if vertical_height > 0 {
-                let vertical_area = Rect {
-                    x: area.x + *child_center_x,
-                    y: area.y + vertical_start_y,
-                    width: 1,
-                    height: vertical_height,
-                };
-                let mut lines = Vec::new();
-                for _ in 0..vertical_area.height {
-                    lines.push(Line::from("│"));
-                }
-                let paragraph = Paragraph::new(lines).style(Style::default().fg(edge_color));
-                f.render_widget(paragraph, vertical_area);
-            }
-        }
+        _ => '─',
     }
 }
 
-/// Render an edge between two nodes with improved Unicode box drawing
-fn render_edge_improved(
+/// Render a parent→children fan-out: a trunk down from the parent, a horizontal
+/// branch sitting just above the topmost child (with proper junction glyphs),
+/// then a short drop into each child. The single-child case collapses to a plain
+/// vertical line, so every connector in the graph is drawn the same way.
+fn render_fanout(
     f: &mut Frame,
     area: Rect,
-    from_x: u16,
-    from_y: u16,
-    to_x: u16,
-    to_y: u16,
-    from_node: &crate::trace::GraphNode,
-    to_node: &crate::trace::GraphNode,
-    relationship: RelationshipType,
-    scroll_offset: u16,
-    theme: &Theme,
+    parent_center_x: u16,
+    parent_bottom_y: u16,
+    children: &[(u16, u16)], // (center_x, top_y), already scroll-adjusted
+    color: Color,
 ) {
-    let (from_w, from_h) = calculate_node_size(from_node, area.width);
-    let (to_w, _to_h) = calculate_node_size(to_node, area.width);
-
-    // Adjust positions for scroll offset
-    let fx = from_x;
-    let fy = from_y.saturating_sub(scroll_offset);
-    let tx = to_x;
-    let ty = to_y.saturating_sub(scroll_offset);
-
-    // Calculate connection points (center bottom of from, center top of to)
-    let from_center_x = fx + from_w / 2;
-    let from_bottom_y = fy + from_h;
-    let to_center_x = tx + to_w / 2;
-    let to_top_y = ty;
-
-    // Only skip if completely off-screen (allow partial visibility for edges)
-    // Edges can extend beyond visible area - we'll clip them during rendering
-    if from_center_x >= area.width && to_center_x >= area.width {
-        return; // Both nodes completely off-screen horizontally
-    }
-    if from_bottom_y >= area.height && to_top_y >= area.height {
-        return; // Both nodes completely off-screen vertically
+    if children.is_empty() {
+        return;
     }
 
-    let edge_color = match relationship {
-        RelationshipType::SourcedFrom => theme.status_ready,
-        RelationshipType::ManagedBy => theme.text_primary,
-        RelationshipType::Owns => theme.text_label,
-    };
+    let min_top = children.iter().map(|(_, t)| *t).min().unwrap_or(0);
 
-    // Check if nodes are side-by-side (horizontal connection needed)
-    let horizontal_distance = from_center_x.abs_diff(to_center_x);
-
-    let is_side_by_side = horizontal_distance > from_w / 2 + to_w / 2;
-
-    if is_side_by_side {
-        // Nodes are side-by-side: draw vertical line down, then horizontal branch, then vertical to target
-        let branch_y = from_bottom_y + 1; // Start branch 1 line below from node
-
-        // Draw vertical line from bottom of from_node to branch point
-        // Clip to visible area
-        let vertical_start_y = from_bottom_y;
-        let vertical_end_y = branch_y.min(area.height);
-        if vertical_end_y > vertical_start_y && from_center_x < area.width {
-            let vertical_height = vertical_end_y.saturating_sub(vertical_start_y);
-            if vertical_height > 0 {
-                let vertical_area = Rect {
-                    x: area.x + from_center_x,
-                    y: area.y + vertical_start_y,
-                    width: 1,
-                    height: vertical_height,
-                };
-                let mut lines = Vec::new();
-                for _ in 0..vertical_area.height {
-                    lines.push(Line::from("│"));
-                }
-                let paragraph = Paragraph::new(lines).style(Style::default().fg(edge_color));
-                f.render_widget(paragraph, vertical_area);
+    // No room for a branch row between parent and children: connect each child
+    // straight up to the parent's bottom edge instead.
+    if min_top <= parent_bottom_y {
+        for &(cx, top) in children {
+            if top > parent_bottom_y {
+                draw_vline(f, area, cx, parent_bottom_y, top - parent_bottom_y, color);
             }
         }
+        return;
+    }
 
-        // Draw horizontal line from from_center_x to to_center_x at branch_y
-        // This forms the horizontal branch of the T-junction
-        // Clip to visible area but ensure we draw if any part is visible
-        if branch_y < area.height {
-            let horizontal_start_x = from_center_x.min(to_center_x);
-            let horizontal_end_x = from_center_x.max(to_center_x).min(area.width);
-            let horizontal_width = horizontal_end_x.saturating_sub(horizontal_start_x);
+    let branch_y = min_top - 1;
 
-            if horizontal_width > 0 && horizontal_start_x < area.width {
-                let horizontal_area = Rect {
-                    x: area.x + horizontal_start_x,
-                    y: area.y + branch_y,
-                    width: horizontal_width,
-                    height: 1,
-                };
+    // Horizontal extent spans the trunk and every child center.
+    let mut left = parent_center_x;
+    let mut right = parent_center_x;
+    for &(cx, _) in children {
+        left = left.min(cx);
+        right = right.max(cx);
+    }
+    if right >= area.width {
+        right = area.width.saturating_sub(1);
+    }
+    if left > right {
+        return;
+    }
 
-                // Create horizontal line with ─ characters
-                let horizontal_line = "─".repeat(horizontal_area.width as usize);
-                let paragraph =
-                    Paragraph::new(horizontal_line).style(Style::default().fg(edge_color));
-                f.render_widget(paragraph, horizontal_area);
-            }
-        }
+    // 1. Trunk from the parent's bottom down to the branch row.
+    if branch_y > parent_bottom_y {
+        draw_vline(
+            f,
+            area,
+            parent_center_x,
+            parent_bottom_y,
+            branch_y - parent_bottom_y,
+            color,
+        );
+    }
 
-        // Draw vertical line from branch_y to top of to_node for each target
-        // For T-junction, we need to draw vertical lines to both left and right nodes
-        let vertical_start_y = branch_y + 1;
-        let vertical_end_y = to_top_y.min(area.height);
+    // 2. Branch row, composed cell-by-cell so junctions render correctly.
+    let mut glyphs = String::new();
+    for c in left..=right {
+        let up = c == parent_center_x;
+        let down = children.iter().any(|&(cx, _)| cx == c);
+        let lft = c > left;
+        let rgt = c < right;
+        glyphs.push(box_glyph(up, down, lft, rgt));
+    }
+    draw_hline(f, area, left, branch_y, &glyphs, color);
 
-        if vertical_start_y < vertical_end_y && to_center_x < area.width {
-            let vertical_height = vertical_end_y.saturating_sub(vertical_start_y);
-            if vertical_height > 0 {
-                let vertical_area = Rect {
-                    x: area.x + to_center_x,
-                    y: area.y + vertical_start_y,
-                    width: 1,
-                    height: vertical_height,
-                };
-                let mut lines = Vec::new();
-                for _ in 0..vertical_area.height {
-                    lines.push(Line::from("│"));
-                }
-                let paragraph = Paragraph::new(lines).style(Style::default().fg(edge_color));
-                f.render_widget(paragraph, vertical_area);
-            }
-        }
-    } else {
-        // Nodes are vertically aligned: draw straight vertical line
-        let start_y = from_bottom_y;
-        let end_y = to_top_y;
-
-        // Only draw if there's space between nodes
-        if start_y < end_y && start_y < area.height && end_y > 0 {
-            let line_x = from_center_x;
-
-            if line_x < area.width {
-                let line_height = end_y.saturating_sub(start_y);
-
-                // Skip if no space (nodes are directly adjacent)
-                if line_height > 0 {
-                    let edge_area = Rect {
-                        x: area.x + line_x,
-                        y: area.y + start_y,
-                        width: 1,
-                        height: line_height.min(area.height.saturating_sub(start_y)),
-                    };
-
-                    // Create vertical line with repeated │ characters
-                    let mut lines = Vec::new();
-                    for _ in 0..edge_area.height {
-                        lines.push(Line::from("│"));
-                    }
-
-                    let paragraph = Paragraph::new(lines).style(Style::default().fg(edge_color));
-                    f.render_widget(paragraph, edge_area);
-                }
-            }
+    // 3. Short drop from the branch into each child top (zero-length when the
+    //    child sits directly below the branch row).
+    let drop_start = branch_y + 1;
+    for &(cx, top) in children {
+        if top > drop_start {
+            draw_vline(f, area, cx, drop_start, top - drop_start, color);
         }
     }
 }
@@ -609,6 +366,7 @@ fn render_node_text(
     y: u16,
     node: &crate::trace::GraphNode,
     scroll_offset: u16, // Line-based scroll offset
+    is_focused: bool,   // Whether this node has keyboard focus
     theme: &Theme,
 ) {
     // Adjust Y position for scroll offset (like YAML view)
@@ -895,12 +653,29 @@ fn render_node_text(
         }
     }
 
-    // Create the outer block with borders
-    // Use Reset background to ensure transparent background (matches terminal default)
-    let block = Block::default()
+    // Create the outer block with borders.
+    // Use Reset background to ensure transparent background (matches terminal default).
+    // The focused node gets a bright, bold double border in the accent color
+    // (distinct from the status/text colors every other border uses) plus a "▸"
+    // title marker, so the selection is unmistakable at a glance.
+    let focus_style = Style::default()
+        .fg(theme.footer_key)
+        .add_modifier(Modifier::BOLD);
+
+    let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_style(border_style)
+        .border_style(if is_focused {
+            focus_style
+        } else {
+            border_style
+        })
         .style(Style::default().bg(ratatui::style::Color::Reset));
+
+    if is_focused {
+        block = block
+            .border_type(ratatui::widgets::BorderType::Double)
+            .title(Span::styled(" ▸ ", focus_style));
+    }
 
     // Render the outer block
     f.render_widget(block, node_area);
@@ -1005,15 +780,16 @@ fn render_node_text(
         );
     }
 
-    // Render name (bold)
-    f.render_widget(
-        Paragraph::new(vec![name_line]).style(
-            title_style
-                .add_modifier(Modifier::BOLD)
-                .bg(ratatui::style::Color::Reset),
-        ),
-        name_area,
-    );
+    // Render name (bold). The focused node's name takes the accent color too,
+    // reinforcing the highlighted border.
+    let name_style = if is_focused {
+        focus_style.bg(ratatui::style::Color::Reset)
+    } else {
+        title_style
+            .add_modifier(Modifier::BOLD)
+            .bg(ratatui::style::Color::Reset)
+    };
+    f.render_widget(Paragraph::new(vec![name_line]).style(name_style), name_area);
 
     // Render horizontal separator line below name
     let separator = "─".repeat(inner.width as usize);
@@ -1053,5 +829,88 @@ fn render_node_text(
                 .wrap(ratatui::widgets::Wrap { trim: true });
             f.render_widget(paragraph, clipped_content_area);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{box_glyph, fanout_routes};
+    use crate::trace::{GraphEdge, GraphNode, NodeType, RelationshipType, ResourceGraph};
+
+    #[test]
+    fn box_glyph_renders_expected_junctions() {
+        // up, down, left, right
+        assert_eq!(box_glyph(true, true, true, true), '┼'); // cross
+        assert_eq!(box_glyph(false, true, true, true), '┬'); // child drop on the branch
+        assert_eq!(box_glyph(true, false, true, true), '┴'); // trunk meets the branch
+        assert_eq!(box_glyph(false, true, false, true), '┌'); // left end with a drop
+        assert_eq!(box_glyph(false, true, true, false), '┐'); // right end with a drop
+        assert_eq!(box_glyph(true, false, false, true), '└'); // left end, trunk above
+        assert_eq!(box_glyph(true, false, true, false), '┘'); // right end, trunk above
+        assert_eq!(box_glyph(false, false, true, true), '─'); // plain horizontal
+        assert_eq!(box_glyph(true, true, false, false), '│'); // plain vertical (aligned child)
+    }
+
+    fn node(id: &str, node_type: NodeType, desc: Option<&str>) -> GraphNode {
+        GraphNode {
+            id: id.to_string(),
+            kind: "Kind".to_string(),
+            name: id.to_string(),
+            namespace: "ns".to_string(),
+            node_type,
+            ready: None,
+            position: None,
+            description: desc.map(|d| d.to_string()),
+        }
+    }
+
+    #[test]
+    fn fanout_routes_connects_object_to_its_inventory_groups() {
+        let mut graph = ResourceGraph::new();
+        graph.add_node(node("obj", NodeType::Object, None));
+        graph.add_node(node(
+            "wg",
+            NodeType::WorkloadGroup,
+            Some("Deployment|a|ns|●|1/1"),
+        ));
+        graph.add_node(node("rg", NodeType::ResourceGroup, Some("ConfigMap: 1")));
+        for child in ["wg", "rg"] {
+            graph.add_edge(GraphEdge {
+                from: "obj".to_string(),
+                to: child.to_string(),
+                relationship: RelationshipType::Owns,
+            });
+        }
+
+        graph.calculate_layout(100, 50);
+        let routes = fanout_routes(&graph, 100, 0);
+
+        // One parent (the object) with both inventory groups as children.
+        assert_eq!(routes.len(), 1);
+        let route = &routes[0];
+        assert_eq!(route.relationship, RelationshipType::Owns);
+        assert_eq!(route.children.len(), 2);
+
+        // Children sit below the parent's bottom edge.
+        assert!(
+            route
+                .children
+                .iter()
+                .all(|&(_, top)| top > route.parent_bottom_y)
+        );
+
+        // The trunk falls between the child centers (a centered fan-out).
+        let min_x = route.children.iter().map(|&(x, _)| x).min().unwrap();
+        let max_x = route.children.iter().map(|&(x, _)| x).max().unwrap();
+        assert!(min_x <= route.parent_center_x && route.parent_center_x <= max_x);
+    }
+
+    #[test]
+    fn fanout_routes_skips_parents_without_placed_children() {
+        // A lone node with no edges produces no routes.
+        let mut graph = ResourceGraph::new();
+        graph.add_node(node("solo", NodeType::Object, None));
+        graph.calculate_layout(100, 50);
+        assert!(fanout_routes(&graph, 100, 0).is_empty());
     }
 }
