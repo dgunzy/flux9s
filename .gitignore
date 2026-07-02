@@ -14,3 +14,9 @@
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local Agent Files
+
+.claude
+.wolf
+.antigravitycli

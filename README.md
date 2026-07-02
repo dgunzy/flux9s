@@ -14,7 +14,7 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 
 ### Flux9s Graph View 
 
-![flux9s graph view](docs/images/graph-screenshot-new.png)
+![flux9s graph view](docs/images/graph-screenshot.png)
 
 ### Flux9s Name filter
 
