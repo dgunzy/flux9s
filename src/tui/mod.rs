@@ -541,6 +541,43 @@ pub async fn run_tui_with_async_init(
             }
         }
 
+        // Check if we need to save edited YAML
+        if kube_initialized {
+            if let Some(req) = app.trigger_edit_save() {
+                tracing::debug!(
+                    "Saving edited spec for {}/{} in namespace {}",
+                    req.resource_key.resource_type,
+                    req.resource_key.name,
+                    req.resource_key.namespace
+                );
+                tokio::spawn(async move {
+                    let result = crate::operations::patch_resource_spec(
+                        &req.client,
+                        &req.resource_key.resource_type,
+                        &req.resource_key.namespace,
+                        &req.resource_key.name,
+                        req.spec,
+                    )
+                    .await;
+                    if let Err(ref e) = result {
+                        tracing::warn!(
+                            "Failed to save edited spec for {}/{} in namespace {}: {}",
+                            req.resource_key.resource_type,
+                            req.resource_key.name,
+                            req.resource_key.namespace,
+                            e
+                        );
+                    }
+                    let _ = req.tx.send(result);
+                });
+            }
+        }
+
+        // Check for edit save results
+        if let Some(result) = app.try_get_edit_save_result() {
+            app.set_edit_save_result(result);
+        }
+
         // Check for YAML fetch results
         if let Some(result) = app.try_get_yaml_result() {
             match result {

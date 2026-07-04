@@ -24,6 +24,7 @@ fn create_test_theme() -> Theme {
 fn create_test_config() -> Config {
     Config {
         read_only: false,
+        edit_mode: true,
         default_namespace: "".to_string(),
         default_controller_namespace: "".to_string(),
         namespace_hotkeys: vec![],

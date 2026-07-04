@@ -781,6 +781,94 @@ impl FluxOperation for ReconcileWithSourceOperation {
     }
 }
 
+/// Helper to patch a resource with new spec from edited YAML
+/// (Used in Phase 3: Persistence & Async Operations)
+#[allow(dead_code)]
+pub async fn patch_resource_spec(
+    client: &kube::Client,
+    resource_type: &str,
+    namespace: &str,
+    name: &str,
+    new_spec: serde_json::Value,
+) -> Result<()> {
+    tracing::debug!(
+        "Patching spec for {}/{} in namespace {}",
+        resource_type,
+        name,
+        namespace
+    );
+
+    let api = get_resource_api(client, resource_type, namespace, name).await?;
+
+    let patch = json!({ "spec": new_spec });
+
+    api.patch(name, &PatchParams::default(), &Patch::Merge(patch))
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to save edits to {}/{} in namespace {}",
+                resource_type, name, namespace
+            )
+        })?;
+
+    tracing::info!(
+        "Successfully saved edits to {}/{} in namespace {}",
+        resource_type,
+        name,
+        namespace
+    );
+    Ok(())
+}
+
+/// Save operation - patches a resource with edited YAML spec
+/// (Used in Phase 3: Persistence & Async Operations)
+#[allow(dead_code)]
+pub struct SaveEditOperation;
+
+#[async_trait::async_trait]
+impl FluxOperation for SaveEditOperation {
+    async fn execute(
+        &self,
+        _client: &kube::Client,
+        resource_type: &str,
+        namespace: &str,
+        name: &str,
+    ) -> Result<()> {
+        // This is a placeholder - actual patching is handled differently via edit state
+        // The real patch is applied with the edited YAML content
+        tracing::debug!(
+            "Save operation placeholder for {}/{} in namespace {}",
+            resource_type,
+            name,
+            namespace
+        );
+        Ok(())
+    }
+
+    fn keybinding(&self) -> char {
+        'e' // This is not used for Save, 'e' opens edit mode
+    }
+
+    fn requires_confirmation(&self) -> bool {
+        false
+    }
+
+    fn confirmation_message(&self, resource: &ResourceInfo) -> String {
+        format!(
+            "Save edits to {} {} in {}?",
+            resource.resource_type, resource.name, resource.namespace
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "Save"
+    }
+
+    fn is_valid_for(&self, _resource_type: &str) -> bool {
+        true
+    }
+}
+
 /// Operation registry - holds all available operations
 pub struct OperationRegistry {
     operations: Vec<Box<dyn FluxOperation>>,

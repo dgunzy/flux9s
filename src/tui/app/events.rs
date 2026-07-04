@@ -39,6 +39,11 @@ impl App {
             return self.handle_submenu_key(key);
         }
 
+        // Handle text input in ResourceEdit view
+        if self.view_state.current_view == View::ResourceEdit {
+            return self.handle_edit_key(key);
+        }
+
         // Handle connection error state keys
         if self.has_connection_error() {
             // Check status message timeout
@@ -360,6 +365,40 @@ impl App {
                     ));
                     self.async_state.trace_result = None;
                     self.view_state.trace_scroll_offset = 0;
+                }
+            }
+            crossterm::event::KeyCode::Char('e') => {
+                // Edit command - allows editing resource spec
+                if !self.config.read_only && self.config.edit_mode {
+                    if let Some(resource) = self.get_current_resource() {
+                        // Fetch YAML for editing
+                        self.async_state.yaml_fetch_pending = Some(format!(
+                            "{}:{}:{}",
+                            resource.resource_type, resource.namespace, resource.name
+                        ));
+                        self.async_state.yaml_fetched = None;
+                        self.async_state.edit_pending = Some(ResourceKey::new(
+                            resource.resource_type.clone(),
+                            resource.namespace.clone(),
+                            resource.name.clone(),
+                        ));
+                        self.view_state.current_view = View::ResourceEdit;
+                    } else {
+                        self.set_status_message((
+                            "No resource selected for editing".to_string(),
+                            true,
+                        ));
+                    }
+                } else if self.config.read_only {
+                    self.set_status_message((
+                        "Editing disabled in read-only mode".to_string(),
+                        true,
+                    ));
+                } else {
+                    self.set_status_message((
+                        "Editing disabled (editMode=false in config)".to_string(),
+                        true,
+                    ));
                 }
             }
             crossterm::event::KeyCode::Char(':') => {
@@ -774,7 +813,17 @@ impl App {
             | View::ResourceYAML
             | View::ResourceTrace
             | View::ResourceHistory
-            | View::ResourceGraph => {
+            | View::ResourceGraph
+            | View::ResourceEdit => {
+                // Clear edit state when exiting edit view
+                if self.view_state.current_view == View::ResourceEdit {
+                    self.async_state.edit_pending = None;
+                    self.async_state.edit_yaml = None;
+                    self.async_state.edit_save_pending = None;
+                    self.async_state.edit_save_result_rx = None;
+                    self.async_state.edit_error_message = None;
+                    self.async_state.editor_state = None;
+                }
                 // Go back to the previous list view (favourites if we came from
                 // there, otherwise the main resource list).
                 self.view_state.current_view = self.view_state.previous_list_view;
@@ -789,6 +838,126 @@ impl App {
                 self.view_state.current_view = View::ResourceList;
                 None
             }
+        }
+    }
+
+    /// Handle key presses while in the ResourceEdit view
+    fn handle_edit_key(&mut self, key: KeyEvent) -> Option<bool> {
+        use crossterm::event::KeyCode;
+
+        // Initialize editor state from YAML if not already initialized
+        if self.async_state.editor_state.is_none() {
+            if let Some(yaml) = &self.async_state.edit_yaml {
+                self.async_state.editor_state =
+                    Some(crate::tui::app::state::EditorState::new(yaml));
+            } else {
+                self.async_state.editor_state = Some(crate::tui::app::state::EditorState::new(""));
+            }
+        }
+
+        let editor_state = self.async_state.editor_state.as_mut().unwrap();
+
+        match key.code {
+            // Save on Ctrl+S
+            KeyCode::Char('s') if key.modifiers == crossterm::event::KeyModifiers::CONTROL => {
+                // Validate YAML before saving
+                if !editor_state.validate_yaml() {
+                    return None;
+                }
+
+                let content = editor_state.get_content();
+                match serde_yaml::from_str::<serde_json::Value>(&content) {
+                    Ok(spec_value) => {
+                        self.async_state.edit_yaml = Some(content.clone());
+                        self.async_state.edit_save_pending = Some(spec_value);
+                        self.async_state.edit_error_message = None;
+                        self.set_status_message(("Saving edits...".to_string(), false));
+                    }
+                    Err(e) => {
+                        editor_state.validation_error = Some(format!("YAML error: {}", e));
+                        return None;
+                    }
+                }
+                None
+            }
+
+            // Cancel on Esc
+            KeyCode::Esc => {
+                self.async_state.edit_pending = None;
+                self.async_state.edit_yaml = None;
+                self.async_state.edit_save_pending = None;
+                self.async_state.edit_save_result_rx = None;
+                self.async_state.edit_error_message = None;
+                self.async_state.editor_state = None;
+                self.view_state.current_view = self.view_state.previous_list_view;
+                None
+            }
+
+            // Navigation keys
+            KeyCode::Up | KeyCode::Char('k') => {
+                // Get available visible lines (will be calculated from render context in Phase 3)
+                editor_state.cursor_up();
+                None
+            }
+
+            KeyCode::Down | KeyCode::Char('j') => {
+                // Get available visible lines (will be calculated from render context in Phase 3)
+                editor_state.cursor_down(10);
+                None
+            }
+
+            KeyCode::Left | KeyCode::Char('h') => {
+                editor_state.cursor_left();
+                None
+            }
+
+            KeyCode::Right | KeyCode::Char('l') => {
+                editor_state.cursor_right();
+                None
+            }
+
+            KeyCode::Home => {
+                editor_state.cursor_home();
+                None
+            }
+
+            KeyCode::End => {
+                editor_state.cursor_end();
+                None
+            }
+
+            // Text editing
+            KeyCode::Char(c) => {
+                editor_state.insert_char(c);
+                None
+            }
+
+            KeyCode::Backspace => {
+                editor_state.backspace();
+                None
+            }
+
+            KeyCode::Delete => {
+                editor_state.delete_char();
+                None
+            }
+
+            // Enter creates a new line
+            KeyCode::Enter => {
+                let line = editor_state.lines.remove(editor_state.cursor_row);
+                let (before, after) = line.split_at(editor_state.cursor_col);
+                editor_state
+                    .lines
+                    .insert(editor_state.cursor_row, before.to_string());
+                editor_state
+                    .lines
+                    .insert(editor_state.cursor_row + 1, after.to_string());
+                editor_state.cursor_row += 1;
+                editor_state.cursor_col = 0;
+                None
+            }
+
+            _ => None, // Ignore other keys
         }
     }
 
@@ -1383,6 +1552,7 @@ mod tests {
         let state = ResourceState::new();
         let config = Config {
             read_only,
+            edit_mode: true,
             default_namespace: "".to_string(),
             default_controller_namespace: "".to_string(),
             namespace_hotkeys: vec![],

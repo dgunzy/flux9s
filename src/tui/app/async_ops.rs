@@ -20,6 +20,18 @@ pub struct TraceRequest {
     pub tx: tokio::sync::oneshot::Sender<anyhow::Result<crate::tui::trace::TraceResult>>,
 }
 
+/// Request to save edited spec for a resource
+pub struct EditSaveRequest {
+    /// The resource being edited
+    pub resource_key: ResourceKey,
+    /// Parsed spec to apply
+    pub spec: serde_json::Value,
+    /// Kubernetes client to use for API calls
+    pub client: kube::Client,
+    /// Channel to send the save result back
+    pub tx: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+}
+
 /// Request to execute an operation on a resource
 pub struct OperationRequest {
     /// The type of resource to operate on
@@ -83,7 +95,27 @@ impl App {
 
     /// Set YAML fetch result
     pub fn set_yaml_fetched(&mut self, yaml: serde_json::Value) {
-        self.async_state.yaml_fetched = Some(yaml);
+        self.async_state.yaml_fetched = Some(yaml.clone());
+
+        if self.view_state.current_view == crate::tui::app::state::View::ResourceEdit
+            && self.async_state.editor_state.is_none()
+        {
+            let spec_value = yaml
+                .get("spec")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            match serde_yaml::to_string(&spec_value) {
+                Ok(spec_yaml) => {
+                    self.async_state.edit_yaml = Some(spec_yaml.clone());
+                    self.async_state.editor_state =
+                        Some(crate::tui::app::state::EditorState::new(&spec_yaml));
+                }
+                Err(e) => {
+                    self.async_state.edit_error_message =
+                        Some(format!("Failed to initialize editor: {}", e));
+                }
+            }
+        }
     }
 
     /// Set YAML fetch error
@@ -214,6 +246,68 @@ impl App {
             }
         }
         None
+    }
+
+    /// Trigger edit save if pending
+    pub fn trigger_edit_save(&mut self) -> Option<EditSaveRequest> {
+        if let (Some(spec), Some(resource_key), Some(client)) = (
+            self.async_state.edit_save_pending.clone(),
+            self.async_state.edit_pending.clone(),
+            self.kube_client.clone(),
+        ) {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let request = EditSaveRequest {
+                resource_key,
+                spec,
+                client,
+                tx,
+            };
+            self.async_state.edit_save_pending = None;
+            self.async_state.edit_save_result_rx = Some(rx);
+            return Some(request);
+        }
+        None
+    }
+
+    /// Try to get edit save result
+    pub fn try_get_edit_save_result(&mut self) -> Option<anyhow::Result<()>> {
+        if let Some(ref mut rx) = self.async_state.edit_save_result_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.async_state.edit_save_result_rx = None;
+                    return Some(result);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    return None;
+                }
+                Err(_) => {
+                    self.async_state.edit_save_result_rx = None;
+                    return Some(Err(anyhow::anyhow!("Edit save failed")));
+                }
+            }
+        }
+        None
+    }
+
+    /// Set edit save result and update state
+    pub fn set_edit_save_result(&mut self, result: anyhow::Result<()>) {
+        self.async_state.edit_save_pending = None;
+        self.async_state.edit_save_result_rx = None;
+        match result {
+            Ok(_) => {
+                self.async_state.edit_pending = None;
+                self.async_state.edit_yaml = None;
+                self.async_state.editor_state = None;
+                self.async_state.edit_error_message = None;
+                self.view_state.current_view = self.view_state.previous_list_view;
+                self.set_status_message(("Saved edits successfully".to_string(), false));
+            }
+            Err(e) => {
+                let message = format!("Save failed: {}", e);
+                self.async_state.edit_error_message = Some(message.clone());
+                self.set_status_message((message, true));
+            }
+        }
     }
 
     /// Try to get graph result

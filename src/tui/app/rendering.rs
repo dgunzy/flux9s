@@ -497,6 +497,26 @@ impl App {
                         f.render_widget(paragraph, area);
                     }
                 }
+                View::ResourceEdit => {
+                    // Render edit modal with editor state
+                    if let Some(editor_state) = &self.async_state.editor_state {
+                        let resource_name = self
+                            .selection_state
+                            .selected_resource_key
+                            .as_deref()
+                            .unwrap_or("unknown");
+                        let is_saving = self.async_state.edit_save_result_rx.is_some();
+                        render_edit_modal(
+                            f,
+                            area,
+                            editor_state,
+                            resource_name,
+                            &self.theme,
+                            is_saving,
+                            self.async_state.edit_error_message.as_deref(),
+                        );
+                    }
+                }
                 View::Help => {
                     render_help(f, area, &self.theme, self.namespace_hotkeys());
                 }

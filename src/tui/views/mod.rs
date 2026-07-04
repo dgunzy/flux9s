@@ -8,6 +8,7 @@ mod confirmation;
 mod connection_error;
 mod describe;
 mod detail;
+mod edit;
 mod footer;
 mod graph;
 mod header;
@@ -26,6 +27,7 @@ pub use confirmation::*;
 pub use connection_error::render_connection_error;
 pub use describe::*;
 pub use detail::*;
+pub use edit::*;
 // favorites module is not exported - favorites view uses render_resource_list instead
 pub use footer::*;
 pub use graph::*;

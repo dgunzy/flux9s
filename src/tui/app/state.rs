@@ -18,6 +18,7 @@ pub enum View {
     ResourceGraph,
     ResourceFavorites,
     ResourceHistory,
+    ResourceEdit,
     #[allow(dead_code)] // Reserved for future alternative help view implementation
     Help,
 }
@@ -172,6 +173,210 @@ impl UIState {
     }
 }
 
+/// Editor state for YAML editing
+///
+/// Tracks cursor position, content, and validation state while editing resource specs.
+#[derive(Debug, Clone)]
+pub struct EditorState {
+    /// Content lines (one line per element)
+    pub lines: Vec<String>,
+    /// Cursor row (0-indexed, within bounds [0, lines.len()))
+    pub cursor_row: usize,
+    /// Cursor column (0-indexed, within bounds [0, current_line.len()])
+    pub cursor_col: usize,
+    /// Scroll offset for vertical scrolling (first visible line)
+    pub scroll_offset: usize,
+    /// Horizontal scroll offset for long lines (used in Phase 3)
+    #[allow(dead_code)]
+    pub horizontal_scroll: usize,
+    /// Current validation error message (if any)
+    pub validation_error: Option<String>,
+    /// Undo stack (for potential Ctrl+Z implementation in Phase 3)
+    #[allow(dead_code)]
+    pub undo_stack: Vec<Vec<String>>,
+}
+
+impl EditorState {
+    /// Create a new editor state from initial YAML content
+    pub fn new(content: &str) -> Self {
+        let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        if lines.is_empty() {
+            Self {
+                lines: vec![String::new()],
+                cursor_row: 0,
+                cursor_col: 0,
+                scroll_offset: 0,
+                horizontal_scroll: 0,
+                validation_error: None,
+                undo_stack: vec![],
+            }
+        } else {
+            Self {
+                lines,
+                cursor_row: 0,
+                cursor_col: 0,
+                scroll_offset: 0,
+                horizontal_scroll: 0,
+                validation_error: None,
+                undo_stack: vec![],
+            }
+        }
+    }
+
+    /// Get the complete content as a string
+    pub fn get_content(&self) -> String {
+        self.lines.join("\n")
+    }
+
+    /// Insert a character at the current cursor position
+    pub fn insert_char(&mut self, ch: char) {
+        if self.cursor_row < self.lines.len() {
+            let line = &mut self.lines[self.cursor_row];
+            let col = self.cursor_col.min(line.len());
+            line.insert(col, ch);
+            self.cursor_col += 1;
+            self.validation_error = None;
+        }
+    }
+
+    /// Delete character at cursor position (forward delete)
+    pub fn delete_char(&mut self) {
+        if self.cursor_row < self.lines.len() {
+            let line = &mut self.lines[self.cursor_row];
+            if self.cursor_col < line.len() {
+                line.remove(self.cursor_col);
+                self.validation_error = None;
+            }
+        }
+    }
+
+    /// Delete character before cursor (backspace)
+    pub fn backspace(&mut self) {
+        if self.cursor_row < self.lines.len() {
+            let line = &mut self.lines[self.cursor_row];
+            if self.cursor_col > 0 {
+                line.remove(self.cursor_col - 1);
+                self.cursor_col -= 1;
+                self.validation_error = None;
+            } else if self.cursor_row > 0 {
+                // Join with previous line
+                let current_line = self.lines.remove(self.cursor_row);
+                self.cursor_row -= 1;
+                if self.cursor_row < self.lines.len() {
+                    self.cursor_col = self.lines[self.cursor_row].len();
+                    self.lines[self.cursor_row].push_str(&current_line);
+                    self.validation_error = None;
+                }
+            }
+        }
+    }
+
+    /// Move cursor up one line
+    pub fn cursor_up(&mut self) {
+        if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+            let line_len = self
+                .lines
+                .get(self.cursor_row)
+                .map(|l| l.len())
+                .unwrap_or(0);
+            self.cursor_col = self.cursor_col.min(line_len);
+            if self.cursor_row < self.scroll_offset {
+                self.scroll_offset = self.cursor_row;
+            }
+        }
+    }
+
+    /// Move cursor down one line
+    pub fn cursor_down(&mut self, visible_lines: usize) {
+        if self.cursor_row < self.lines.len().saturating_sub(1) {
+            self.cursor_row += 1;
+            let line_len = self
+                .lines
+                .get(self.cursor_row)
+                .map(|l| l.len())
+                .unwrap_or(0);
+            self.cursor_col = self.cursor_col.min(line_len);
+            let max_scroll = self.lines.len().saturating_sub(visible_lines);
+            if self.cursor_row >= self.scroll_offset + visible_lines {
+                self.scroll_offset = (self.cursor_row + 1).saturating_sub(visible_lines);
+            }
+            self.scroll_offset = self.scroll_offset.min(max_scroll);
+        }
+    }
+
+    /// Move cursor left
+    pub fn cursor_left(&mut self) {
+        if self.cursor_col > 0 {
+            self.cursor_col -= 1;
+        } else if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+            self.cursor_col = self
+                .lines
+                .get(self.cursor_row)
+                .map(|l| l.len())
+                .unwrap_or(0);
+        }
+    }
+
+    /// Move cursor right
+    pub fn cursor_right(&mut self) {
+        let line_len = self
+            .lines
+            .get(self.cursor_row)
+            .map(|l| l.len())
+            .unwrap_or(0);
+        if self.cursor_col < line_len {
+            self.cursor_col += 1;
+        } else if self.cursor_row < self.lines.len().saturating_sub(1) {
+            self.cursor_row += 1;
+            self.cursor_col = 0;
+        }
+    }
+
+    /// Move cursor to start of line
+    pub fn cursor_home(&mut self) {
+        self.cursor_col = 0;
+    }
+
+    /// Move cursor to end of line
+    pub fn cursor_end(&mut self) {
+        let line_len = self
+            .lines
+            .get(self.cursor_row)
+            .map(|l| l.len())
+            .unwrap_or(0);
+        self.cursor_col = line_len;
+    }
+
+    /// Validate YAML content
+    pub fn validate_yaml(&mut self) -> bool {
+        let content = self.get_content();
+        match serde_yaml::from_str::<serde_json::Value>(&content) {
+            Ok(_) => {
+                self.validation_error = None;
+                true
+            }
+            Err(e) => {
+                self.validation_error = Some(format!("YAML error: {}", e));
+                false
+            }
+        }
+    }
+
+    /// Clear validation error (e.g., when user starts editing)
+    #[allow(dead_code)]
+    pub fn clear_error(&mut self) {
+        self.validation_error = None;
+    }
+}
+
+impl Default for EditorState {
+    fn default() -> Self {
+        Self::new("")
+    }
+}
+
 /// Async operation state (pending operations and their result channels)
 #[derive(Debug, Default)]
 pub struct AsyncOperationState {
@@ -203,6 +408,14 @@ pub struct AsyncOperationState {
     pub operation_result_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>>,
     pub last_operation_key: Option<char>,
     pub confirmation_pending: Option<PendingOperation>,
+
+    // Edit operations
+    pub edit_pending: Option<ResourceKey>,
+    pub edit_yaml: Option<String>,
+    pub edit_save_pending: Option<serde_json::Value>,
+    pub edit_save_result_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>>,
+    pub edit_error_message: Option<String>,
+    pub editor_state: Option<EditorState>,
 }
 
 impl AsyncOperationState {
@@ -227,6 +440,13 @@ impl AsyncOperationState {
         self.operation_result_rx = None;
         self.last_operation_key = None;
         self.confirmation_pending = None;
+
+        self.edit_pending = None;
+        self.edit_yaml = None;
+        self.edit_save_pending = None;
+        self.edit_save_result_rx = None;
+        self.edit_error_message = None;
+        self.editor_state = None;
     }
 }
 

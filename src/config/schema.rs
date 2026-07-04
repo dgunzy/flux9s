@@ -13,6 +13,10 @@ pub struct Config {
     #[serde(default = "default_read_only")]
     pub read_only: bool,
 
+    /// Enable editing of resource specs
+    #[serde(default = "default_true")]
+    pub edit_mode: bool,
+
     /// Starting namespace
     #[serde(default = "default_namespace")]
     pub default_namespace: String,
@@ -90,6 +94,10 @@ fn default_read_only() -> bool {
     true
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_namespace() -> String {
     "flux-system".to_string()
 }
@@ -111,6 +119,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             read_only: default_read_only(),
+            edit_mode: default_true(),
             default_namespace: default_namespace(),
             default_controller_namespace: default_namespace(),
             ui: UiConfig::default(),

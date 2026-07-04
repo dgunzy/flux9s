@@ -370,6 +370,21 @@ impl App {
         self.view_state.current_view
     }
 
+    #[allow(dead_code)]
+    pub fn view_state_mut(&mut self) -> &mut ViewState {
+        &mut self.view_state
+    }
+
+    #[allow(dead_code)]
+    pub fn ui_state_mut(&mut self) -> &mut UIState {
+        &mut self.ui_state
+    }
+
+    #[allow(dead_code)]
+    pub fn async_state_mut(&mut self) -> &mut AsyncOperationState {
+        &mut self.async_state
+    }
+
     #[allow(dead_code)] // Used in tests
     pub fn show_quit_confirm(&self) -> bool {
         self.ui_state.show_quit_confirm
@@ -676,6 +691,7 @@ mod tests {
         let state = ResourceState::new();
         let config = Config {
             read_only: false,
+            edit_mode: true,
             default_namespace: "".to_string(),
             default_controller_namespace: "".to_string(),
             namespace_hotkeys: vec![],
