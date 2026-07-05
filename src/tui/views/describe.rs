@@ -109,9 +109,77 @@ fn push_value_lines(lines: &mut Vec<Line<'static>>, value: &Value, indent: usize
     }
 }
 
+/// Append the kubectl-style Events section.
+///
+/// `events` is `None` when rendering from the locally cached object (no
+/// events were fetched) — the section is omitted entirely rather than
+/// claiming the resource has none.
+fn push_events_section(
+    lines: &mut Vec<Line<'static>>,
+    events: &[crate::kube::events::KubeEventInfo],
+    events_error: Option<&str>,
+    theme: &Theme,
+) {
+    push_section_header(lines, "Events", theme);
+
+    if let Some(error) = events_error {
+        lines.push(Line::from(Span::styled(
+            format!("  Events unavailable: {}", error),
+            Style::default().fg(theme.text_secondary),
+        )));
+        return;
+    }
+    if events.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  <none>".to_string(),
+            Style::default().fg(theme.text_secondary),
+        )));
+        return;
+    }
+
+    lines.push(Line::from(Span::styled(
+        format!(
+            "  {:<8} {:<26} {:>8} {:>6}  {:<24} {}",
+            "TYPE", "REASON", "AGE", "COUNT", "FROM", "MESSAGE"
+        ),
+        Style::default().fg(theme.text_label),
+    )));
+    for event in events {
+        let row_style = if event.is_warning() {
+            Style::default().fg(theme.status_error)
+        } else {
+            Style::default()
+        };
+        let age = crate::tui::views::helpers::format_age(event.last_seen);
+        // Multi-line messages (common for apply errors) continue on
+        // indented follow-up lines so nothing is lost.
+        let mut message_lines = event.message.lines();
+        let first_message = message_lines.next().unwrap_or_default();
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {:<8} {:<26} {:>8} {:>6}  {:<24} {}",
+                event.event_type,
+                event.reason,
+                age,
+                format!("x{}", event.count),
+                event.source,
+                first_message,
+            ),
+            row_style,
+        )));
+        for continuation in message_lines {
+            lines.push(Line::from(Span::styled(
+                format!("  {:<78} {}", "", continuation),
+                row_style,
+            )));
+        }
+    }
+}
+
 fn build_describe_lines(
     resource: Option<&crate::watcher::ResourceInfo>,
     obj_json: &Value,
+    events: Option<(&[crate::kube::events::KubeEventInfo], Option<&str>)>,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -211,6 +279,10 @@ fn build_describe_lines(
         push_value_lines(&mut lines, status, 2, theme);
     }
 
+    if let Some((events, events_error)) = events {
+        push_events_section(&mut lines, events, events_error, theme);
+    }
+
     lines
 }
 
@@ -221,8 +293,8 @@ pub fn render_resource_describe(
     selected_resource_key: &Option<String>,
     state: &ResourceState,
     resource_objects: &HashMap<String, serde_json::Value>,
-    describe_fetched: &Option<serde_json::Value>,
-    describe_fetch_pending: &Option<String>,
+    describe_fetched: Option<&crate::kube::fetch::DescribeData>,
+    describe_loading: bool,
     describe_scroll_offset: &mut usize,
     search: &mut TextSearchState,
     theme: &Theme,
@@ -242,9 +314,14 @@ pub fn render_resource_describe(
         }
     };
 
-    let obj_json = if let Some(fetched) = describe_fetched {
-        fetched.clone()
-    } else if describe_fetch_pending.is_some() {
+    // Events only exist on the fetched path; the locally cached fallback
+    // object omits the section rather than claiming there are none.
+    let (obj_json, events) = if let Some(fetched) = describe_fetched {
+        (
+            fetched.object.clone(),
+            Some((fetched.events.as_slice(), fetched.events_error.as_deref())),
+        )
+    } else if describe_loading {
         crate::tui::views::helpers::render_loading_state(
             f,
             area,
@@ -255,7 +332,7 @@ pub fn render_resource_describe(
         return;
     } else {
         match resource_objects.get(key).cloned() {
-            Some(obj) => obj,
+            Some(obj) => (obj, None),
             None => {
                 crate::tui::views::helpers::render_empty_state(
                     f,
@@ -278,7 +355,7 @@ pub fn render_resource_describe(
         "Describe".to_string()
     };
 
-    let all_lines = build_describe_lines(resource.as_ref(), &cleaned_json, theme);
+    let all_lines = build_describe_lines(resource.as_ref(), &cleaned_json, events, theme);
     let visible_height = area.height.saturating_sub(2) as usize;
 
     // Text search: match against the plain-text content of each line
@@ -321,4 +398,94 @@ pub fn render_resource_describe(
         .block(block)
         .wrap(Wrap { trim: false });
     f.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kube::events::KubeEventInfo;
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    fn section_lines(events: &[KubeEventInfo], error: Option<&str>) -> Vec<String> {
+        let mut lines = Vec::new();
+        push_events_section(&mut lines, events, error, &Theme::default());
+        lines.iter().map(line_text).collect()
+    }
+
+    fn sample_event(event_type: &str, message: &str) -> KubeEventInfo {
+        KubeEventInfo::from_json(&serde_json::json!({
+            "metadata": {"uid": "uid-1", "namespace": "flux-system"},
+            "involvedObject": {
+                "kind": "Kustomization",
+                "namespace": "flux-system",
+                "name": "podinfo"
+            },
+            "type": event_type,
+            "reason": "TestReason",
+            "message": message,
+            "count": 2,
+            "source": {"component": "kustomize-controller"}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn events_section_renders_header_and_rows() {
+        let lines = section_lines(&[sample_event("Warning", "something failed")], None);
+        // Section title, column header, one event row
+        assert!(lines.iter().any(|l| l.trim() == "Events"));
+        let header = lines.iter().find(|l| l.contains("REASON")).unwrap();
+        assert!(header.contains("TYPE") && header.contains("MESSAGE"));
+        let row = lines.iter().find(|l| l.contains("TestReason")).unwrap();
+        assert!(row.contains("Warning"));
+        assert!(row.contains("x2"));
+        assert!(row.contains("kustomize-controller"));
+        assert!(row.contains("something failed"));
+    }
+
+    #[test]
+    fn events_section_multiline_message_continues_indented() {
+        let lines = section_lines(&[sample_event("Normal", "line one\nline two")], None);
+        let row_idx = lines.iter().position(|l| l.contains("line one")).unwrap();
+        assert!(lines[row_idx + 1].contains("line two"));
+        assert!(!lines[row_idx + 1].contains("TestReason"));
+    }
+
+    #[test]
+    fn events_section_empty_and_error_states() {
+        assert!(
+            section_lines(&[], None)
+                .iter()
+                .any(|l| l.contains("<none>"))
+        );
+        let errored = section_lines(&[], Some("forbidden"));
+        assert!(
+            errored
+                .iter()
+                .any(|l| l.contains("Events unavailable: forbidden"))
+        );
+    }
+
+    #[test]
+    fn describe_lines_include_events_only_when_fetched() {
+        let obj = serde_json::json!({
+            "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+            "kind": "Kustomization",
+            "metadata": {"name": "podinfo", "namespace": "flux-system"}
+        });
+        let theme = Theme::default();
+
+        let without = build_describe_lines(None, &obj, None, &theme);
+        assert!(!without.iter().map(line_text).any(|l| l.trim() == "Events"));
+
+        let events = [sample_event("Normal", "ok")];
+        let with = build_describe_lines(None, &obj, Some((&events, None)), &theme);
+        assert!(with.iter().map(line_text).any(|l| l.trim() == "Events"));
+    }
 }

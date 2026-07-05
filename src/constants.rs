@@ -9,6 +9,11 @@ pub const RESOURCE_KEY_FORMAT: &str = "resource_type:namespace:name";
 /// Maximum number of reconciliation history events to store per resource
 pub const MAX_RECONCILIATION_HISTORY: usize = 50;
 
+/// Cap on the live Kubernetes events feed. Events are the churniest resource
+/// in a cluster; the store evicts oldest-seen entries past this bound so a
+/// busy cluster can't grow memory without limit.
+pub const MAX_KUBE_EVENTS: usize = 1000;
+
 /// Status message timeout in seconds
 pub const STATUS_MESSAGE_TIMEOUT_SECS: u64 = 4;
 

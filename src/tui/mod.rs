@@ -29,9 +29,8 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 
 use crate::models::FluxResourceKind;
-use crate::watcher::ResourceKey;
 
-pub use crate::kube::fetch::{fetch_resource, fetch_resource_yaml};
+pub use crate::kube::fetch::fetch_resource_yaml;
 
 /// Extract Flux bundle version from deployment metadata labels
 /// Returns the app.kubernetes.io/version label if present (e.g., "v2.7.5")
@@ -375,229 +374,130 @@ pub async fn run_tui_with_async_init(
 
             terminal.draw(|f| app.render(f))?;
 
-            // Check if we need to fetch YAML asynchronously
-            // Only if Kubernetes is initialized
+            // Dispatch queued view fetches (YAML, describe, trace, graph).
+            // Each spawned task reports back through its AsyncTask channel.
             if kube_initialized {
-                if let Some((key, client, tx)) = app.trigger_yaml_fetch() {
-                    // Parse key using type-safe ResourceKey
-                    if let Some(rk) = ResourceKey::parse(&key) {
-                        tracing::debug!(
-                            "Fetching YAML for {}/{} in namespace {}",
-                            rk.resource_type,
-                            rk.name,
-                            rk.namespace
-                        );
-
-                        // Spawn async task to fetch resource
-                        let client_clone = client.clone();
+                if let Some(client) = app.kube_client.clone() {
+                    if let Some((rk, tx)) = app.async_state.yaml.dispatch() {
+                        let client = client.clone();
                         tokio::spawn(async move {
+                            tracing::debug!("Fetching YAML for {}", rk);
                             let result = fetch_resource_yaml(
-                                &client_clone,
+                                &client,
                                 &rk.resource_type,
                                 &rk.namespace,
                                 &rk.name,
                             )
                             .await;
                             if let Err(ref e) = result {
-                                tracing::warn!(
-                                    "Failed to fetch YAML for {}/{} in namespace {}: {}",
-                                    rk.resource_type,
-                                    rk.name,
-                                    rk.namespace,
-                                    e
-                                );
-                            } else {
-                                tracing::debug!(
-                                    "Successfully fetched YAML for {}/{}",
-                                    rk.resource_type,
-                                    rk.name
-                                );
+                                tracing::warn!("Failed to fetch YAML for {}: {}", rk, e);
                             }
                             let _ = tx.send(result);
                         });
-                    } else {
-                        tracing::error!("Failed to parse resource key for YAML fetch: {}", key);
-                        let _ =
-                            tx.send(Err(anyhow::anyhow!("Invalid resource key format: {}", key)));
                     }
-                }
-            }
 
-            // Check if we need to fetch describe data asynchronously
-            if kube_initialized {
-                if let Some((key, client, tx)) = app.trigger_describe_fetch() {
-                    if let Some(rk) = ResourceKey::parse(&key) {
-                        tracing::debug!(
-                            "Fetching describe data for {}/{} in namespace {}",
-                            rk.resource_type,
-                            rk.name,
-                            rk.namespace
-                        );
-
-                        let client_clone = client.clone();
+                    if let Some((rk, tx)) = app.async_state.describe.dispatch() {
+                        let client = client.clone();
                         tokio::spawn(async move {
-                            let result = fetch_resource(
-                                &client_clone,
+                            tracing::debug!("Fetching describe data for {}", rk);
+                            let result = crate::kube::fetch::fetch_describe_data(
+                                &client,
                                 &rk.resource_type,
                                 &rk.namespace,
                                 &rk.name,
                             )
                             .await;
                             if let Err(ref e) = result {
-                                tracing::warn!(
-                                    "Failed to fetch describe data for {}/{} in namespace {}: {}",
-                                    rk.resource_type,
-                                    rk.name,
-                                    rk.namespace,
-                                    e
-                                );
-                            } else {
-                                tracing::debug!(
-                                    "Successfully fetched describe data for {}/{}",
-                                    rk.resource_type,
-                                    rk.name
-                                );
+                                tracing::warn!("Failed to fetch describe data for {}: {}", rk, e);
                             }
                             let _ = tx.send(result);
                         });
-                    } else {
-                        tracing::error!("Failed to parse resource key for describe fetch: {}", key);
-                        let _ =
-                            tx.send(Err(anyhow::anyhow!("Invalid resource key format: {}", key)));
                     }
-                }
-            }
 
-            // Check if we need to trace a resource asynchronously
-            // Only if Kubernetes is initialized
-            if kube_initialized {
-                if let Some(req) = app.trigger_trace() {
-                    tracing::debug!(
-                        "Tracing {}/{} in namespace {}",
-                        req.resource_type,
-                        req.name,
-                        req.namespace
-                    );
-
-                    // Spawn async task to trace resource
-                    let client_clone = req.client.clone();
-                    let resource_type = req.resource_type;
-                    let namespace = req.namespace;
-                    let name = req.name;
-                    let tx = req.tx;
-                    tokio::spawn(async move {
-                        use crate::tui::trace;
-                        let result =
-                            trace::trace_object(&client_clone, &resource_type, &namespace, &name)
-                                .await;
-                        match result {
-                            Ok(trace_result) => {
-                                tracing::debug!(
-                                    "Successfully traced {}/{} in namespace {}",
-                                    resource_type,
-                                    name,
-                                    namespace
-                                );
-                                let _ = tx.send(Ok(trace_result));
+                    if let Some((rk, tx)) = app.async_state.trace.dispatch() {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            tracing::debug!("Tracing {}", rk);
+                            let result = crate::tui::trace::trace_object(
+                                &client,
+                                &rk.resource_type,
+                                &rk.namespace,
+                                &rk.name,
+                            )
+                            .await;
+                            if let Err(ref e) = result {
+                                tracing::warn!("Failed to trace {}: {}", rk, e);
                             }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to trace {}/{} in namespace {}: {}",
-                                    resource_type,
-                                    name,
-                                    namespace,
-                                    e
-                                );
-                                let _ = tx.send(Err(anyhow::anyhow!(
-                                    "Trace failed for {}/{} in {}: {}",
-                                    resource_type,
-                                    name,
-                                    namespace,
-                                    e
-                                )));
+                            let _ = tx.send(result);
+                        });
+                    }
+
+                    if let Some((rk, tx)) = app.async_state.graph.dispatch() {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            tracing::debug!("Building graph for {}", rk);
+                            let result = crate::trace::build_resource_graph(
+                                &client,
+                                &rk.resource_type,
+                                &rk.namespace,
+                                &rk.name,
+                            )
+                            .await;
+                            if let Err(ref e) = result {
+                                tracing::warn!("Failed to build graph for {}: {}", rk, e);
                             }
-                        }
-                    });
+                            let _ = tx.send(result);
+                        });
+                    }
                 }
             }
 
-            // Check for trace results
-            if let Some(result) = app.try_get_trace_result() {
+            // Poll fetch results and store them for the views.
+            if let Some(result) = app.async_state.yaml.try_recv() {
                 match result {
-                    Ok(trace_result) => {
-                        app.set_trace_result(trace_result);
-                        // Switch to trace view - use public method if available
-                        // For now, we'll set it via a method we need to add
-                        app.set_view_trace();
-                    }
+                    Ok(yaml) => app.async_state.yaml.set_result(yaml),
                     Err(e) => {
-                        app.set_trace_error();
-                        app.set_status_message((format!("Trace failed: {}", e), true));
-                    }
-                }
-            }
-
-            // Check if we need to build graph asynchronously
-            if kube_initialized {
-                if let Some((rk, client, tx)) = app.trigger_graph() {
-                    tracing::debug!(
-                        "Building graph for {}/{} in namespace {}",
-                        rk.resource_type,
-                        rk.name,
-                        rk.namespace
-                    );
-                    tokio::spawn(async move {
-                        use crate::trace::build_resource_graph;
-                        let result = build_resource_graph(
-                            &client,
-                            &rk.resource_type,
-                            &rk.namespace,
-                            &rk.name,
-                        )
-                        .await;
-                        let _ = tx.send(result);
-                    });
-                }
-            }
-
-            // Check for graph building result
-            if let Some(result) = app.try_get_graph_result() {
-                match result {
-                    Ok(graph_result) => {
-                        app.set_graph_result(graph_result);
-                        // Graph view is already set, just update the result
-                    }
-                    Err(e) => {
-                        app.set_graph_error();
-                        app.set_status_message((format!("Graph building failed: {}", e), true));
-                        // Return to previous view on error - use public method
-                        app.set_view(app.previous_list_view());
-                    }
-                }
-            }
-
-            // Check for YAML fetch results
-            if let Some(result) = app.try_get_yaml_result() {
-                match result {
-                    Ok(yaml) => app.set_yaml_fetched(yaml),
-                    Err(e) => {
-                        tracing::debug!("YAML fetch error result received: {}", e);
-                        app.set_yaml_fetch_error();
+                        app.async_state.yaml.set_error();
                         app.set_status_message((format!("Failed to fetch YAML: {}", e), true));
                     }
                 }
             }
 
-            // Check for describe fetch results
-            if let Some(result) = app.try_get_describe_result() {
+            if let Some(result) = app.async_state.describe.try_recv() {
                 match result {
-                    Ok(describe) => app.set_describe_fetched(describe),
+                    Ok(describe) => app.async_state.describe.set_result(describe),
                     Err(e) => {
-                        app.set_describe_fetch_error();
+                        app.async_state.describe.set_error();
                         app.set_status_message((
                             format!("Failed to fetch description: {}", e),
                             true,
                         ));
+                    }
+                }
+            }
+
+            if let Some(result) = app.async_state.trace.try_recv() {
+                match result {
+                    Ok(trace_result) => {
+                        app.async_state.trace.set_result(trace_result);
+                        app.set_view_trace();
+                    }
+                    Err(e) => {
+                        app.async_state.trace.set_error();
+                        app.set_status_message((format!("Trace failed: {}", e), true));
+                    }
+                }
+            }
+
+            if let Some(result) = app.async_state.graph.try_recv() {
+                match result {
+                    // set_graph_result also places keyboard focus on the object node
+                    Ok(graph_result) => app.set_graph_result(graph_result),
+                    Err(e) => {
+                        app.async_state.graph.set_error();
+                        app.set_status_message((format!("Graph building failed: {}", e), true));
+                        // Return to the previous view instead of an empty graph
+                        app.set_view(app.previous_list_view());
                     }
                 }
             }
@@ -930,6 +830,16 @@ pub async fn run_tui_with_async_init(
                         crate::watcher::WatchEvent::DeploymentApplied(deployment_json) => {
                             let version = extract_flux_bundle_version(&deployment_json);
                             app.controller_pods.set_flux_bundle_version(version);
+                        }
+                        crate::watcher::WatchEvent::KubeEventApplied(event_json) => {
+                            if let Some(info) =
+                                crate::kube::events::KubeEventInfo::from_json(&event_json)
+                            {
+                                app.kube_events.upsert(info);
+                            }
+                        }
+                        crate::watcher::WatchEvent::KubeEventDeleted(uid) => {
+                            app.kube_events.remove(&uid);
                         }
                     }
                 }

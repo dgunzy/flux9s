@@ -4,7 +4,6 @@ use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
 use crate::tui::trace::{TraceNode, TraceResult};
 use crate::tui::views::yaml::decorate_title_with_search;
-use crate::watcher::ResourceKey;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -35,13 +34,13 @@ pub fn render_resource_trace(
     f: &mut Frame,
     area: Rect,
     _selected_resource_key: &Option<String>,
-    trace_result: &Option<TraceResult>,
-    trace_pending: &Option<ResourceKey>,
+    trace_result: Option<&TraceResult>,
+    trace_loading: bool,
     scroll_offset: &mut usize,
     search: &mut TextSearchState,
     theme: &Theme,
 ) {
-    if trace_pending.is_some() {
+    if trace_loading {
         crate::tui::views::helpers::render_loading_state(
             f,
             area,

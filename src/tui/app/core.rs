@@ -1,7 +1,8 @@
 //! Application state and main TUI logic
 
 use super::state::{
-    AsyncOperationState, ControllerPodState, HealthFilter, SelectionState, UIState, View, ViewState,
+    AsyncOperationState, ControllerPodState, HealthFilter, KubeEventStore, SelectionState, UIState,
+    View, ViewState,
 };
 use crate::tui::{OperationRegistry, Theme};
 use crate::watcher::ResourceState;
@@ -31,6 +32,8 @@ pub struct App {
     pub(crate) namespace_hotkeys: Vec<String>,
     pub(crate) pending_context_switch: Option<String>,
     pub(crate) controller_pods: ControllerPodState,
+    /// Live Kubernetes events feed (populated while the events view is open).
+    pub(crate) kube_events: KubeEventStore,
     /// Path to the active log file, shown on the connection error screen.
     pub(crate) log_path: Option<std::path::PathBuf>,
     /// Watchers currently in a degraded (erroring/reconnecting) state.
@@ -80,6 +83,7 @@ impl App {
             namespace_hotkeys: Self::build_namespace_hotkeys(&config, Vec::new()),
             pending_context_switch: None,
             controller_pods: ControllerPodState::default(),
+            kube_events: KubeEventStore::default(),
             log_path: None,
             degraded_watchers: HashSet::new(),
         }
@@ -294,6 +298,59 @@ impl App {
 
     pub fn set_watcher(&mut self, watcher: crate::watcher::ResourceWatcher) {
         self.watcher = Some(watcher);
+        // A replacement watcher (context switch) starts without the lazily
+        // started events watch — rearm it if the events view is showing.
+        if self.view_state.current_view == View::EventList {
+            self.start_kube_events_watch();
+        }
+    }
+
+    /// Start the Kubernetes events watcher (no-op if already running).
+    pub(crate) fn start_kube_events_watch(&mut self) {
+        if let Some(ref mut watcher) = self.watcher {
+            if let Err(e) = watcher.watch_kube_events() {
+                tracing::warn!("Failed to start events watcher: {}", e);
+                self.set_status_message((format!("Failed to watch events: {}", e), true));
+            }
+        }
+    }
+
+    /// Stop the events watcher and drop the collected feed. Called when the
+    /// events view is left; the watcher re-lists everything on next open, so
+    /// keeping stale entries would only risk showing deleted events.
+    pub(crate) fn stop_kube_events_watch(&mut self) {
+        if let Some(ref mut watcher) = self.watcher {
+            watcher.stop_kube_events();
+        }
+        self.kube_events.clear();
+    }
+
+    /// The live events feed filtered by the list filter (matches type, reason,
+    /// object, source, namespace and message), newest first. Returns owned
+    /// clones so callers can hold the list while mutating view state.
+    pub(crate) fn filtered_kube_events(&self) -> Vec<crate::kube::events::KubeEventInfo> {
+        let filter = self.view_state.filter.to_lowercase();
+        self.kube_events
+            .sorted_events()
+            .into_iter()
+            .filter(|event| {
+                if filter.is_empty() {
+                    return true;
+                }
+                [
+                    event.event_type.as_str(),
+                    event.reason.as_str(),
+                    event.message.as_str(),
+                    event.source.as_str(),
+                    event.involved_kind.as_str(),
+                    event.involved_namespace.as_str(),
+                    event.involved_name.as_str(),
+                ]
+                .iter()
+                .any(|text| text.to_lowercase().contains(&filter))
+            })
+            .cloned()
+            .collect()
     }
 
     pub fn set_context(&mut self, context: String) {
@@ -320,6 +377,7 @@ impl App {
         self.state.clear();
         self.resource_objects.clear();
         self.controller_pods.clear();
+        self.kube_events.clear();
         self.degraded_watchers.clear();
         self.view_state.selected_index = 0;
         self.view_state.scroll_offset = 0;
@@ -444,19 +502,57 @@ impl App {
 
     /// Get the currently selected resource based on the current view
     /// Returns ResourceInfo if a resource is selected, None otherwise
-    pub(crate) fn get_current_resource(&self) -> Option<crate::watcher::ResourceInfo> {
+    /// The resource the current view is pointing at, regardless of view type:
+    /// the selected row in resource lists, the selected event's involved
+    /// object in the events feed, the focused (non-aggregate) node in the
+    /// graph, or the stored selection in nested detail-style views.
+    ///
+    /// This is the single resolver behind "act on the current resource" keys
+    /// (YAML, describe, trace, graph, history, operations), so they work the
+    /// same from every view. The target is not necessarily a watched Flux
+    /// resource — an event may be about a Pod, a graph node may be a managed
+    /// Deployment; callers that need watched state use
+    /// [`Self::get_current_resource`].
+    pub(crate) fn view_target(&self) -> Option<crate::watcher::ResourceKey> {
+        use crate::watcher::ResourceKey;
         match self.view_state.current_view {
             View::ResourceList | View::ResourceFavorites => {
                 let resources = self.get_filtered_resources();
-                resources.get(self.view_state.selected_index).cloned()
+                let resource = resources.get(self.view_state.selected_index)?;
+                Some(ResourceKey::new(
+                    resource.resource_type.clone(),
+                    resource.namespace.clone(),
+                    resource.name.clone(),
+                ))
             }
-            View::ResourceDetail | View::ResourceDescribe => self
+            View::EventList => {
+                let events = self.filtered_kube_events();
+                let event = events.get(self.view_state.selected_index)?;
+                Some(ResourceKey::new(
+                    event.involved_kind.clone(),
+                    event.involved_namespace.clone(),
+                    event.involved_name.clone(),
+                ))
+            }
+            View::ResourceGraph => self.focused_graph_node_target(),
+            View::ResourceDetail
+            | View::ResourceDescribe
+            | View::ResourceYAML
+            | View::ResourceTrace
+            | View::ResourceHistory => self
                 .selection_state
                 .selected_resource_key
-                .as_ref()
-                .and_then(|key| self.state.get(key)),
-            _ => None,
+                .as_deref()
+                .and_then(ResourceKey::parse),
+            View::Help => None,
         }
+    }
+
+    /// The watched Flux resource the current view points at, when the
+    /// [`Self::view_target`] is one flux9s watches.
+    pub(crate) fn get_current_resource(&self) -> Option<crate::watcher::ResourceInfo> {
+        self.view_target()
+            .and_then(|rk| self.state.get(&rk.to_key_string()))
     }
 
     pub fn set_view_trace(&mut self) {
@@ -678,36 +774,14 @@ impl std::fmt::Debug for App {
             .field("resource_objects", &"<Arc<RwLock<HashMap>>>")
             .field("watcher", &"<Option<ResourceWatcher>>")
             .field("kube_client", &"<Option<kube::Client>>")
-            .field("yaml_fetch_pending", &self.async_state.yaml_fetch_pending)
-            .field("yaml_fetched", &self.async_state.yaml_fetched.is_some())
-            .field("yaml_fetch_rx", &self.async_state.yaml_fetch_rx.is_some())
-            .field(
-                "describe_fetch_pending",
-                &self.async_state.describe_fetch_pending,
-            )
-            .field(
-                "describe_fetched",
-                &self.async_state.describe_fetched.is_some(),
-            )
-            .field(
-                "describe_fetch_rx",
-                &self.async_state.describe_fetch_rx.is_some(),
-            )
-            .field("trace_pending", &self.async_state.trace_pending)
-            .field("trace_result", &self.async_state.trace_result.is_some())
-            .field(
-                "trace_result_rx",
-                &self.async_state.trace_result_rx.is_some(),
-            )
+            .field("yaml_task", &self.async_state.yaml)
+            .field("describe_task", &self.async_state.describe)
+            .field("trace_task", &self.async_state.trace)
             .field("trace_scroll_offset", &self.view_state.trace_scroll_offset)
             .field("show_splash", &self.ui_state.show_splash)
             .field("splash_start_time", &self.ui_state.splash_start_time)
             .field("operation_registry", &"<OperationRegistry>")
-            .field("pending_operation", &self.async_state.pending_operation)
-            .field(
-                "operation_result_rx",
-                &self.async_state.operation_result_rx.is_some(),
-            )
+            .field("operation_task", &self.async_state.operation)
             .field("last_operation_key", &self.async_state.last_operation_key)
             .field(
                 "confirmation_pending",
@@ -732,12 +806,7 @@ impl std::fmt::Debug for App {
                 &self.view_state.history_scroll_offset,
             )
             .field("graph_scroll_offset", &self.view_state.graph_scroll_offset)
-            .field("graph_pending", &self.async_state.graph_pending)
-            .field("graph_result", &self.async_state.graph_result.is_some())
-            .field(
-                "graph_result_rx",
-                &self.async_state.graph_result_rx.is_some(),
-            )
+            .field("graph_task", &self.async_state.graph)
             .field("previous_list_view", &self.view_state.previous_list_view)
             .finish()
     }

@@ -18,6 +18,10 @@ pub struct Command {
 /// Application commands (non-CRD commands)
 pub const APP_COMMANDS: &[Command] = &[
     Command {
+        name: "events",
+        takes_args: false,
+    },
+    Command {
         name: "healthy",
         takes_args: false,
     },
@@ -133,6 +137,12 @@ pub fn find_matching_commands(prefix: &str) -> Vec<String> {
 }
 
 // Command matching helpers - use these instead of hardcoding command strings
+
+/// Check if command opens the live Kubernetes events view
+pub fn is_events_command(cmd: &str) -> bool {
+    let cmd_lower = cmd.to_lowercase();
+    cmd_lower == "events" || cmd_lower == "event" || cmd_lower == "ev"
+}
 
 /// Check if command is readonly (handles both "readonly" and "read-only")
 pub fn is_readonly_command(cmd: &str) -> bool {

@@ -70,8 +70,8 @@ pub fn render_resource_yaml(
     selected_resource_key: &Option<String>,
     state: &ResourceState,
     resource_objects: &HashMap<String, serde_json::Value>,
-    yaml_fetched: &Option<serde_json::Value>,
-    yaml_fetch_pending: &Option<String>,
+    yaml_fetched: Option<&serde_json::Value>,
+    yaml_loading: bool,
     yaml_scroll_offset: &mut usize,
     search: &mut TextSearchState,
     theme: &Theme,
@@ -95,7 +95,7 @@ pub fn render_resource_yaml(
     let obj_json = if let Some(fetched) = yaml_fetched {
         // Use fetched YAML (complete)
         fetched.clone()
-    } else if yaml_fetch_pending.is_some() {
+    } else if yaml_loading {
         crate::tui::views::helpers::render_loading_state(
             f,
             area,

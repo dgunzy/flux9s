@@ -411,8 +411,8 @@ impl App {
                         &self.selection_state.selected_resource_key,
                         &self.state,
                         &self.resource_objects,
-                        &self.async_state.describe_fetched,
-                        &self.async_state.describe_fetch_pending,
+                        self.async_state.describe.result(),
+                        self.async_state.describe.is_loading(),
                         &mut self.view_state.describe_scroll_offset,
                         &mut self.view_state.text_search,
                         &self.theme,
@@ -425,8 +425,8 @@ impl App {
                         &self.selection_state.selected_resource_key,
                         &self.state,
                         &self.resource_objects,
-                        &self.async_state.yaml_fetched,
-                        &self.async_state.yaml_fetch_pending,
+                        self.async_state.yaml.result(),
+                        self.async_state.yaml.is_loading(),
                         &mut self.view_state.yaml_scroll_offset,
                         &mut self.view_state.text_search,
                         &self.theme,
@@ -437,8 +437,8 @@ impl App {
                         f,
                         area,
                         &self.selection_state.selected_resource_key,
-                        &self.async_state.trace_result,
-                        &self.async_state.trace_pending,
+                        self.async_state.trace.result(),
+                        self.async_state.trace.is_loading(),
                         &mut self.view_state.trace_scroll_offset,
                         &mut self.view_state.text_search,
                         &self.theme,
@@ -466,8 +466,8 @@ impl App {
                         f,
                         area,
                         &self.selection_state.selected_resource_key,
-                        &self.async_state.graph_result,
-                        &self.async_state.graph_pending,
+                        self.async_state.graph.result(),
+                        self.async_state.graph.is_loading(),
                         &mut self.view_state.graph_scroll_offset,
                         self.view_state.graph_focus_index,
                         &self.theme,
@@ -510,6 +510,20 @@ impl App {
                             .style(Style::default().fg(self.theme.text_secondary));
                         f.render_widget(paragraph, area);
                     }
+                }
+                View::EventList => {
+                    let events = self.filtered_kube_events();
+                    views::render_kube_events(
+                        f,
+                        area,
+                        &events,
+                        self.kube_events.len(),
+                        self.view_state.selected_index,
+                        &mut self.view_state.scroll_offset,
+                        &self.view_state.filter,
+                        self.namespace.is_none(),
+                        &self.theme,
+                    );
                 }
                 View::Help => {
                     render_help(f, area, &self.theme, self.namespace_hotkeys());
