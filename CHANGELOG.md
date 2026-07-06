@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-06
+
+### Changes\n- Version bump to 0.11.0
+
 ### Added
 - Kubernetes Events support:
   - The describe view (`d`) now ends with a kubectl-style Events section
