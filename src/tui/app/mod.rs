@@ -5,6 +5,8 @@
 
 pub mod state;
 
+pub mod async_task;
+
 mod async_ops;
 mod core;
 mod events;

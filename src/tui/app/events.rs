@@ -25,6 +25,7 @@ const COMMAND_TABLE: &[(fn(&str) -> bool, CommandHandler)] = &[
     (commands::is_healthy_command, App::cmd_filter_healthy),
     (commands::is_unhealthy_command, App::cmd_filter_unhealthy),
     (commands::is_favorites_command, App::cmd_show_favorites),
+    (commands::is_events_command, App::cmd_show_events),
     (commands::is_all_command, App::cmd_show_all),
 ];
 
@@ -41,8 +42,11 @@ impl App {
         } else if let Some(offset) = view.scroll_offset_mut(&mut self.view_state) {
             *offset += amount;
         } else {
-            let resources = self.get_filtered_resources();
-            let max_index = resources.len().saturating_sub(1);
+            let max_index = if view == View::EventList {
+                self.filtered_kube_events().len().saturating_sub(1)
+            } else {
+                self.get_filtered_resources().len().saturating_sub(1)
+            };
             self.view_state.selected_index =
                 (self.view_state.selected_index + amount).min(max_index);
         }
@@ -333,12 +337,11 @@ impl App {
             crossterm::event::KeyCode::Char('t') => {
                 // Trace command - works from list, favorites, and detail view
                 if let Some(resource) = self.get_current_resource() {
-                    self.async_state.trace_pending = Some(ResourceKey::new(
+                    self.async_state.trace.request(ResourceKey::new(
                         resource.resource_type.clone(),
                         resource.namespace.clone(),
                         resource.name.clone(),
                     ));
-                    self.async_state.trace_result = None;
                     self.view_state.trace_scroll_offset = 0;
                 }
             }
@@ -395,8 +398,7 @@ impl App {
             crossterm::event::KeyCode::Char('y') => {
                 // View YAML - trigger async fetch
                 if let Some(key) = self.prepare_selected_resource_key_for_nested_view() {
-                    self.async_state.yaml_fetch_pending = Some(key);
-                    self.async_state.yaml_fetched = None;
+                    self.async_state.yaml.request(key);
                     self.view_state.yaml_scroll_offset = 0;
                     self.view_state.text_search.clear();
                     self.view_state.current_view = View::ResourceYAML;
@@ -404,8 +406,7 @@ impl App {
             }
             crossterm::event::KeyCode::Char('d') => {
                 if let Some(key) = self.prepare_selected_resource_key_for_nested_view() {
-                    self.async_state.describe_fetch_pending = Some(key);
-                    self.async_state.describe_fetched = None;
+                    self.async_state.describe.request(key);
                     self.view_state.describe_scroll_offset = 0;
                     self.view_state.text_search.clear();
                     self.view_state.current_view = View::ResourceDescribe;
@@ -416,6 +417,10 @@ impl App {
             {
                 // Drill into the focused graph node's resource.
                 self.navigate_to_focused_graph_node();
+            }
+            crossterm::event::KeyCode::Enter if self.view_state.current_view == View::EventList => {
+                // Jump to the event's involved resource when flux9s watches it.
+                self.navigate_to_selected_event_resource();
             }
             crossterm::event::KeyCode::Enter if self.view_state.current_view.is_list_view() => {
                 // Save current view as previous list view before navigating
@@ -524,7 +529,9 @@ impl App {
                     }
 
                     // Save current view as previous list view before navigating
-                    if self.view_state.current_view.is_list_view() {
+                    if self.view_state.current_view.is_list_view()
+                        || self.view_state.current_view == View::EventList
+                    {
                         self.view_state.previous_list_view = self.view_state.current_view;
                     }
 
@@ -536,12 +543,11 @@ impl App {
                     );
 
                     self.selection_state.selected_resource_key = Some(key.clone());
-                    self.async_state.graph_pending = Some(ResourceKey {
+                    self.async_state.graph.request(ResourceKey {
                         resource_type: resource.resource_type.clone(),
                         namespace: resource.namespace.clone(),
                         name: resource.name.clone(),
                     });
-                    self.async_state.graph_result = None; // Clear previous graph
                     self.view_state.graph_scroll_offset = 0; // Reset scroll
                     self.view_state.graph_focus_index = None; // Reset focus (set when graph loads)
                     self.view_state.current_view = View::ResourceGraph;
@@ -562,6 +568,10 @@ impl App {
                         self.view_state.text_search.clear();
                     }
                 } else if self.view_state.current_view == View::ResourceFavorites {
+                    self.view_state.current_view = View::ResourceList;
+                    self.selection_state.selected_resource_key = None;
+                } else if self.view_state.current_view == View::EventList {
+                    self.stop_kube_events_watch();
                     self.view_state.current_view = View::ResourceList;
                     self.selection_state.selected_resource_key = None;
                 }
@@ -773,7 +783,7 @@ impl App {
     /// Clamps at the ends rather than wrapping so the direction stays intuitive.
     /// Auto-scrolling to keep the focused node visible is handled by the renderer.
     fn move_graph_focus(&mut self, forward: bool) {
-        let Some(graph) = self.async_state.graph_result.as_ref() else {
+        let Some(graph) = self.async_state.graph.result() else {
             return;
         };
         let order = graph.focus_order();
@@ -795,47 +805,55 @@ impl App {
         self.view_state.graph_focus_index = Some(order[next_pos]);
     }
 
+    /// Identity of the keyboard-focused graph node when it is an individual
+    /// resource. Aggregate nodes (workload/resource groups) and external
+    /// upstream URLs have no single resource to act on, so they resolve to
+    /// `None`.
+    pub(crate) fn focused_graph_node_target(&self) -> Option<ResourceKey> {
+        use crate::trace::NodeType;
+        let node = self.async_state.graph.result().and_then(|graph| {
+            self.view_state
+                .graph_focus_index
+                .and_then(|idx| graph.nodes.get(idx))
+        })?;
+        if matches!(
+            node.node_type,
+            NodeType::WorkloadGroup | NodeType::ResourceGroup | NodeType::Upstream
+        ) {
+            return None;
+        }
+        Some(ResourceKey::new(
+            node.kind.clone(),
+            node.namespace.clone(),
+            node.name.clone(),
+        ))
+    }
+
     /// Open the detail view for the focused graph node when it maps to a watched
     /// resource. Aggregate nodes (workload/resource groups) and external upstream
     /// URLs are not directly navigable and just show a hint instead.
     fn navigate_to_focused_graph_node(&mut self) {
-        use crate::trace::NodeType;
-
-        // Pull the owned identity out first so the immutable borrow of the graph
-        // ends before we mutate view/selection state below.
-        let Some((node_type, kind, namespace, name)) = self
+        let has_focused_node = self
             .async_state
-            .graph_result
-            .as_ref()
+            .graph
+            .result()
             .and_then(|graph| {
                 self.view_state
                     .graph_focus_index
                     .and_then(|idx| graph.nodes.get(idx))
             })
-            .map(|n| {
-                (
-                    n.node_type,
-                    n.kind.clone(),
-                    n.namespace.clone(),
-                    n.name.clone(),
-                )
-            })
-        else {
+            .is_some();
+        let Some(rk) = self.focused_graph_node_target() else {
+            if has_focused_node {
+                self.set_status_message((
+                    "Aggregate node — select an individual Flux resource to open it".to_string(),
+                    false,
+                ));
+            }
             return;
         };
 
-        if matches!(
-            node_type,
-            NodeType::WorkloadGroup | NodeType::ResourceGroup | NodeType::Upstream
-        ) {
-            self.set_status_message((
-                "Aggregate node — select an individual Flux resource to open it".to_string(),
-                false,
-            ));
-            return;
-        }
-
-        let key = crate::watcher::resource_key(&namespace, &name, &kind);
+        let key = rk.to_key_string();
         if self.state.get(&key).is_some() {
             self.selection_state.selected_resource_key = Some(key);
             // Remember to return to the graph (not the list) when the user backs
@@ -844,17 +862,23 @@ impl App {
             self.view_state.current_view = View::ResourceDetail;
         } else {
             self.set_status_message((
-                format!("{} {} is not in the current view", kind, name),
+                format!(
+                    "{} {} is not in the current view",
+                    rk.resource_type, rk.name
+                ),
                 false,
             ));
         }
     }
 
-    /// If the detail view was entered by drilling into a graph node, consume and
-    /// return the stored back target (the graph). Returns `None` for any other
-    /// view or entry path, leaving normal back-to-list behaviour in place.
+    /// If the current nested view was entered by drilling into a graph node
+    /// (detail via Enter, or YAML/describe/etc. directly on the focused node),
+    /// consume and return the stored back target (the graph). Returns `None`
+    /// for any other entry path, leaving normal back-to-list behaviour in place.
     fn detail_graph_back(&mut self) -> Option<View> {
-        if self.view_state.current_view == View::ResourceDetail {
+        if self.view_state.current_view.is_nested_view()
+            && self.view_state.current_view != View::ResourceGraph
+        {
             self.view_state.detail_back_view.take()
         } else {
             None
@@ -895,6 +919,11 @@ impl App {
                 self.view_state.current_view = View::ResourceList;
                 None
             }
+            View::EventList => {
+                self.stop_kube_events_watch();
+                self.view_state.current_view = View::ResourceList;
+                None
+            }
             View::Help => {
                 self.view_state.current_view = View::ResourceList;
                 None
@@ -923,25 +952,58 @@ impl App {
         }
     }
 
-    fn prepare_selected_resource_key_for_nested_view(&mut self) -> Option<String> {
-        match self.view_state.current_view {
-            View::ResourceList | View::ResourceFavorites => {
-                self.view_state.previous_list_view = self.view_state.current_view;
-                let resources = self.get_filtered_resources();
-                let resource = resources.get(self.view_state.selected_index)?;
-                let key = crate::watcher::resource_key(
-                    &resource.namespace,
-                    &resource.name,
-                    &resource.resource_type,
-                );
-                self.selection_state.selected_resource_key = Some(key.clone());
-                Some(key)
-            }
-            View::ResourceDetail | View::ResourceDescribe => {
-                self.selection_state.selected_resource_key.clone()
-            }
-            _ => None,
+    /// Open the detail view for the resource the selected event is about,
+    /// when it is a Flux resource flux9s is watching. Back returns to the
+    /// events feed (the events watcher keeps running meanwhile).
+    fn navigate_to_selected_event_resource(&mut self) {
+        let events = self.filtered_kube_events();
+        let Some(event) = events.get(self.view_state.selected_index) else {
+            return;
+        };
+
+        let key = crate::watcher::resource_key(
+            &event.involved_namespace,
+            &event.involved_name,
+            &event.involved_kind,
+        );
+        if self.state.get(&key).is_none() {
+            // Not in the watch state: outside the namespace scope, a non-Flux
+            // kind, or its watcher isn't running. Name the namespace so a
+            // scope mismatch is visible, and point at the keys that still work.
+            self.set_status_message((
+                format!(
+                    "{} (ns: {}) is not in the watched resources — press y/d to view it",
+                    event.object_label(),
+                    event.involved_namespace
+                ),
+                false,
+            ));
+            return;
         }
+
+        self.view_state.previous_list_view = View::EventList;
+        self.view_state.detail_back_view = None;
+        self.selection_state.selected_resource_key = Some(key);
+        self.view_state.current_view = View::ResourceDetail;
+    }
+
+    fn prepare_selected_resource_key_for_nested_view(&mut self) -> Option<ResourceKey> {
+        let rk = self.view_target()?;
+        match self.view_state.current_view {
+            // Root list-style views: remember where Back should return to and
+            // drop any stale graph back-target from an earlier drill-down.
+            View::ResourceList | View::ResourceFavorites | View::EventList => {
+                self.view_state.previous_list_view = self.view_state.current_view;
+                self.view_state.detail_back_view = None;
+            }
+            // Drilling out of the graph: Back returns to the graph.
+            View::ResourceGraph => {
+                self.view_state.detail_back_view = Some(View::ResourceGraph);
+            }
+            _ => {}
+        }
+        self.selection_state.selected_resource_key = Some(rk.to_key_string());
+        Some(rk)
     }
 
     fn handle_operation_key(&mut self, op_key: char) {
@@ -1056,7 +1118,7 @@ impl App {
         if self.operation_registry.get_by_keybinding(op_key).is_some() && self.kube_client.is_some()
         {
             // Mark operation as pending - will be executed in main loop
-            self.async_state.pending_operation = Some(PendingOperation::new(
+            self.async_state.operation.request(PendingOperation::new(
                 resource_type.to_string(),
                 namespace.to_string(),
                 name.to_string(),
@@ -1270,8 +1332,7 @@ impl App {
             // No argument: trace the currently selected resource.
             if let Some(key) = &self.selection_state.selected_resource_key {
                 if let Some(rk) = ResourceKey::parse(key) {
-                    self.async_state.trace_pending = Some(rk);
-                    self.async_state.trace_result = None;
+                    self.async_state.trace.request(rk);
                 } else {
                     tracing::warn!("Failed to parse resource key for trace command: {}", key);
                     self.ui_state.status_message =
@@ -1302,12 +1363,11 @@ impl App {
                 .namespace()
                 .clone()
                 .unwrap_or_else(|| "default".to_string());
-            self.async_state.trace_pending = Some(ResourceKey::new(
+            self.async_state.trace.request(ResourceKey::new(
                 resource_type.to_string(),
                 namespace,
                 parts[1].to_string(),
             ));
-            self.async_state.trace_result = None;
         } else {
             self.set_status_message((
                 "Usage: :trace <resource-type>/<name> or :trace (for selected)".to_string(),
@@ -1368,6 +1428,7 @@ impl App {
             self.state().clear();
             self.resource_objects.clear();
             self.controller_pods.clear();
+            self.kube_events.clear();
             self.degraded_watchers.clear();
 
             if let Some(ref mut watcher) = self.watcher {
@@ -1401,9 +1462,22 @@ impl App {
         self.reset_list_position();
     }
 
-    /// `:all` — clear resource-type and health filters to show everything.
+    /// `:events` — open the live Kubernetes events feed for the current
+    /// namespace scope, lazily starting the events watcher.
+    fn cmd_show_events(&mut self, _cmd: &str) {
+        self.start_kube_events_watch();
+        self.view_state.current_view = View::EventList;
+        self.reset_list_position();
+    }
+
+    /// `:all` — clear resource-type and health filters and return to the main
+    /// resource list (also from the favorites and events views).
     fn cmd_show_all(&mut self, _cmd: &str) {
         if self.view_state.current_view == View::ResourceFavorites {
+            self.view_state.current_view = View::ResourceList;
+        }
+        if self.view_state.current_view == View::EventList {
+            self.stop_kube_events_watch();
             self.view_state.current_view = View::ResourceList;
         }
         if self.view_state.selected_resource_type.is_some() {
@@ -1502,7 +1576,11 @@ mod tests {
         assert_eq!(result, None);
         assert_eq!(app.view_state.current_view, View::ResourceDescribe);
         assert_eq!(
-            app.async_state.describe_fetch_pending.as_deref(),
+            app.async_state
+                .describe
+                .pending()
+                .map(ResourceKey::to_key_string)
+                .as_deref(),
             Some("Kustomization:flux-system:my-kustomization")
         );
         assert!(app.async_state.confirmation_pending.is_none());
@@ -1519,7 +1597,7 @@ mod tests {
         assert_eq!(result, None);
         assert!(app.async_state.confirmation_pending.is_some());
         assert_eq!(app.view_state.current_view, View::ResourceList);
-        assert!(app.async_state.pending_operation.is_none());
+        assert!(app.async_state.operation.pending().is_none());
     }
 
     #[test]
@@ -1555,7 +1633,7 @@ mod tests {
 
         assert_eq!(result, None);
         assert!(app.async_state.confirmation_pending.is_none());
-        assert!(app.async_state.pending_operation.is_none());
+        assert!(app.async_state.operation.pending().is_none());
         assert_eq!(
             app.ui_state.status_message,
             Some((
@@ -1872,5 +1950,241 @@ mod tests {
         assert_eq!(app.view_state.detail_back_view, None);
         app.handle_key(make_key(KeyCode::Esc));
         assert_eq!(app.view_state.current_view, View::ResourceList);
+    }
+
+    fn add_kube_event(app: &mut App, uid: &str, kind: &str, name: &str) {
+        let info = crate::kube::events::KubeEventInfo::from_json(&serde_json::json!({
+            "metadata": {"uid": uid, "namespace": "flux-system"},
+            "involvedObject": {
+                "kind": kind,
+                "namespace": "flux-system",
+                "name": name
+            },
+            "type": "Normal",
+            "reason": "Test",
+            "message": "test",
+            "lastTimestamp": "2026-07-01T12:30:00Z"
+        }))
+        .unwrap();
+        app.kube_events.upsert(info);
+    }
+
+    #[test]
+    fn events_command_opens_event_list_view() {
+        let mut app = create_test_app(false);
+        app.ui_state.command_buffer = "events".to_string();
+
+        let result = app.execute_command();
+
+        assert_eq!(result, None);
+        assert_eq!(app.view_state.current_view, View::EventList);
+    }
+
+    #[test]
+    fn esc_from_event_list_returns_to_resource_list_and_clears_feed() {
+        let mut app = create_test_app(false);
+        add_kube_event(&mut app, "uid-1", "Kustomization", "my-kustomization");
+        app.view_state.current_view = View::EventList;
+
+        let result = app.handle_key(make_key(KeyCode::Esc));
+
+        assert_eq!(result, None);
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert!(
+            app.kube_events.is_empty(),
+            "leaving the events view drops the collected feed"
+        );
+    }
+
+    #[test]
+    fn enter_on_event_opens_watched_resource_detail() {
+        let mut app = create_test_app(false);
+        add_resource(&mut app);
+        add_kube_event(&mut app, "uid-1", "Kustomization", "my-kustomization");
+        app.view_state.current_view = View::EventList;
+        app.view_state.selected_index = 0;
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::ResourceDetail);
+        assert_eq!(
+            app.selection_state.selected_resource_key.as_deref(),
+            Some("Kustomization:flux-system:my-kustomization")
+        );
+        // Back returns to the events feed, not the resource list
+        assert_eq!(app.view_state.previous_list_view, View::EventList);
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::EventList);
+    }
+
+    #[test]
+    fn enter_on_event_for_unwatched_object_stays_in_event_list() {
+        let mut app = create_test_app(false);
+        add_kube_event(&mut app, "uid-1", "Pod", "some-pod");
+        app.view_state.current_view = View::EventList;
+        app.view_state.selected_index = 0;
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::EventList);
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(msg, _)| msg.contains("Pod/some-pod")
+                    && msg.contains("ns: flux-system")
+                    && msg.contains("y/d")),
+            "names the object + namespace and points at y/d"
+        );
+    }
+
+    #[test]
+    fn all_command_returns_from_event_list_and_clears_filters() {
+        let mut app = create_test_app(false);
+        add_kube_event(&mut app, "uid-1", "Kustomization", "my-kustomization");
+        app.view_state.current_view = View::EventList;
+        app.view_state.selected_resource_type = Some("HelmChart".to_string());
+        app.view_state.health_filter = HealthFilter::Unhealthy;
+
+        app.ui_state.command_buffer = "all".to_string();
+        let result = app.execute_command();
+
+        assert_eq!(result, None);
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert_eq!(app.view_state.selected_resource_type, None);
+        assert_eq!(app.view_state.health_filter, HealthFilter::All);
+        assert!(
+            app.kube_events.is_empty(),
+            "leaving the events view via :all drops the feed"
+        );
+    }
+
+    #[test]
+    fn y_and_d_work_from_event_list_on_involved_object() {
+        let mut app = create_test_app(false);
+        add_kube_event(&mut app, "uid-1", "Kustomization", "my-kustomization");
+        app.view_state.current_view = View::EventList;
+        app.view_state.selected_index = 0;
+
+        app.handle_key(make_key(KeyCode::Char('y')));
+
+        assert_eq!(app.view_state.current_view, View::ResourceYAML);
+        assert_eq!(
+            app.async_state
+                .yaml
+                .pending()
+                .map(ResourceKey::to_key_string)
+                .as_deref(),
+            Some("Kustomization:flux-system:my-kustomization")
+        );
+        // Back returns to the events feed, not the resource list
+        assert_eq!(app.view_state.previous_list_view, View::EventList);
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::EventList);
+
+        app.handle_key(make_key(KeyCode::Char('d')));
+        assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+        assert_eq!(
+            app.async_state
+                .describe
+                .pending()
+                .map(ResourceKey::to_key_string)
+                .as_deref(),
+            Some("Kustomization:flux-system:my-kustomization")
+        );
+    }
+
+    #[test]
+    fn view_target_resolves_current_resource_from_every_view() {
+        let mut app = create_test_app(false);
+        add_resource(&mut app);
+        add_kube_event(&mut app, "uid-1", "Kustomization", "my-kustomization");
+
+        // Events feed: the selected event's involved object — including for
+        // operations/trace/graph/history, which resolve via get_current_resource
+        app.view_state.current_view = View::EventList;
+        app.view_state.selected_index = 0;
+        assert_eq!(
+            app.view_target().map(|rk| rk.to_key_string()).as_deref(),
+            Some("Kustomization:flux-system:my-kustomization")
+        );
+        assert!(
+            app.get_current_resource()
+                .is_some_and(|r| r.name == "my-kustomization"),
+            "watched involved objects resolve for operations from the events feed"
+        );
+
+        // Resource list: the selected row
+        app.view_state.current_view = View::ResourceList;
+        assert_eq!(
+            app.view_target().map(|rk| rk.to_key_string()).as_deref(),
+            Some("Kustomization:flux-system:my-kustomization")
+        );
+
+        // Nested views: the stored selection
+        app.selection_state.selected_resource_key =
+            Some("Kustomization:flux-system:my-kustomization".to_string());
+        for view in [
+            View::ResourceDetail,
+            View::ResourceDescribe,
+            View::ResourceYAML,
+            View::ResourceTrace,
+            View::ResourceHistory,
+        ] {
+            app.view_state.current_view = view;
+            assert!(app.view_target().is_some(), "{view:?} should resolve");
+        }
+    }
+
+    #[test]
+    fn yaml_from_focused_graph_node_returns_to_graph_on_esc() {
+        let mut app = app_on_graph();
+        // Focus starts on the object node (a real resource)
+        app.handle_key(make_key(KeyCode::Char('y')));
+
+        assert_eq!(app.view_state.current_view, View::ResourceYAML);
+        assert_eq!(
+            app.async_state
+                .yaml
+                .pending()
+                .map(ResourceKey::to_key_string)
+                .as_deref(),
+            Some("Kustomization:flux-system:my-kustomization")
+        );
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(
+            app.view_state.current_view,
+            View::ResourceGraph,
+            "Back from a view opened off a graph node returns to the graph"
+        );
+    }
+
+    #[test]
+    fn yaml_on_aggregate_graph_node_does_nothing() {
+        let mut app = app_on_graph();
+        // Move focus to the workload group (aggregate) node
+        app.view_state.graph_focus_index = Some(2);
+
+        app.handle_key(make_key(KeyCode::Char('y')));
+
+        assert_eq!(app.view_state.current_view, View::ResourceGraph);
+        assert!(app.async_state.yaml.pending().is_none());
+    }
+
+    #[test]
+    fn event_list_filter_narrows_feed() {
+        let mut app = create_test_app(false);
+        add_kube_event(&mut app, "uid-1", "Kustomization", "podinfo");
+        add_kube_event(&mut app, "uid-2", "HelmRelease", "cert-manager");
+        app.view_state.current_view = View::EventList;
+
+        app.view_state.filter = "helmrelease".to_string();
+        let filtered = app.filtered_kube_events();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].involved_name, "cert-manager");
+
+        app.view_state.filter.clear();
+        assert_eq!(app.filtered_kube_events().len(), 2);
     }
 }

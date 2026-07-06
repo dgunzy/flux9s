@@ -31,6 +31,7 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 - **Unified and type-specific views** - View all resources together or filter by type
 - **Resource operations** - Suspend, resume, reconcile, and delete Flux resources
 - **YAML viewing** - Inspect full resource manifests
+- **Kubernetes Events** - Per-resource events in the describe view, plus a live `:events` feed for the current namespace or cluster
 - **Graph visualization** - Visualize resource relationships and dependencies (Kustomization, HelmRelease, etc.)
 - **Reconciliation history** - View reconciliation history for resources that track it
 - **Favorites** - Mark frequently accessed resources for quick access
@@ -143,6 +144,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `:ns <namespace>` - Switch namespace
 - `:ns all` - View all namespaces
 - `:favorites` or `:fav` - View favorite resources
+- `:events` or `:ev` - Live Kubernetes events feed (current namespace scope)
 - `:skin {skin-name}` - set skin directly
 - `:skin` - open interactive theme selection menu with live preview (17 built-in themes + custom)
 - `:q` or `:q!` - Quit
@@ -152,6 +154,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 
 - **Graph View (`g`)** - Visualize resource relationships and dependencies. Shows upstream sources and downstream managed resources. Move the highlighted focus between nodes with `j`/`k` (the view scrolls to keep it visible), press `Enter` to open the focused resource's detail view, and `Esc` to return to the graph. Supported for Kustomization, HelmRelease, ArtifactGenerator, FluxInstance, and ResourceSet.
 - **History View (`h`)** - View reconciliation history for FluxInstance, ResourceSet, Kustomization, and HelmRelease resources.
+- **Events View (`:events`)** - Live Kubernetes events feed for the current namespace (or cluster-wide with `:ns all`), newest first with Warnings highlighted. `Enter` jumps to the involved resource; the describe view (`d`) also shows a per-resource Events section.
 - **Favorites (`f`)** - Mark resources as favorites for quick access. Use `:favorites` command to view all favorites.
 
 ### Terminal Commands

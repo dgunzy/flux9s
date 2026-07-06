@@ -106,10 +106,15 @@ Terminal user interface built with ratatui.
 
 - **`app/`** - Application state and logic (refactored from single file):
   - `core.rs` - Main App struct and core logic
-  - `state.rs` - State structures (ViewState, SelectionState, UIState, AsyncOperationState)
+  - `state.rs` - State structures (ViewState, SelectionState, UIState, AsyncOperationState, KubeEventStore)
   - `events.rs` - Event handling and input processing
   - `rendering.rs` - Rendering orchestration
-  - `async_ops.rs` - Async operation management
+  - `async_task.rs` - Generic `AsyncTask<K, T>`: one type owns the
+    request → dispatch → poll lifecycle for every view fetch (YAML, describe,
+    trace, graph). Event handlers call `request()`, the main loop calls
+    `dispatch()` and spawns the work, then polls `try_recv()` each tick.
+  - `async_ops.rs` - Mutating-operation flow (registry validation, status
+    message bookkeeping) and the graph result hook
 - **`operations.rs`** - Flux operations (suspend, resume, delete, reconcile, reconcile with source)
 - **`theme.rs`** - Theme configuration and loading
 - **`trace.rs`** - Trace operation orchestration
@@ -127,6 +132,7 @@ Terminal user interface built with ratatui.
   - `trace.rs` - Trace view showing resource ownership chains
   - `graph.rs` - Graph visualization view
   - `history.rs` - Reconciliation history view
+  - `events.rs` - Live Kubernetes events feed (`:events`)
   - `confirmation.rs` - Confirmation dialogs
   - `help.rs` - Help screen
   - `splash.rs` - Splash screen
@@ -139,6 +145,10 @@ Terminal user interface built with ratatui.
 - Non-blocking async operations using `tokio::spawn`
 - Modular app structure with separated concerns (state, events, rendering, async)
 - Separate scroll offsets for different views
+- The Kubernetes events watcher (`ResourceWatcher::watch_kube_events`) has an
+  independent lifecycle from the resource watchers: started lazily when the
+  events view opens, stopped (and its `KubeEventStore` feed cleared) when the
+  view is left, and restarted automatically across namespace/context switches
 - Per-view behavior (scroll target, back navigation, classification) lives on
   `impl View` (`src/tui/app/state.rs`) rather than scattered `match` arms
 - Dynamic footer wrapping for smaller screens

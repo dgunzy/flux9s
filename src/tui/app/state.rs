@@ -3,6 +3,7 @@
 //! This module contains state sub-structures that organize the App's fields
 //! into logical groupings for better maintainability and testability.
 
+use crate::tui::app::async_task::AsyncTask;
 use crate::tui::submenu::SubmenuState;
 use crate::watcher::ResourceKey;
 use std::collections::HashSet;
@@ -18,6 +19,9 @@ pub enum View {
     ResourceGraph,
     ResourceFavorites,
     ResourceHistory,
+    /// Live Kubernetes events feed, opened with `:events`. The events watcher
+    /// runs only while this view (or a detail view opened from it) is active.
+    EventList,
     #[allow(dead_code)] // Reserved for future alternative help view implementation
     Help,
 }
@@ -304,59 +308,35 @@ impl UIState {
     }
 }
 
-/// Async operation state (pending operations and their result channels)
+/// Async operation state: one [`AsyncTask`] slot per view fetch, plus the
+/// mutation-operation flow (which carries confirmation state alongside).
 #[derive(Debug, Default)]
 pub struct AsyncOperationState {
-    // YAML fetch
-    pub yaml_fetch_pending: Option<String>,
-    pub yaml_fetched: Option<serde_json::Value>,
-    pub yaml_fetch_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<serde_json::Value>>>,
+    /// Full-object fetch backing the YAML view.
+    pub yaml: AsyncTask<ResourceKey, serde_json::Value>,
+    /// Object + events fetch backing the describe view.
+    pub describe: AsyncTask<ResourceKey, crate::kube::fetch::DescribeData>,
+    /// Ownership-chain trace backing the trace view.
+    pub trace: AsyncTask<ResourceKey, crate::trace::TraceResult>,
+    /// Relationship graph backing the graph view.
+    pub graph: AsyncTask<ResourceKey, crate::trace::ResourceGraph>,
 
-    // Describe fetch
-    pub describe_fetch_pending: Option<String>,
-    pub describe_fetched: Option<serde_json::Value>,
-    pub describe_fetch_rx:
-        Option<tokio::sync::oneshot::Receiver<anyhow::Result<serde_json::Value>>>,
-
-    // Trace
-    pub trace_pending: Option<ResourceKey>,
-    pub trace_result: Option<crate::trace::TraceResult>,
-    pub trace_result_rx:
-        Option<tokio::sync::oneshot::Receiver<anyhow::Result<crate::trace::TraceResult>>>,
-
-    // Graph
-    pub graph_pending: Option<ResourceKey>,
-    pub graph_result: Option<crate::trace::ResourceGraph>,
-    pub graph_result_rx:
-        Option<tokio::sync::oneshot::Receiver<anyhow::Result<crate::trace::ResourceGraph>>>,
-
-    // Operations (suspend, resume, etc.)
-    pub pending_operation: Option<PendingOperation>,
-    pub operation_result_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>>,
+    /// Mutating operation (suspend, resume, reconcile, delete). The result
+    /// payload is `()`; success/failure feeds the status message.
+    pub operation: AsyncTask<PendingOperation, ()>,
+    /// Keybinding of the last dispatched operation, for the success message.
     pub last_operation_key: Option<char>,
+    /// Operation waiting for the user's confirmation dialog.
     pub confirmation_pending: Option<PendingOperation>,
 }
 
 impl AsyncOperationState {
     pub fn clear_pending(&mut self) {
-        self.yaml_fetch_pending = None;
-        self.yaml_fetched = None;
-        self.yaml_fetch_rx = None;
-
-        self.describe_fetch_pending = None;
-        self.describe_fetched = None;
-        self.describe_fetch_rx = None;
-
-        self.trace_pending = None;
-        self.trace_result = None;
-        self.trace_result_rx = None;
-
-        self.graph_pending = None;
-        self.graph_result = None;
-        self.graph_result_rx = None;
-
-        self.pending_operation = None;
-        self.operation_result_rx = None;
+        self.yaml.clear();
+        self.describe.clear();
+        self.trace.clear();
+        self.graph.clear();
+        self.operation.clear();
         self.last_operation_key = None;
         self.confirmation_pending = None;
     }
@@ -442,9 +422,121 @@ impl ControllerPodState {
     }
 }
 
+/// Bounded store for the live Kubernetes events feed.
+///
+/// Events are deduplicated by UID (the API server aggregates repeat
+/// occurrences into one Event object with a rising `count`), and the store
+/// evicts the oldest-seen entries past [`crate::constants::MAX_KUBE_EVENTS`].
+#[derive(Debug, Default)]
+pub struct KubeEventStore {
+    events: std::collections::HashMap<String, crate::kube::events::KubeEventInfo>,
+}
+
+impl KubeEventStore {
+    /// Insert or update an event by UID, evicting the oldest-seen entry when
+    /// the store is over capacity.
+    pub fn upsert(&mut self, info: crate::kube::events::KubeEventInfo) {
+        self.events.insert(info.uid.clone(), info);
+        while self.events.len() > crate::constants::MAX_KUBE_EVENTS {
+            let oldest_uid = self
+                .events
+                .values()
+                .min_by_key(|event| event.last_seen)
+                .map(|event| event.uid.clone());
+            match oldest_uid {
+                Some(uid) => {
+                    self.events.remove(&uid);
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// Remove an event (deleted on the cluster, usually TTL expiry).
+    pub fn remove(&mut self, uid: &str) {
+        self.events.remove(uid);
+    }
+
+    /// All events, newest last-seen first.
+    pub fn sorted_events(&self) -> Vec<&crate::kube::events::KubeEventInfo> {
+        let mut events: Vec<_> = self.events.values().collect();
+        events.sort_by(|a, b| b.last_seen.cmp(&a.last_seen).then(a.uid.cmp(&b.uid)));
+        events
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    #[allow(dead_code)] // Used in tests
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    /// Drop all events (e.g. on namespace or context switch — the restarted
+    /// watcher re-lists the events in scope).
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_event(uid: &str, seconds_ago: i64) -> crate::kube::events::KubeEventInfo {
+        crate::kube::events::KubeEventInfo::from_json(&serde_json::json!({
+            "metadata": {
+                "uid": uid,
+                "namespace": "flux-system",
+            },
+            "involvedObject": {"kind": "Kustomization", "name": uid},
+            "type": "Normal",
+            "reason": "Test",
+            "message": "test event",
+            "lastTimestamp": (chrono::Utc::now() - chrono::Duration::seconds(seconds_ago))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        }))
+        .expect("test event should parse")
+    }
+
+    #[test]
+    fn kube_event_store_dedups_by_uid_and_sorts_newest_first() {
+        let mut store = KubeEventStore::default();
+        store.upsert(make_event("older", 120));
+        store.upsert(make_event("newer", 10));
+        // Same UID again — an update, not a new entry
+        store.upsert(make_event("older", 60));
+
+        assert_eq!(store.len(), 2);
+        let sorted = store.sorted_events();
+        assert_eq!(sorted[0].uid, "newer");
+        assert_eq!(sorted[1].uid, "older");
+
+        store.remove("newer");
+        assert_eq!(store.len(), 1);
+        store.clear();
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn kube_event_store_evicts_oldest_past_cap() {
+        let mut store = KubeEventStore::default();
+        for i in 0..crate::constants::MAX_KUBE_EVENTS {
+            store.upsert(make_event(&format!("uid-{i}"), 1000 + i as i64));
+        }
+        assert_eq!(store.len(), crate::constants::MAX_KUBE_EVENTS);
+
+        // One more (newest) evicts the oldest-seen entry, not the new one
+        store.upsert(make_event("newest", 0));
+        assert_eq!(store.len(), crate::constants::MAX_KUBE_EVENTS);
+        assert_eq!(store.sorted_events()[0].uid, "newest");
+        let oldest_uid = format!("uid-{}", crate::constants::MAX_KUBE_EVENTS - 1);
+        assert!(
+            !store.sorted_events().iter().any(|e| e.uid == oldest_uid),
+            "oldest-seen event should have been evicted"
+        );
+    }
 
     #[test]
     fn view_classifiers_partition_views_as_expected() {
@@ -470,6 +562,17 @@ mod tests {
         }
         assert!(!View::ResourceList.is_nested_view());
         assert!(!View::ResourceFavorites.is_nested_view());
+
+        // The events feed is a root-level view with selection-based
+        // navigation: not nested, not a resource list, no line scroll.
+        assert!(!View::EventList.is_nested_view());
+        assert!(!View::EventList.is_list_view());
+        assert!(!View::EventList.is_text_search_view());
+        assert!(
+            View::EventList
+                .scroll_offset_mut(&mut ViewState::default())
+                .is_none()
+        );
     }
 
     #[test]

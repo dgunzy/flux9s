@@ -5,7 +5,6 @@
 
 use crate::trace::{NodeType, RelationshipType, ResourceGraph};
 use crate::tui::theme::Theme;
-use crate::watcher::ResourceKey;
 use ratatui::{
     Frame,
     layout::{Margin, Rect},
@@ -19,8 +18,8 @@ pub fn render_resource_graph(
     f: &mut Frame,
     area: Rect,
     _selected_resource_key: &Option<String>,
-    graph_result: &Option<ResourceGraph>,
-    graph_pending: &Option<ResourceKey>,
+    graph_result: Option<&ResourceGraph>,
+    graph_loading: bool,
     scroll_offset: &mut usize,  // Line-based scroll offset (like YAML view)
     focus_index: Option<usize>, // Index of the keyboard-focused node, if any
     theme: &Theme,
@@ -28,7 +27,7 @@ pub fn render_resource_graph(
     let outer_block = crate::tui::views::helpers::create_themed_block("Resource Graph", theme);
 
     // Show loading if pending OR if no result yet (prevents flashing "no data" message)
-    if graph_pending.is_some() || graph_result.is_none() {
+    if graph_loading || graph_result.is_none() {
         crate::tui::views::helpers::render_loading_state(
             f,
             area,

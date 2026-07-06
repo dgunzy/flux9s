@@ -327,7 +327,9 @@ impl ClusterSession {
             }
             WatchEvent::PodApplied(_, _)
             | WatchEvent::PodDeleted(_)
-            | WatchEvent::DeploymentApplied(_) => {}
+            | WatchEvent::DeploymentApplied(_)
+            | WatchEvent::KubeEventApplied(_)
+            | WatchEvent::KubeEventDeleted(_) => {}
         }
     }
 

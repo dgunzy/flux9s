@@ -54,8 +54,8 @@ impl ResourceKey {
         }
     }
 
-    /// Convert the ResourceKey back to its string representation (unused so far)
-    #[allow(dead_code)] // Used in tests
+    /// Convert the ResourceKey back to its string representation — the format
+    /// used by the resource state map and `selected_resource_key`.
     pub fn to_key_string(&self) -> String {
         format!("{}:{}:{}", self.resource_type, self.namespace, self.name)
     }

@@ -92,6 +92,10 @@ pub enum WatchEvent {
     PodDeleted(String), // pod_name
     /// Flux controller deployment was added or updated (for bundle version tracking)
     DeploymentApplied(serde_json::Value), // deployment_json
+    /// A Kubernetes Event (core/v1) was added or updated (events feed)
+    KubeEventApplied(serde_json::Value), // event_json
+    /// A Kubernetes Event was deleted (TTL expiry)
+    KubeEventDeleted(String), // event uid
 }
 
 /// Trait for watchable Flux resources
@@ -125,6 +129,11 @@ pub struct ResourceWatcher {
     controller_namespace: String,
     event_tx: mpsc::UnboundedSender<WatchEvent>,
     handles: Vec<JoinHandle<()>>,
+    /// The Kubernetes Events watcher has its own lifecycle: it is started
+    /// lazily (first time the events view opens) and can be stopped without
+    /// tearing down the resource watchers, since Events are the churniest
+    /// resource in a cluster and shouldn't be paid for while unused.
+    kube_events_handle: Option<JoinHandle<()>>,
 }
 
 impl ResourceWatcher {
@@ -145,6 +154,7 @@ impl ResourceWatcher {
                 controller_namespace,
                 event_tx: tx,
                 handles: Vec::new(),
+                kube_events_handle: None,
             },
             rx,
         )
@@ -165,14 +175,20 @@ impl ResourceWatcher {
             namespace
         );
 
-        // Stop existing watchers
+        // Stop existing watchers (remembering whether the lazily started
+        // events watcher was running so it survives the namespace switch)
+        let events_active = self.is_watching_kube_events();
         self.stop();
 
         // Update namespace
         self.current_namespace = namespace;
 
         // Restart all watchers with new namespace
-        self.watch_all()
+        self.watch_all()?;
+        if events_active {
+            self.watch_kube_events()?;
+        }
+        Ok(())
     }
 
     /// Start watching a specific resource type
@@ -735,6 +751,106 @@ impl ResourceWatcher {
         Ok(())
     }
 
+    /// Whether the Kubernetes Events watcher is currently running.
+    pub fn is_watching_kube_events(&self) -> bool {
+        self.kube_events_handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
+    }
+
+    /// Start watching Kubernetes Events (core/v1) in the current namespace
+    /// scope, feeding the events view. Started lazily — the first time the
+    /// events view opens — rather than in `watch_all`, because Events churn
+    /// far more than any other resource. A no-op if already running.
+    pub fn watch_kube_events(&mut self) -> Result<()> {
+        if self.is_watching_kube_events() {
+            return Ok(());
+        }
+
+        let client = self.client.clone();
+        let namespace = self.current_namespace.clone();
+        let event_tx = self.event_tx.clone();
+
+        let handle = tokio::spawn(async move {
+            use k8s_openapi::api::core::v1::Event as CoreEvent;
+
+            let api: Api<CoreEvent> = match namespace {
+                Some(ref ns) => Api::namespaced(client, ns),
+                None => Api::all(client),
+            };
+            let mut w =
+                Box::pin(watcher(api, watcher::Config::default()).backoff(CappedBackoff::new()));
+            let mut error_count = 0u32;
+
+            const WATCHER_NAME: &str = "Kubernetes events";
+            tracing::debug!("Starting Kubernetes events watcher");
+
+            while let Some(event) = w.next().await {
+                let ev = match event {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        if is_forbidden_error(&format!("{}", e)) {
+                            // RBAC denies access — retrying won't help, so stop rather
+                            // than flag the watch as degraded. Clear earlier degraded state.
+                            if error_count > 0 {
+                                let _ = event_tx
+                                    .send(WatchEvent::WatcherRecovered(WATCHER_NAME.to_string()));
+                            }
+                            let _ = event_tx.send(WatchEvent::Error(
+                                "Events watcher forbidden by RBAC".to_string(),
+                            ));
+                            tracing::info!("Events watcher forbidden by RBAC, stopping: {}", e);
+                            break;
+                        }
+                        error_count += 1;
+                        if error_count == 1 {
+                            let _ = event_tx
+                                .send(WatchEvent::WatcherDegraded(WATCHER_NAME.to_string()));
+                        }
+                        // Keep watching: backoff paces the retries.
+                        if error_count == 1 || error_count.is_multiple_of(10) {
+                            tracing::warn!("Events watcher error ({}): {}", error_count, e);
+                        }
+                        continue;
+                    }
+                };
+
+                // Init is excluded: it fires before the HTTP request succeeds
+                if error_count > 0 && !matches!(ev, watcher::Event::Init) {
+                    error_count = 0;
+                    let _ = event_tx.send(WatchEvent::WatcherRecovered(WATCHER_NAME.to_string()));
+                }
+
+                match ev {
+                    watcher::Event::InitApply(kube_event) | watcher::Event::Apply(kube_event) => {
+                        let event_json = serde_json::to_value(&kube_event).unwrap_or_default();
+                        let _ = event_tx.send(WatchEvent::KubeEventApplied(event_json));
+                    }
+                    watcher::Event::Delete(kube_event) => {
+                        if let Some(uid) = kube_event.metadata.uid {
+                            let _ = event_tx.send(WatchEvent::KubeEventDeleted(uid));
+                        }
+                    }
+                    watcher::Event::Init | watcher::Event::InitDone => {
+                        tracing::debug!("Kubernetes events watcher initialized");
+                    }
+                }
+            }
+        });
+
+        self.kube_events_handle = Some(handle);
+        Ok(())
+    }
+
+    /// Stop the Kubernetes Events watcher without touching the resource
+    /// watchers. A no-op if it isn't running.
+    pub fn stop_kube_events(&mut self) {
+        if let Some(handle) = self.kube_events_handle.take() {
+            tracing::debug!("Stopping Kubernetes events watcher");
+            handle.abort();
+        }
+    }
+
     /// Abort all watcher tasks
     pub fn stop(&mut self) {
         tracing::debug!("Stopping {} watchers", self.handles.len());
@@ -742,6 +858,7 @@ impl ResourceWatcher {
             handle.abort();
         }
         self.handles.clear();
+        self.stop_kube_events();
     }
 }
 

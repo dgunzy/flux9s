@@ -562,6 +562,42 @@ fn test_render_resource_describe_with_data() {
         }
     });
 
+    // Include events so the snapshot covers the kubectl-style Events section
+    let describe_data = flux9s::kube::fetch::DescribeData {
+        object: resource_json,
+        events: vec![
+            flux9s::kube::events::KubeEventInfo::from_json(&serde_json::json!({
+                "metadata": {"uid": "uid-1", "namespace": "flux-system"},
+                "involvedObject": {
+                    "kind": "Kustomization",
+                    "namespace": "flux-system",
+                    "name": "my-kustomization"
+                },
+                "type": "Normal",
+                "reason": "ReconciliationSucceeded",
+                "message": "Reconciliation finished in 500ms",
+                "count": 3,
+                "source": {"component": "kustomize-controller"}
+            }))
+            .unwrap(),
+            flux9s::kube::events::KubeEventInfo::from_json(&serde_json::json!({
+                "metadata": {"uid": "uid-2", "namespace": "flux-system"},
+                "involvedObject": {
+                    "kind": "Kustomization",
+                    "namespace": "flux-system",
+                    "name": "my-kustomization"
+                },
+                "type": "Warning",
+                "reason": "HealthCheckFailed",
+                "message": "timeout waiting for deployment\nDeployment/podinfo status: 'InProgress'",
+                "count": 1,
+                "source": {"component": "kustomize-controller"}
+            }))
+            .unwrap(),
+        ],
+        events_error: None,
+    };
+
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let mut describe_scroll_offset = 0;
 
@@ -575,8 +611,8 @@ fn test_render_resource_describe_with_data() {
                 &Some("Kustomization:flux-system:my-kustomization".to_string()),
                 &state,
                 &resource_objects,
-                &Some(resource_json),
-                &None,
+                Some(&describe_data),
+                false,
                 &mut describe_scroll_offset,
                 &mut TextSearchState::default(),
                 &theme,
@@ -605,8 +641,8 @@ fn test_render_resource_yaml_no_selection() {
                 &None,
                 &state,
                 &resource_objects,
-                &None,
-                &None,
+                None,
+                false,
                 &mut yaml_scroll_offset,
                 &mut TextSearchState::default(),
                 &theme,
@@ -635,8 +671,8 @@ fn test_render_resource_yaml_pending() {
                 &Some("Kustomization:flux-system:my-kustomization".to_string()),
                 &state,
                 &resource_objects,
-                &None,
-                &Some("Kustomization:flux-system:my-kustomization".to_string()),
+                None,
+                true,
                 &mut yaml_scroll_offset,
                 &mut TextSearchState::default(),
                 &theme,
@@ -691,8 +727,8 @@ fn test_render_resource_yaml_with_data() {
                 &Some("Kustomization:flux-system:my-kustomization".to_string()),
                 &state,
                 &resource_objects,
-                &Some(resource_json),
-                &None,
+                Some(&resource_json),
+                false,
                 &mut yaml_scroll_offset,
                 &mut TextSearchState::default(),
                 &theme,

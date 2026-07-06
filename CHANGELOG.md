@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Kubernetes Events support:
+  - The describe view (`d`) now ends with a kubectl-style Events section
+    showing the resource's recent events (Warnings highlighted; degrades to a
+    notice when events are unavailable, e.g. RBAC).
+  - New `:events` (alias `:ev`) live events feed for the current namespace
+    scope — cluster-wide with `:ns all`. Streams in real time, newest first,
+    filterable with `/`; `Enter` jumps to the involved Flux resource. The
+    events watcher runs only while the view is open.
+- Resource action keys now resolve their target from any view via a single
+  `view_target()` resolver: `y`/`d` (and `t`/`g`/`h`/operations for watched
+  resources) act on the selected event's involved object in the events feed
+  and on the focused node in the graph view — previously these keys only
+  worked from the resource list, favorites, and detail views. `y`/`d` work
+  for non-Flux objects too (Pods, Deployments, …) via the API fetch path,
+  and Back returns to the view you came from (events feed or graph).
 - Graph view keyboard navigation: `j`/`k` move a highlighted focus between nodes
   (the view auto-scrolls to keep it visible), `Enter` opens the focused resource's
   detail view, and `Esc` returns to the graph.
@@ -17,7 +32,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   children → drop into each child) using proper box-drawing junctions, and nodes
   sit closer together for a tighter, clearer layout.
 
+### Fixed
+- `:all` now returns to the main resource list from the events feed (and stops
+  the events watch), instead of only clearing filters while stuck in the view.
+- The events feed's "not a watched Flux resource" message now names the
+  involved object's namespace and points at `y`/`d`, so namespace-scope
+  mismatches are visible instead of just confusing.
+
 ### Internal
+- New generic `AsyncTask<K, T>` owns the request/dispatch/poll lifecycle for
+  view fetches, replacing the five copy-pasted `*_pending`/`*_fetched`/`*_rx`
+  field triplets and their hand-rolled trigger/poll methods.
+- YAML/describe fetch requests are now typed `ResourceKey`s instead of
+  `"type:namespace:name"` strings, removing the re-parse (and its can't-happen
+  error branches) from the main loop.
+- The Kubernetes events watcher has an independent lifecycle from the resource
+  watchers (started lazily, stopped without a full watcher teardown), and
+  survives namespace switches.
 - Single source of truth for graph node sizing (`GraphNode::render_width`/
   `render_height`); connector geometry extracted into the testable, `Frame`-free
   `fanout_routes()`.

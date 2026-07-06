@@ -95,6 +95,8 @@ Type these commands in command mode (press `:`):
 | `:unhealthy`       | Show only unhealthy resources            |
 | `:favorites`       | View favorite resources                  |
 | `:fav`             | Alias for `:favorites`                   |
+| `:events`          | Live Kubernetes events feed              |
+| `:ev`              | Alias for `:events`                      |
 | `:skin <name>`     | Change theme/skin (direct)               |
 | `:skin`            | Open interactive theme selection menu    |
 | `:readonly`        | Toggle readonly mode                     |
@@ -219,7 +221,8 @@ The graph view displays:
 
 - `j` / `k` (or `↓` / `↑`) - Move the highlighted focus between nodes; the view scrolls to keep the focused node visible.
 - `Enter` - Open the focused node's resource in the detail view. Aggregate nodes (workload/resource groups) and external upstream URLs aren't directly openable.
-- `Esc` / `Backspace` - Return to the graph (when you opened a detail view from it), then back to the resource list.
+- `y` / `d` - View the focused node's YAML or describe output directly, including managed workloads (Deployments, Services, etc.).
+- `Esc` / `Backspace` - Return to the graph (when you opened a view from it), then back to the resource list.
 
 Focus starts on the resource you opened the graph from, so you can immediately walk its sources and dependencies.
 
@@ -249,6 +252,31 @@ Mark frequently accessed resources as favorites for quick access.
 - Use `:favorites` or `:fav` command to view all favorites
 - Favorites are saved to your configuration file
 - Favorites appear first in resource lists
+
+### Events View (`:events`)
+
+A live feed of Kubernetes Events in the current namespace scope — the
+"what is Flux doing right now" view. Flux controllers emit an Event for every
+reconciliation success and failure, so this surfaces error detail that the
+resource list's MESSAGE column truncates.
+
+- The feed follows your namespace scope: the current namespace by default, or
+  the whole cluster after `:ns all` (a NAMESPACE column appears)
+- Events are streamed in real time, newest first, with Warnings highlighted
+- `/` filters by type, reason, object, namespace, source, or message text
+- `Enter` on an event jumps to the involved resource's detail view when it is
+  a Flux resource flux9s watches; `Esc` returns to the events feed
+- Resource keys act on the selected event's involved object directly: `y`
+  (YAML) and `d` (describe) work even for non-Flux objects like Pods and
+  Deployments, while `t`/`g`/`h` and operations (`s`/`r`/`R`) work when the
+  object is a watched Flux resource. `Esc` from any of these returns to the
+  events feed
+- `Esc` from the feed returns to the resource list and stops the events watch —
+  events are only streamed while the view is open, so there is no overhead the
+  rest of the time
+
+Events also appear in the describe view (`d`): each resource's describe output
+ends with a kubectl-style Events section listing that resource's recent events.
 
 ## Operations
 

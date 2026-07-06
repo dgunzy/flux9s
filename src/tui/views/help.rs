@@ -55,6 +55,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         (":unhealthy", "Show unhealthy resources"),
         (":favorites", "View favorites"),
         (":fav", "View favorites"),
+        (":events", "Live Kubernetes events feed"),
         (":q", "Quit application"),
     ];
     render_help_column(f, column_chunks[1], "GENERAL", &general_items, theme);

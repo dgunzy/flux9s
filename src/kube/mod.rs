@@ -12,6 +12,7 @@
 //! to prevent proxy issues with corporate environments.
 
 pub mod api;
+pub mod events;
 pub mod fetch;
 pub mod health;
 pub mod inventory;
