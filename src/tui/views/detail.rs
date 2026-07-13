@@ -22,7 +22,7 @@ fn capitalize_first(key: &str) -> String {
         format!(
             "{}{}",
             first.to_uppercase(),
-            &key[first.len_utf8()..].to_lowercase()
+            key[first.len_utf8()..].to_lowercase()
         )
     } else {
         key.to_string()
