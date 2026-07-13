@@ -3,10 +3,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: imagepolicies.image.toolkit.fluxcd.io
 spec:
   group: image.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-images
     kind: ImagePolicy
     listKind: ImagePolicyList
     plural: imagepolicies
@@ -305,10 +310,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: imagerepositories.image.toolkit.fluxcd.io
 spec:
   group: image.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-images
     kind: ImageRepository
     listKind: ImageRepositoryList
     plural: imagerepositories
@@ -597,7 +607,7 @@ spec:
                 description: |-
                   ObservedExclusionList is a list of observed exclusion list. It reflects
                   the exclusion rules used for the observed scan result in
-                  spec.lastScanResult.
+                  status.lastScanResult.
                 items:
                   type: string
                 type: array

@@ -3,10 +3,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: kustomizations.kustomize.toolkit.fluxcd.io
 spec:
   group: kustomize.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-appliers
     kind: Kustomization
     listKind: KustomizationList
     plural: kustomizations

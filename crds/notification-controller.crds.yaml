@@ -3,10 +3,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: alerts.notification.toolkit.fluxcd.io
 spec:
   group: notification.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-notifications
     kind: Alert
     listKind: AlertList
     plural: alerts
@@ -165,10 +170,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: providers.notification.toolkit.fluxcd.io
 spec:
   group: notification.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-notifications
     kind: Provider
     listKind: ProviderList
     plural: providers
@@ -366,10 +376,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: receivers.notification.toolkit.fluxcd.io
 spec:
   group: notification.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-notifications
     kind: Receiver
     listKind: ReceiverList
     plural: receivers

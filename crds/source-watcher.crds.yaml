@@ -3,10 +3,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: artifactgenerators.source.extensions.fluxcd.io
 spec:
   group: source.extensions.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-sources
     kind: ArtifactGenerator
     listKind: ArtifactGeneratorList
     plural: artifactgenerators

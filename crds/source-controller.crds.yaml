@@ -3,10 +3,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: buckets.source.toolkit.fluxcd.io
 spec:
   group: source.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-sources
     kind: Bucket
     listKind: BucketList
     plural: buckets
@@ -385,13 +390,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: externalartifacts.source.toolkit.fluxcd.io
 spec:
   group: source.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-sources
     kind: ExternalArtifact
     listKind: ExternalArtifactList
     plural: externalartifacts
+    shortNames:
+    - ea
     singular: externalartifact
   scope: Namespaced
   versions:
@@ -576,10 +588,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: gitrepositories.source.toolkit.fluxcd.io
 spec:
   group: source.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-sources
     kind: GitRepository
     listKind: GitRepositoryList
     plural: gitrepositories
@@ -1061,10 +1078,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: helmcharts.source.toolkit.fluxcd.io
 spec:
   group: source.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-sources
     kind: HelmChart
     listKind: HelmChartList
     plural: helmcharts
@@ -1401,7 +1423,7 @@ spec:
                 description: |-
                   URL is the dynamic fetch link for the latest Artifact.
                   It is provided on a "best effort" basis, and using the precise
-                  BucketStatus.Artifact data is recommended.
+                  HelmChartStatus.Artifact data is recommended.
                 type: string
             type: object
         type: object
@@ -1415,10 +1437,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: helmrepositories.source.toolkit.fluxcd.io
 spec:
   group: source.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-sources
     kind: HelmRepository
     listKind: HelmRepositoryList
     plural: helmrepositories
@@ -1736,10 +1763,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: ocirepositories.source.toolkit.fluxcd.io
 spec:
   group: source.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-sources
     kind: OCIRepository
     listKind: OCIRepositoryList
     plural: ocirepositories

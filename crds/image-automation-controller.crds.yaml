@@ -3,10 +3,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   name: imageupdateautomations.image.toolkit.fluxcd.io
 spec:
   group: image.toolkit.fluxcd.io
   names:
+    categories:
+    - all
+    - fluxcd
+    - fluxcd-images
     kind: ImageUpdateAutomation
     listKind: ImageUpdateAutomationList
     plural: imageupdateautomations
@@ -430,7 +435,6 @@ spec:
                 type: object
               observedSourceRevision:
                 description: |-
-                  ObservedPolicies []ObservedPolicy `json:"observedPolicies,omitempty"`
                   ObservedSourceRevision is the last observed source revision. This can be
                   used to determine if the source has been updated since last observation.
                 type: string
