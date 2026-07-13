@@ -542,6 +542,44 @@ pub async fn discover_namespaces_with_flux_resources(client: &Client) -> Result<
 mod tests {
     use super::*;
 
+    /// Build a client from a config that routes through the given proxy URL.
+    /// `Client::try_from` is where kube rejects proxy schemes whose cargo
+    /// feature is not compiled in — no network I/O happens here (a runtime is
+    /// still required because the client spawns its buffer task).
+    fn client_with_proxy(proxy_url: &str) -> kube::Result<Client> {
+        let mut config = kube::Config::new("https://kubernetes.example.com".parse().unwrap());
+        config.proxy_url = Some(proxy_url.parse().unwrap());
+        Client::try_from(config)
+    }
+
+    /// Regression test for #202: the `kube/socks5` cargo feature was dropped
+    /// in a dependency cleanup (it looks unused — no code references it), and
+    /// every cluster with `proxy-url: socks5://…` in its kubeconfig failed at
+    /// startup with: configured proxy … requires the disabled feature
+    /// "kube/socks5". This fails at compile-config time if the feature is
+    /// ever removed again.
+    #[tokio::test]
+    async fn test_client_supports_socks5_proxy() {
+        let result = client_with_proxy("socks5://127.0.0.1:3129");
+        assert!(
+            result.is_ok(),
+            "socks5 proxy-url must be supported (kube/socks5 feature): {:?}",
+            result.err()
+        );
+    }
+
+    /// Companion guard for the `kube/http-proxy` feature (same failure mode
+    /// as #202 for `proxy-url: http://…` kubeconfigs).
+    #[tokio::test]
+    async fn test_client_supports_http_proxy() {
+        let result = client_with_proxy("http://127.0.0.1:3128");
+        assert!(
+            result.is_ok(),
+            "http proxy-url must be supported (kube/http-proxy feature): {:?}",
+            result.err()
+        );
+    }
+
     #[test]
     fn test_is_internal_host_private_ips() {
         assert!(is_internal_host("10.0.0.1"));

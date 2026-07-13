@@ -70,11 +70,16 @@ vendored-openssl = ["openssl/vendored"]
 
 [dependencies]
 # Kubernetes client with HTTP proxy support - use openssl-tls for better cert support
+# NOTE: "http-proxy" and "socks5" look unused to dependency-pruning tools (no
+# code references them) but they gate kubeconfig `proxy-url:` support inside
+# kube itself — removing them breaks proxied clusters at runtime (#202).
+# Guarded by proxy tests in src/kube/mod.rs.
 kube = { version = "4.0.0", default-features = false, features = [
     "client",
     "runtime",
     "derive",
     "http-proxy",
+    "socks5",
     "openssl-tls",
 ] }
 # k8s-openapi version feature - must match kube-rs version

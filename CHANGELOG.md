@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Restored SOCKS5 proxy support (#202): the `kube/socks5` cargo feature was
+  accidentally dropped in a dependency cleanup (#182), so kubeconfigs with
+  `proxy-url: socks5://…` failed at startup with `requires the disabled
+  feature "kube/socks5"`. Regression tests now build a client through both
+  socks5 and http proxy configs so a missing proxy feature fails CI.
+
 ## [0.11.0] - 2026-07-06
 
 ### Changes\n- Version bump to 0.11.0
