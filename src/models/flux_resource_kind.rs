@@ -195,6 +195,24 @@ impl FluxResourceKind {
         )
     }
 
+    /// Whether this kind records the objects it applies in
+    /// `status.inventory.entries`, so the graph can discover its downstream
+    /// resources from the inventory:
+    /// - Kustomization
+    /// - ResourceSet
+    /// - FluxInstance
+    ///
+    /// HelmRelease is deliberately excluded — its inventory lives in Helm
+    /// storage Secrets and has a dedicated discovery path.
+    pub fn has_inventory_downstream(&self) -> bool {
+        matches!(
+            self,
+            FluxResourceKind::Kustomization
+                | FluxResourceKind::ResourceSet
+                | FluxResourceKind::FluxInstance
+        )
+    }
+
     /// Check if this resource type supports reconciliation history
     ///
     /// Only resources with status.history field support history:
@@ -1136,5 +1154,25 @@ mod tests {
 
         let fields = FluxResourceKind::ResourceSet.extract_fields(&obj);
         assert!(!fields.contains_key("INPUTS"));
+    }
+
+    #[test]
+    fn test_has_inventory_downstream() {
+        // The status.inventory.entries kinds share the graph discovery path
+        assert!(FluxResourceKind::Kustomization.has_inventory_downstream());
+        assert!(FluxResourceKind::ResourceSet.has_inventory_downstream());
+        assert!(FluxResourceKind::FluxInstance.has_inventory_downstream());
+        // HelmRelease has its own path (Helm storage Secrets)
+        assert!(!FluxResourceKind::HelmRelease.has_inventory_downstream());
+        assert!(!FluxResourceKind::GitRepository.has_inventory_downstream());
+        // Every inventory-downstream kind must also support the graph view
+        for kind in FluxResourceKind::all() {
+            if kind.has_inventory_downstream() {
+                assert!(
+                    kind.supports_graph(),
+                    "{kind:?} has inventory but no graph support"
+                );
+            }
+        }
     }
 }

@@ -358,4 +358,58 @@ mod tests {
         assert_eq!(name, "repo");
         assert_eq!(url, "https://github.com/user/repo.git");
     }
+
+    /// A step-based ResourceSet's inventory (same `status.inventory.entries`
+    /// format as Kustomization) covering the #204 cases: cluster-scoped
+    /// resources (Namespace, CRD), a workload, plain resources, and a
+    /// produced Flux resource that must become an individual graph node.
+    #[test]
+    fn test_resource_set_inventory_extraction_and_grouping() {
+        let obj = json!({
+            "apiVersion": "fluxcd.controlplane.io/v1",
+            "kind": "ResourceSet",
+            "metadata": {"name": "staged-rollout", "namespace": "flux-resources"},
+            "status": {
+                "inventory": {
+                    "entries": [
+                        // Cluster-scoped, no group
+                        {"id": "_demo__Namespace", "v": "v1"},
+                        // Cluster-scoped CRD (has an API group)
+                        {"id": "_widgets.example.com_apiextensions.k8s.io_CustomResourceDefinition", "v": "v1"},
+                        // Workload
+                        {"id": "flux-resources_staged-app_apps_Deployment", "v": "v1"},
+                        // Plain namespaced resources (real ids from the dev cluster)
+                        {"id": "flux-resources_staged-app-config__ConfigMap", "v": "v1"},
+                        {"id": "flux-resources_staged-db-migration_batch_Job", "v": "v1"},
+                        // A Flux resource produced by the ResourceSet
+                        {"id": "flux-resources_podinfo_kustomize.toolkit.fluxcd.io_Kustomization", "v": "v1"}
+                    ]
+                }
+            }
+        });
+
+        let entries = extract_inventory(&obj).unwrap();
+        assert_eq!(entries.len(), 6);
+
+        let crd = entries
+            .iter()
+            .find(|e| e.kind == "CustomResourceDefinition")
+            .expect("CRD entry parses");
+        assert_eq!(crd.name, "widgets.example.com");
+        assert_eq!(crd.namespace, "", "cluster-scoped CRD has no namespace");
+
+        let groups = group_inventory(entries);
+        // The produced Kustomization is an individual, navigable node
+        assert_eq!(groups.flux.len(), 1);
+        assert_eq!(groups.flux[0].kind, "Kustomization");
+        assert_eq!(groups.flux[0].name, "podinfo");
+        // The Deployment gets workload treatment (status fetch + group node)
+        assert_eq!(groups.workloads.len(), 1);
+        assert_eq!(groups.workloads[0].name, "staged-app");
+        // Everything else aggregates by kind — including arbitrary/CRD kinds
+        assert_eq!(groups.resources.get("Namespace"), Some(&1));
+        assert_eq!(groups.resources.get("CustomResourceDefinition"), Some(&1));
+        assert_eq!(groups.resources.get("ConfigMap"), Some(&1));
+        assert_eq!(groups.resources.get("Job"), Some(&1));
+    }
 }

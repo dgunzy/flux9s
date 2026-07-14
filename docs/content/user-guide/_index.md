@@ -215,7 +215,11 @@ Visualize resource relationships and dependencies. Shows upstream sources and do
 The graph view displays:
 
 - **Upstream sources** (GitRepository, HelmRepository, etc.)
-- **Managed resources** (workloads, ConfigMaps, Services, etc.)
+- **Managed resources** (workloads, ConfigMaps, Services, etc.) — for
+  Kustomizations, HelmReleases, ResourceSets, and FluxInstances alike; a
+  ResourceSet's produced Flux resources appear as individual navigable nodes,
+  and arbitrary kinds (Namespaces, CRDs, custom resources) aggregate into
+  the resource group
 - **Resource groups** (aggregated by type)
 - **Workload groups** (aggregated workloads with status)
 

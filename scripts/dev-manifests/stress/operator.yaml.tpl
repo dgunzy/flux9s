@@ -40,10 +40,10 @@ spec:
     - apiVersion: v1
       kind: ConfigMap
       metadata:
-        name: branch-${{ inputs.branch }}${SUFFIX}
+        name: branch-<< inputs.branch >>${SUFFIX}
         namespace: ${NS}
       data:
-        branch: ${{ inputs.branch }}
+        branch: << inputs.branch >>
 ---
 apiVersion: fluxcd.controlplane.io/v1
 kind: ResourceSet
@@ -61,7 +61,7 @@ spec:
     - apiVersion: v1
       kind: ConfigMap
       metadata:
-        name: cluster-${{ inputs.region }}${SUFFIX}
+        name: cluster-<< inputs.region >>${SUFFIX}
         namespace: ${NS}
       data:
-        region: ${{ inputs.region }}
+        region: << inputs.region >>

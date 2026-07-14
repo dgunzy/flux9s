@@ -1,0 +1,99 @@
+name: Live Cluster Tests
+
+# Runs the #[ignore]d live regression suite (tests/live_tests.rs) against
+# real kind clusters built by scripts/dev-clusters.sh. Catches what unit CI
+# can't: API discovery, watch/list/log wire behavior, and upstream
+# flux-operator condition-message formats drifting under flux9s.
+#
+# Weekly rather than per-PR: the failure mode being guarded is upstream
+# drift (new Flux/flux-operator releases), not PR regressions.
+
+on:
+  schedule:
+    # Mondays 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      clusters:
+        description: "Dev clusters to build (dev-clusters.sh mode)"
+        type: choice
+        options:
+          - ci # simple + legacy — everything the live suite asserts against
+          - simple
+          - legacy
+          - all
+        default: ci
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-tests
+  cancel-in-progress: false
+
+env:
+  KIND_VERSION: v0.30.0
+  # kind pulls images and starts controllers from cold — give the script's
+  # readiness waits CI-appropriate headroom (defaults are tuned for warm
+  # local Docker).
+  FLUX9S_DEV_DEPLOY_WAIT_TIMEOUT: 180s
+  FLUX9S_DEV_CRD_WAIT_RETRIES: "30"
+  FLUX9S_DEV_CRD_WAIT_SLEEP_SECONDS: "5"
+
+jobs:
+  live-tests:
+    name: Live regression suite (kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-live-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-live-
+            ${{ runner.os }}-cargo-
+
+      - name: Install kind
+        run: |
+          # ubuntu-latest ships a root-owned kind at /usr/local/bin — sudo so
+          # our pinned version deterministically replaces it.
+          sudo curl -fsSLo /usr/local/bin/kind \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          sudo chmod +x /usr/local/bin/kind
+          kind version
+          # kubectl, helm, and envsubst ship on ubuntu-latest runners
+          kubectl version --client
+          helm version --short
+
+      - name: Compile live tests (before spending cluster time)
+        run: cargo test --test live_tests --no-run
+
+      - name: Build dev clusters
+        run: ./scripts/dev-clusters.sh "${{ inputs.clusters || 'ci' }}"
+
+      - name: Run live regression suite
+        run: cargo test --test live_tests -- --ignored --test-threads=1 --nocapture
+
+      - name: Dump cluster diagnostics on failure
+        if: failure()
+        run: |
+          for ctx in kind-flux9s-simple kind-flux9s-legacy; do
+            kubectl config get-contexts -o name | grep -qx "$ctx" || continue
+            echo "════ $ctx ════"
+            kubectl --context "$ctx" get fluxinstance,resourcesets,resourcesetinputproviders,kustomizations,gitrepositories,ocirepositories -A 2>/dev/null || true
+            kubectl --context "$ctx" get events -n flux-resources --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
+            echo "──── flux-operator logs ────"
+            kubectl --context "$ctx" logs -n flux-system deploy/flux-operator --tail=50 2>/dev/null || true
+          done

@@ -20,6 +20,11 @@ test:
 test-integration:
     cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests --test graph_tests
 
+# Run live-cluster regression tests against the dev kind clusters
+# (build them first: ./scripts/dev-clusters.sh ci)
+test-live:
+    cargo test --test live_tests -- --ignored --test-threads=1
+
 # Run cargo-audit to check for CVEs (ignores unmaintained warnings)
 audit:
     # RUSTSEC-2026-0002 is currently pulled in transitively via ratatui 0.29's lru dependency.

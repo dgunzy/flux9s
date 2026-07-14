@@ -3,8 +3,8 @@
 #
 # Creates three clearly-named clusters:
 #
-#   flux9s-simple   — Flux 2.8.x (current repo CRD baseline); day-to-day dev testing
-#   flux9s-stress   — Flux 2.5.x; 40+ resources of every kind for page-scroll / large lists
+#   flux9s-simple   — Flux 2.9.x + source-watcher; day-to-day dev testing (steps, AG, events)
+#   flux9s-stress   — Flux 2.7.x; 40+ resources of every kind for page-scroll / large lists
 #   flux9s-legacy   — Flux 2.2.x with OCIRepository/Bucket at v1beta2; tests the
 #                     version-fallback logic (flux9s tries v1 first, then v1beta2)
 #
@@ -16,6 +16,7 @@
 #   ./scripts/dev-clusters.sh simple       # build flux9s-simple only
 #   ./scripts/dev-clusters.sh stress       # build flux9s-stress only
 #   ./scripts/dev-clusters.sh legacy       # build flux9s-legacy only
+#   ./scripts/dev-clusters.sh ci           # build simple + legacy (live-test set)
 #   ./scripts/dev-clusters.sh all          # build all three clusters
 #   ./scripts/dev-clusters.sh delete       # delete all kind clusters and exit
 
@@ -37,7 +38,7 @@ STRESS_CLUSTER="flux9s-stress"
 LEGACY_CLUSTER="flux9s-legacy"
 
 FLUX_OPERATOR_CHART="oci://ghcr.io/controlplaneio-fluxcd/charts/flux-operator"
-FLUX_OPERATOR_VERSION="0.48.0"
+FLUX_OPERATOR_VERSION="0.55.0"
 DEPLOY_WAIT_TIMEOUT="${FLUX9S_DEV_DEPLOY_WAIT_TIMEOUT:-5s}"
 CRD_WAIT_RETRIES="${FLUX9S_DEV_CRD_WAIT_RETRIES:-5}"
 CRD_WAIT_SLEEP_SECONDS="${FLUX9S_DEV_CRD_WAIT_SLEEP_SECONDS:-3}"
@@ -302,7 +303,7 @@ run_build() {
 # ── cluster builders ───────────────────────────────────────────────────────────
 
 build_simple_cluster() {
-    header "Building  $SIMPLE_CLUSTER  (Flux 2.8.x — current repo CRD baseline)"
+    header "Building  $SIMPLE_CLUSTER  (Flux 2.9.x + source-watcher — current repo CRD baseline)"
 
     kind create cluster --name "$SIMPLE_CLUSTER" --wait 60s
     local ctx="kind-${SIMPLE_CLUSTER}"
@@ -310,6 +311,21 @@ build_simple_cluster() {
     install_flux_operator "$ctx"
     apply_fluxinstance "$ctx" "${MANIFEST_DIR}/fluxinstance.yaml"
     wait_for_flux_crds "$ctx"
+
+    # source-watcher CRDs (simple cluster only — the medium/legacy instances
+    # don't run the source-watcher component)
+    info "Waiting for source-watcher CRDs …"
+    for crd in \
+        artifactgenerators.source.extensions.fluxcd.io \
+        externalartifacts.source.toolkit.fluxcd.io; do
+        local retries="$CRD_WAIT_RETRIES"
+        while ! kubectl --context "$ctx" get crd "$crd" &>/dev/null; do
+            retries=$((retries - 1))
+            [ $retries -le 0 ] && { warn "Timed out waiting for $crd – skipping"; break; }
+            sleep "$CRD_WAIT_SLEEP_SECONDS"
+        done
+        success "  $crd"
+    done
 
     apply_simple_manifests "$ctx" "flux-resources"
 
@@ -320,7 +336,7 @@ build_simple_cluster() {
 }
 
 build_stress_cluster() {
-    header "Building  $STRESS_CLUSTER  (Flux 2.5.x — stress/page-scroll testing)"
+    header "Building  $STRESS_CLUSTER  (Flux 2.7.x — stress/page-scroll testing)"
 
     kind create cluster --name "$STRESS_CLUSTER" --wait 60s
     local ctx="kind-${STRESS_CLUSTER}"
@@ -407,13 +423,19 @@ main() {
             run_build "$SIMPLE_CLUSTER" build_simple_cluster
             run_build "$STRESS_CLUSTER" build_stress_cluster
             ;;
+        # The live-test set (.github/workflows/live-tests.yml): the clusters
+        # tests/live_tests.rs asserts against, skipping the heavy stress cluster.
+        ci)
+            run_build "$SIMPLE_CLUSTER" build_simple_cluster
+            run_build "$LEGACY_CLUSTER" build_legacy_cluster
+            ;;
         all)
             run_build "$SIMPLE_CLUSTER" build_simple_cluster
             run_build "$STRESS_CLUSTER" build_stress_cluster
             run_build "$LEGACY_CLUSTER" build_legacy_cluster
             ;;
         *)
-            die "Unknown mode '$mode'. Use: both | simple | stress | legacy | all | delete"
+            die "Unknown mode '$mode'. Use: both | simple | stress | legacy | ci | all | delete"
             ;;
     esac
 
@@ -422,10 +444,10 @@ main() {
     echo "  Available clusters:"
     kind get clusters 2>/dev/null | sed 's/^/    • kind-/'
     echo
-    echo "  Day-to-day dev (Flux 2.8.x, current repo CRDs):"
+    echo "  Day-to-day dev (Flux 2.9.x, current repo CRDs):"
     echo "    kubectl config use-context kind-${SIMPLE_CLUSTER} && cargo run"
     echo
-    echo "  Page-scroll stress testing (Flux 2.5.x):"
+    echo "  Page-scroll stress testing (Flux 2.7.x):"
     echo "    kubectl config use-context kind-${STRESS_CLUSTER} && cargo run"
     echo "    → Press Ctrl+f / Ctrl+b to page through the list"
     echo

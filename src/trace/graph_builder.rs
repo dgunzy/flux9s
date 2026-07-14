@@ -255,12 +255,22 @@ async fn discover_downstream_resources(
     name: &str,
     from_node_id: &str,
 ) -> Result<()> {
-    // For Kustomization and HelmRelease, discover managed resources
+    // Inventory-carrying kinds (Kustomization, ResourceSet, FluxInstance)
+    // share the status.inventory discovery path; HelmRelease has its own
+    // (inventory lives in Helm storage Secrets).
     let flux_kind = FluxResourceKind::parse_optional(resource_type);
 
     match flux_kind {
-        Some(FluxResourceKind::Kustomization) => {
-            discover_kustomization_resources(client, graph, namespace, name, from_node_id).await?;
+        Some(kind) if kind.has_inventory_downstream() => {
+            discover_inventory_resources(
+                client,
+                graph,
+                resource_type,
+                namespace,
+                name,
+                from_node_id,
+            )
+            .await?;
         }
         Some(FluxResourceKind::HelmRelease) => {
             discover_helmrelease_resources(client, graph, namespace, name, from_node_id).await?;
@@ -274,31 +284,36 @@ async fn discover_downstream_resources(
     Ok(())
 }
 
-/// Discover resources managed by a Kustomization using inventory extraction
-async fn discover_kustomization_resources(
+/// Discover managed resources from `status.inventory.entries` — the shared
+/// downstream path for Kustomization, ResourceSet, and FluxInstance (see
+/// [`FluxResourceKind::has_inventory_downstream`]). Arbitrary inventory kinds
+/// (Namespaces, CRDs, custom resources) land in the aggregated resource
+/// group; Flux resources become individual navigable nodes.
+async fn discover_inventory_resources(
     client: &kube::Client,
     graph: &mut ResourceGraph,
+    resource_type: &str,
     namespace: &str,
-    kustomization_name: &str,
+    name: &str,
     from_node_id: &str,
 ) -> Result<()> {
-    // Fetch the Kustomization resource to extract inventory
+    // Fetch the resource to extract its inventory
     let api_resource =
-        get_api_resource_with_fallback(client, "Kustomization", namespace, kustomization_name)
-            .await?;
+        get_api_resource_with_fallback(client, resource_type, namespace, name).await?;
     let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &api_resource);
     let obj = api
-        .get(kustomization_name)
+        .get(name)
         .await
-        .context("Failed to fetch Kustomization")?;
+        .with_context(|| format!("Failed to fetch {}", resource_type))?;
     let obj_value = serde_json::to_value(&obj).context("Failed to serialize resource")?;
 
     // Extract and group inventory
     if let Ok(entries) = extract_inventory(&obj_value) {
         tracing::debug!(
-            "Extracted {} inventory entries from Kustomization {}",
+            "Extracted {} inventory entries from {} {}",
             entries.len(),
-            kustomization_name
+            resource_type,
+            name
         );
         let groups = group_inventory(entries);
         tracing::debug!(
@@ -450,8 +465,9 @@ async fn discover_kustomization_resources(
         }
     } else {
         tracing::debug!(
-            "No inventory found for Kustomization {} in namespace {}",
-            kustomization_name,
+            "No inventory found for {} {} in namespace {}",
+            resource_type,
+            name,
             namespace
         );
     }

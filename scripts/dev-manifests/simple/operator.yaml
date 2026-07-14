@@ -1,33 +1,44 @@
-# Flux Operator resources — ResourceSetInputProviders feed into ResourceSets
-# ResourceSetInputProvider/github-branches ─┬─► ResourceSet/per-branch-envs
-# ResourceSetInputProvider/cluster-inventory ┴─► ResourceSet/cluster-configs (multi-input)
+# Flux Operator resources — ResourceSetInputProviders feed into ResourceSets,
+# plus step-based ResourceSets (flux-operator v0.53+) for testing the Steps
+# section in the detail view.
+#
+#   RSIP/flux2-branches (public GitHub, works) ──► ResourceSet/per-branch-envs
+#   RSIP/gitlab-broken  (missing secret, FAILS) ─► deliberate error state
+#   ResourceSet/staged-rollout        — 3 steps, all succeed (done/done/done)
+#   ResourceSet/staged-rollout-broken — fails at step 2 (done/failed/pending)
 apiVersion: fluxcd.controlplane.io/v1
 kind: ResourceSetInputProvider
 metadata:
-  name: github-branches
+  name: flux2-branches
   namespace: flux-resources
   annotations:
-    fluxcd.controlplane.io/reconcileEvery: "30s"
+    fluxcd.controlplane.io/reconcileEvery: "10m"
   labels: {app.kubernetes.io/managed-by: flux9s-dev}
 spec:
   type: GitHubBranch
+  # Public repo — no token needed (subject to anonymous API rate limits,
+  # hence the long reconcile interval)
   url: https://github.com/fluxcd/flux2
-  secretRef:
-    name: github-token
+  filter:
+    limit: 3
+    includeBranch: "^(main|release-.*)$"
 ---
+# Deliberate failure case: references a Secret that doesn't exist, so this
+# provider stays not-ready and emits Warning events — feed for the :events
+# view and describe Events section.
 apiVersion: fluxcd.controlplane.io/v1
 kind: ResourceSetInputProvider
 metadata:
-  name: cluster-inventory
+  name: gitlab-broken
   namespace: flux-resources
   annotations:
-    fluxcd.controlplane.io/reconcileEvery: "1m"
+    fluxcd.controlplane.io/reconcileEvery: "5m"
   labels: {app.kubernetes.io/managed-by: flux9s-dev}
 spec:
   type: GitLabBranch
   url: https://gitlab.com/fluxcd/flux2
   secretRef:
-    name: gitlab-token
+    name: gitlab-token-does-not-exist
 ---
 apiVersion: fluxcd.controlplane.io/v1
 kind: ResourceSet
@@ -38,33 +49,137 @@ metadata:
 spec:
   inputsFrom:
     - kind: ResourceSetInputProvider
-      name: github-branches
+      name: flux2-branches
   resources:
     - apiVersion: v1
       kind: ConfigMap
       metadata:
-        name: branch-${{ inputs.branch }}
+        name: branch-<< inputs.id >>
         namespace: flux-resources
       data:
-        branch: ${{ inputs.branch }}
+        branch: << inputs.branch | quote >>
+        sha: << inputs.sha | quote >>
 ---
+# Step-based ResourceSet (green path): pre-deploy Job → deploy ConfigMaps →
+# post-deploy Job, all self-contained so every step reaches "done".
 apiVersion: fluxcd.controlplane.io/v1
 kind: ResourceSet
 metadata:
-  name: cluster-configs
+  name: staged-rollout
   namespace: flux-resources
+  annotations:
+    fluxcd.controlplane.io/reconcileEvery: "30m"
   labels: {app.kubernetes.io/managed-by: flux9s-dev}
 spec:
-  inputsFrom:
-    - kind: ResourceSetInputProvider
-      name: github-branches
-    - kind: ResourceSetInputProvider
-      name: cluster-inventory
-  resources:
-    - apiVersion: v1
-      kind: ConfigMap
-      metadata:
-        name: cluster-${{ inputs.region }}
-        namespace: flux-resources
-      data:
-        region: ${{ inputs.region }}
+  wait: true
+  steps:
+    - name: pre-deploy
+      timeout: 2m
+      resources:
+        - apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: staged-db-migration
+            namespace: flux-resources
+            annotations:
+              fluxcd.controlplane.io/force: enabled
+          spec:
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: migration
+                    image: busybox:1.36
+                    command: ["sh", "-c", "echo running db migration && sleep 2"]
+    - name: deploy
+      timeout: 2m
+      resources:
+        - apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: staged-app-config
+            namespace: flux-resources
+          data:
+            feature: "enabled"
+        - apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: staged-app-routes
+            namespace: flux-resources
+          data:
+            route: "/api/v2"
+    - name: post-deploy
+      timeout: 2m
+      resources:
+        - apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: staged-cache-warmup
+            namespace: flux-resources
+            annotations:
+              fluxcd.controlplane.io/force: enabled
+          spec:
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: cache
+                    image: busybox:1.36
+                    command: ["sh", "-c", "echo refreshing cache && sleep 2"]
+---
+# Step-based ResourceSet (failure path): step 2's Job always exits 1, so the
+# ResourceSet sticks at "verify" failed — detail view shows
+# done / failed / pending, and each retry emits Warning events.
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSet
+metadata:
+  name: staged-rollout-broken
+  namespace: flux-resources
+  annotations:
+    fluxcd.controlplane.io/reconcileEvery: "15m"
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  wait: true
+  steps:
+    - name: prepare
+      timeout: 2m
+      resources:
+        - apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: broken-rollout-config
+            namespace: flux-resources
+          data:
+            stage: "prepare"
+    - name: verify
+      timeout: 1m
+      resources:
+        - apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: broken-verify
+            namespace: flux-resources
+            annotations:
+              fluxcd.controlplane.io/force: enabled
+              fluxcd.controlplane.io/recreateOnFailure: enabled
+          spec:
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: verify
+                    image: busybox:1.36
+                    command: ["sh", "-c", "echo verification failed && exit 1"]
+    - name: finalize
+      timeout: 1m
+      resources:
+        - apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: broken-rollout-done
+            namespace: flux-resources
+          data:
+            stage: "finalize"

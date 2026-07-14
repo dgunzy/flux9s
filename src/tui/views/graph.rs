@@ -82,7 +82,7 @@ pub fn render_resource_graph(
         0
     };
 
-    // Auto-scroll so the focused node stays fully on screen. Positions are only
+    // Auto-scroll so the focused node stays on screen. Positions are only
     // known after layout, so this runs here rather than in the event handler.
     if let Some((node_y, node_height)) = focus_index.and_then(|idx| {
         graph.nodes.get(idx).and_then(|node| {
@@ -94,17 +94,36 @@ pub fn render_resource_graph(
             })
         })
     }) {
-        if node_y < *scroll_offset {
-            *scroll_offset = node_y;
-        } else if node_y + node_height > *scroll_offset + visible_height {
-            *scroll_offset = (node_y + node_height).saturating_sub(visible_height);
-        }
+        *scroll_offset = follow_focus_scroll(*scroll_offset, node_y, node_height, visible_height);
     }
 
     *scroll_offset = (*scroll_offset).min(max_scroll);
 
     // Render graph using improved layout with line-based scrolling
     render_graph_nodes_and_edges(f, inner_area, &graph, *scroll_offset, focus_index, theme);
+}
+
+/// Scroll offset that keeps the focused node visible: scrolls up to its top
+/// edge, or down until its bottom edge fits. For nodes **taller than the
+/// viewport** (e.g. a FluxInstance's workload group with many controllers),
+/// the result is pinned to the node's top — without the pin, the up- and
+/// down-branches ping-pong on alternating frames, flashing the whole graph.
+/// Pure so the fixed-point behaviour is unit testable.
+fn follow_focus_scroll(
+    scroll_offset: usize,
+    node_y: usize,
+    node_height: usize,
+    visible_height: usize,
+) -> usize {
+    if node_y < scroll_offset {
+        node_y
+    } else if node_y + node_height > scroll_offset + visible_height {
+        (node_y + node_height)
+            .saturating_sub(visible_height)
+            .min(node_y)
+    } else {
+        scroll_offset
+    }
 }
 
 /// Pure geometry for one parent→children connector, in scroll-adjusted,
@@ -833,7 +852,7 @@ fn render_node_text(
 
 #[cfg(test)]
 mod tests {
-    use super::{box_glyph, fanout_routes};
+    use super::{box_glyph, fanout_routes, follow_focus_scroll};
     use crate::trace::{GraphEdge, GraphNode, NodeType, RelationshipType, ResourceGraph};
 
     #[test]
@@ -911,5 +930,41 @@ mod tests {
         graph.add_node(node("solo", NodeType::Object, None));
         graph.calculate_layout(100, 50);
         assert!(fanout_routes(&graph, 100, 0).is_empty());
+    }
+
+    /// Regression: a focused node taller than the viewport (FluxInstance
+    /// workload group with many controllers) must not make the scroll
+    /// oscillate between frames — the graph flashed continuously.
+    #[test]
+    fn follow_focus_scroll_is_stable_for_oversized_nodes() {
+        // Node at y=10, 12 rows tall, viewport only 8 rows
+        let first = follow_focus_scroll(0, 10, 12, 8);
+        let second = follow_focus_scroll(first, 10, 12, 8);
+        assert_eq!(first, 10, "oversized node pins to its top edge");
+        assert_eq!(second, first, "scroll must reach a fixed point");
+
+        // General fixed-point property across sizes and starting offsets
+        for node_y in [0usize, 5, 20] {
+            for node_height in [1usize, 8, 30] {
+                for start in [0usize, 7, 25, 60] {
+                    let a = follow_focus_scroll(start, node_y, node_height, 8);
+                    let b = follow_focus_scroll(a, node_y, node_height, 8);
+                    assert_eq!(
+                        a, b,
+                        "oscillation at start={start} y={node_y} h={node_height}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn follow_focus_scroll_keeps_fitting_nodes_visible() {
+        // Node fits: scrolling up to reveal it
+        assert_eq!(follow_focus_scroll(20, 10, 4, 8), 10);
+        // Node fits: scrolling down until its bottom edge is visible
+        assert_eq!(follow_focus_scroll(0, 10, 4, 8), 6);
+        // Already fully visible: no movement
+        assert_eq!(follow_focus_scroll(8, 10, 4, 8), 8);
     }
 }

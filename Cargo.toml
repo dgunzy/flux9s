@@ -180,6 +180,13 @@ path = "tests/field_extraction.rs"
 name = "trace_tests"
 path = "tests/trace_tests.rs"
 
+# Live-cluster regression tests — every test is #[ignore]d; run via
+# `just test-live` after `./scripts/dev-clusters.sh ci`, or by the
+# live-tests.yml workflow (weekly / manual dispatch).
+[[test]]
+name = "live_tests"
+path = "tests/live_tests.rs"
+
 [[test]]
 name = "snapshot_tests"
 path = "tests/snapshot_tests.rs"

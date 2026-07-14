@@ -1,0 +1,25 @@
+# source-watcher resources — ArtifactGenerator produces ExternalArtifacts
+# from the flux-system GitRepository (both kinds are watched by flux9s; the
+# graph view supports ArtifactGenerator fan-out).
+#
+#   GitRepository/flux-system ─► ArtifactGenerator/example-apps ─► ExternalArtifact(s)
+apiVersion: source.extensions.fluxcd.io/v1beta1
+kind: ArtifactGenerator
+metadata:
+  name: example-apps
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  sources:
+    - alias: repo
+      kind: GitRepository
+      name: flux-system
+  artifacts:
+    - name: apps-base
+      copy:
+        - from: "@repo/apps/base/**"
+          to: "@artifact/"
+    - name: apps-staging
+      copy:
+        - from: "@repo/apps/staging/**"
+          to: "@artifact/"

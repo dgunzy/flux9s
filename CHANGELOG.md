@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Graph view no longer flashes when the focused node is taller than the
+  viewport (e.g. a FluxInstance's workload group): the focus auto-scroll now
+  pins oversized nodes to their top edge instead of oscillating between
+  showing their top and bottom on alternating frames.
+
 ### Added
+- Graph view downstream discovery for ResourceSet and FluxInstance (#204):
+  their `status.inventory` now renders like a Kustomization's — Flux resources
+  produced by a ResourceSet become individual navigable nodes, Deployments and
+  other workloads get the workload group with live status, and arbitrary kinds
+  (Namespaces, CRDs, custom resources) aggregate into the resource group.
 - Controller pod log viewer (#192): `:logs` opens a submenu of the discovered
   Flux controller pods (`:logs <pod|prefix>` streams one directly). Logs are
   tailed and followed live in a bounded buffer; scrolling up pauses following
@@ -66,6 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mismatches are visible instead of just confusing.
 
 ### Internal
+- New live-cluster regression suite (`tests/live_tests.rs`, all `#[ignore]`d):
+  exact assertions against the dev kind clusters' planted fixtures — graph
+  inventory, describe events, the operator's step-failure message format, pod
+  log streaming, and legacy v1beta2 version-fallback discovery. Run locally
+  with `just test-live` after `./scripts/dev-clusters.sh ci`, or via the new
+  weekly/dispatch `live-tests.yml` workflow.
 - New generic `AsyncTask<K, T>` owns the request/dispatch/poll lifecycle for
   view fetches, replacing the five copy-pasted `*_pending`/`*_fetched`/`*_rx`
   field triplets and their hand-rolled trigger/poll methods.

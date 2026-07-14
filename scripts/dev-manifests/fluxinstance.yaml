@@ -9,7 +9,7 @@ spec:
   distribution:
     # Pin to the current Flux release line represented by this repo's generated CRDs.
     # This keeps the "simple" dev cluster aligned with the latest API surface flux9s targets.
-    version: "2.8.x"
+    version: "2.9.x"
     registry: "ghcr.io/fluxcd"
   components:
     - source-controller
@@ -18,6 +18,8 @@ spec:
     - notification-controller
     - image-reflector-controller
     - image-automation-controller
+    # source-watcher provides ArtifactGenerator + ExternalArtifact (both watched by flux9s)
+    - source-watcher
   cluster:
     type: kubernetes
     multitenant: false

@@ -8,8 +8,8 @@ metadata:
 spec:
   distribution:
     # Pin to a mid-series release band where OCIRepository/Bucket/Helm* are stable,
-    # but the cluster still represents an older CRD surface than the repo baseline.
-    version: "2.5.x"
+    # but the cluster still represents an older (yet supported) CRD surface than the repo baseline.
+    version: "2.7.x"
     registry: "ghcr.io/fluxcd"
   components:
     - source-controller
