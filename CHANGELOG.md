@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-14
+
+### Changes\n- Version bump to 0.12.0
+
 ### Fixed
 - Graph view no longer flashes when the focused node is taller than the
   viewport (e.g. a FluxInstance's workload group): the focus auto-scroll now
