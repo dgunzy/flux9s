@@ -97,6 +97,8 @@ Type these commands in command mode (press `:`):
 | `:fav`             | Alias for `:favorites`                   |
 | `:events`          | Live Kubernetes events feed              |
 | `:ev`              | Alias for `:events`                      |
+| `:logs`            | Controller log viewer (pod submenu)      |
+| `:logs <pod>`      | Stream a controller pod by name/prefix   |
 | `:skin <name>`     | Change theme/skin (direct)               |
 | `:skin`            | Open interactive theme selection menu    |
 | `:readonly`        | Toggle readonly mode                     |
@@ -277,6 +279,28 @@ resource list's MESSAGE column truncates.
 
 Events also appear in the describe view (`d`): each resource's describe output
 ends with a kubectl-style Events section listing that resource's recent events.
+
+### Controller Logs (`:logs`)
+
+Stream the logs of any Flux controller pod without leaving flux9s — the next
+step after Events when a reconciliation fails in a way conditions don't
+explain.
+
+- `:logs` opens a submenu of the discovered controller pods (readiness shown),
+  `:logs <pod>` streams one directly by exact name or unique prefix
+- The stream tails recent lines and follows new output live; scrolling up
+  (`j`/`k`, page keys) pauses following and `G` jumps back to the newest line
+- `/` searches the log buffer with `n`/`N` to cycle matches
+- The buffer is bounded (oldest lines evicted), and the stream runs only while
+  the view is open — `Esc` stops it and returns to where you came from
+
+### ResourceSet Steps
+
+Step-based ResourceSets (Flux Operator v0.53+) show their ordered steps in the
+detail view (`Enter`), with each step's phase — done, applying, failed, or
+pending — derived live from the reconciliation status, alongside the step's
+resource count, template marker, and timeout. The reconciliation history view
+(`h`) includes the step count of each snapshot.
 
 ## Operations
 

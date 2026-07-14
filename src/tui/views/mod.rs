@@ -15,6 +15,7 @@ mod header;
 mod help;
 mod helpers;
 mod history;
+mod logs;
 mod quit_confirm;
 pub mod resource_fields;
 mod resource_list;
@@ -36,6 +37,7 @@ pub use help::*;
 #[allow(unused_imports)] // Used via fully qualified paths (crate::tui::views::helpers::)
 pub use helpers::*;
 pub use history::*;
+pub use logs::*;
 pub use quit_confirm::*;
 pub use resource_fields::*;
 pub use resource_list::*;

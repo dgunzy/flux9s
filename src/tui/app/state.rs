@@ -22,6 +22,9 @@ pub enum View {
     /// Live Kubernetes events feed, opened with `:events`. The events watcher
     /// runs only while this view (or a detail view opened from it) is active.
     EventList,
+    /// Controller pod log viewer, opened with `:logs`. The log stream runs
+    /// only while this view is active.
+    Logs,
     #[allow(dead_code)] // Reserved for future alternative help view implementation
     Help,
 }
@@ -38,6 +41,7 @@ impl View {
             View::ResourceDescribe => Some(&mut vs.describe_scroll_offset),
             View::ResourceTrace => Some(&mut vs.trace_scroll_offset),
             View::ResourceHistory => Some(&mut vs.history_scroll_offset),
+            View::Logs => Some(&mut vs.log_scroll_offset),
             _ => None,
         }
     }
@@ -48,12 +52,12 @@ impl View {
         matches!(self, View::ResourceList | View::ResourceFavorites)
     }
 
-    /// Whether `/` opens an in-view text search (YAML/describe/trace) rather than
-    /// the resource-list filter.
+    /// Whether `/` opens an in-view text search (YAML/describe/trace/logs)
+    /// rather than the resource-list filter.
     pub fn is_text_search_view(self) -> bool {
         matches!(
             self,
-            View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace
+            View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace | View::Logs
         )
     }
 
@@ -192,6 +196,8 @@ pub struct ViewState {
     pub trace_scroll_offset: usize,
     /// Scroll offset for history view
     pub history_scroll_offset: usize,
+    /// Scroll offset for the controller log view
+    pub log_scroll_offset: usize,
     /// Scroll offset for graph view
     pub graph_scroll_offset: usize,
     /// Index (into the graph's node list) of the currently focused graph node.
@@ -231,6 +237,7 @@ impl Default for ViewState {
             describe_scroll_offset: 0,
             trace_scroll_offset: 0,
             history_scroll_offset: 0,
+            log_scroll_offset: 0,
             graph_scroll_offset: 0,
             graph_focus_index: None,
             previous_list_view: View::ResourceList,
@@ -572,6 +579,17 @@ mod tests {
             View::EventList
                 .scroll_offset_mut(&mut ViewState::default())
                 .is_none()
+        );
+
+        // The log view is a root-level text view: line-scrolled and
+        // searchable with /, but not nested and not a resource list.
+        assert!(!View::Logs.is_nested_view());
+        assert!(!View::Logs.is_list_view());
+        assert!(View::Logs.is_text_search_view());
+        assert!(
+            View::Logs
+                .scroll_offset_mut(&mut ViewState::default())
+                .is_some()
         );
     }
 

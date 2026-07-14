@@ -6,6 +6,7 @@
 pub mod state;
 
 pub mod async_task;
+pub mod logs;
 
 mod async_ops;
 mod core;

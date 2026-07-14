@@ -34,6 +34,8 @@ pub struct App {
     pub(crate) controller_pods: ControllerPodState,
     /// Live Kubernetes events feed (populated while the events view is open).
     pub(crate) kube_events: KubeEventStore,
+    /// Controller pod log stream (active while the log view is open).
+    pub(crate) logs: super::logs::LogState,
     /// Path to the active log file, shown on the connection error screen.
     pub(crate) log_path: Option<std::path::PathBuf>,
     /// Watchers currently in a degraded (erroring/reconnecting) state.
@@ -84,6 +86,7 @@ impl App {
             pending_context_switch: None,
             controller_pods: ControllerPodState::default(),
             kube_events: KubeEventStore::default(),
+            logs: super::logs::LogState::default(),
             log_path: None,
             degraded_watchers: HashSet::new(),
         }
@@ -378,6 +381,7 @@ impl App {
         self.resource_objects.clear();
         self.controller_pods.clear();
         self.kube_events.clear();
+        self.logs.stop();
         self.degraded_watchers.clear();
         self.view_state.selected_index = 0;
         self.view_state.scroll_offset = 0;
@@ -544,8 +548,28 @@ impl App {
                 .selected_resource_key
                 .as_deref()
                 .and_then(ResourceKey::parse),
-            View::Help => None,
+            // Logs show controller pods, which are not watched Flux resources.
+            View::Logs | View::Help => None,
         }
+    }
+
+    /// Open the log view streaming the given controller pod. The pod list
+    /// comes from the controller pod watch, so the namespace is the
+    /// configured controller namespace.
+    pub(crate) fn open_log_view(&mut self, pod_name: &str) {
+        // Remember the root view we came from so Back returns there (and a
+        // live events feed keeps its watcher).
+        if matches!(
+            self.view_state.current_view,
+            View::ResourceList | View::ResourceFavorites | View::EventList
+        ) {
+            self.view_state.previous_list_view = self.view_state.current_view;
+        }
+        let namespace = self.config.default_controller_namespace.clone();
+        self.logs.request(namespace, pod_name.to_string());
+        self.view_state.log_scroll_offset = 0;
+        self.view_state.text_search.clear();
+        self.view_state.current_view = View::Logs;
     }
 
     /// The watched Flux resource the current view points at, when the
