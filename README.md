@@ -32,6 +32,7 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 - **Resource operations** - Suspend, resume, reconcile, and delete Flux resources
 - **YAML viewing** - Inspect full resource manifests
 - **Kubernetes Events** - Per-resource events in the describe view, plus a live `:events` feed for the current namespace or cluster
+- **Controller logs** - Stream any Flux controller pod's logs live with `:logs` (follow, search, bounded buffer)
 - **Graph visualization** - Visualize resource relationships and dependencies (Kustomization, HelmRelease, etc.)
 - **Reconciliation history** - View reconciliation history for resources that track it
 - **Favorites** - Mark frequently accessed resources for quick access
@@ -145,6 +146,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `:ns all` - View all namespaces
 - `:favorites` or `:fav` - View favorite resources
 - `:events` or `:ev` - Live Kubernetes events feed (current namespace scope)
+- `:logs [pod]` - Stream a Flux controller pod's logs (submenu without argument)
 - `:skin {skin-name}` - set skin directly
 - `:skin` - open interactive theme selection menu with live preview (17 built-in themes + custom)
 - `:q` or `:q!` - Quit

@@ -56,6 +56,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         (":favorites", "View favorites"),
         (":fav", "View favorites"),
         (":events", "Live Kubernetes events feed"),
+        (":logs [pod]", "Stream controller logs"),
         (":q", "Quit application"),
     ];
     render_help_column(f, column_chunks[1], "GENERAL", &general_items, theme);
@@ -68,8 +69,9 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         ("<Ctrl+b>/<PgUp>", "Page up"),
         ("<Enter>", "Open details / focused graph node"),
         ("<N>/<A>/<T>/<S>", "Sort name/age/type/status"),
-        ("</>", "Search in YAML/describe/trace"),
+        ("</>", "Search in YAML/describe/trace/logs"),
         ("<n>/<N>", "Next/prev search match"),
+        ("<G>", "Follow newest line (logs view)"),
         ("<q>/<Esc>", "Back / quit at root"),
     ];
     render_help_column(f, column_chunks[2], "NAVIGATION", &nav_items, theme);

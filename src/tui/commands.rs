@@ -22,6 +22,10 @@ pub const APP_COMMANDS: &[Command] = &[
         takes_args: false,
     },
     Command {
+        name: "logs",
+        takes_args: true,
+    },
+    Command {
         name: "healthy",
         takes_args: false,
     },
@@ -142,6 +146,15 @@ pub fn find_matching_commands(prefix: &str) -> Vec<String> {
 pub fn is_events_command(cmd: &str) -> bool {
     let cmd_lower = cmd.to_lowercase();
     cmd_lower == "events" || cmd_lower == "event" || cmd_lower == "ev"
+}
+
+/// Check if command opens the controller log viewer (with or without a pod argument)
+pub fn is_logs_command(cmd: &str) -> bool {
+    let cmd_lower = cmd.to_lowercase();
+    cmd_lower == "logs"
+        || cmd_lower == "log"
+        || cmd_lower.starts_with("logs ")
+        || cmd_lower.starts_with("log ")
 }
 
 /// Check if command is readonly (handles both "readonly" and "read-only")
@@ -332,6 +345,42 @@ impl CommandSubmenu for ThemeSubmenu {
 
 /// Get submenu for a command if it supports submenus
 ///
+/// Build the controller pod submenu for `:logs` from the watched controller
+/// pods (shown with their readiness so a crashing controller stands out).
+pub fn logs_submenu(
+    controller_pods: &[crate::tui::app::state::ControllerPodInfo],
+    no_icons: bool,
+) -> Option<SubmenuState> {
+    if controller_pods.is_empty() {
+        return None;
+    }
+
+    let mut pods: Vec<_> = controller_pods.to_vec();
+    pods.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let items: Vec<SubmenuItem> = pods
+        .into_iter()
+        .map(|pod| {
+            // Readiness marker follows the list view's icon convention,
+            // with text alternatives when icons are disabled.
+            let marker = match (pod.ready, no_icons) {
+                (true, false) => "●",
+                (false, false) => "○",
+                (true, true) => "OK ",
+                (false, true) => "ERR",
+            };
+            let display = format!("{} {}", marker, pod.name);
+            SubmenuItem::with_display(pod.name, display)
+        })
+        .collect();
+
+    Some(
+        SubmenuState::new("logs".to_string(), items)
+            .with_title("Controller Logs".to_string())
+            .with_help("j/k: Navigate | Enter: Stream logs | Esc: Cancel".to_string()),
+    )
+}
+
 /// Returns None if the command doesn't support submenus or if an argument was provided.
 pub fn get_command_submenu(
     cmd: &str,
@@ -504,5 +553,48 @@ mod tests {
         assert!(is_all_command("ALL"));
         assert!(is_all_command("CLEAR"));
         assert!(!is_all_command("ks"));
+    }
+
+    #[test]
+    fn test_is_logs_command_with_and_without_args() {
+        assert!(is_logs_command("logs"));
+        assert!(is_logs_command("log"));
+        assert!(is_logs_command("LOGS source-controller"));
+        assert!(is_logs_command("log source-controller"));
+        assert!(!is_logs_command("logstash"));
+        assert!(!is_logs_command("ks"));
+    }
+
+    fn controller_pod(name: &str, ready: bool) -> crate::tui::app::state::ControllerPodInfo {
+        crate::tui::app::state::ControllerPodInfo {
+            name: name.to_string(),
+            ready,
+            version: None,
+        }
+    }
+
+    #[test]
+    fn test_logs_submenu_sorts_pods_and_marks_readiness() {
+        assert!(
+            logs_submenu(&[], false).is_none(),
+            "no pods means no submenu"
+        );
+
+        let pods = vec![
+            controller_pod("source-controller-b", true),
+            controller_pod("helm-controller-a", false),
+        ];
+        let submenu = logs_submenu(&pods, false).expect("pods produce a submenu");
+        assert_eq!(submenu.command, "logs");
+        // Sorted by name; value is the bare pod name for the :logs dispatch
+        assert_eq!(submenu.items[0].value, "helm-controller-a");
+        assert_eq!(submenu.items[1].value, "source-controller-b");
+        assert!(submenu.items[0].display_text.starts_with('○'));
+        assert!(submenu.items[1].display_text.starts_with('●'));
+
+        // no_icons swaps the markers for text alternatives
+        let submenu = logs_submenu(&pods, true).unwrap();
+        assert!(submenu.items[0].display_text.starts_with("ERR"));
+        assert!(submenu.items[1].display_text.starts_with("OK"));
     }
 }

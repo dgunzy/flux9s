@@ -26,6 +26,7 @@ const COMMAND_TABLE: &[(fn(&str) -> bool, CommandHandler)] = &[
     (commands::is_unhealthy_command, App::cmd_filter_unhealthy),
     (commands::is_favorites_command, App::cmd_show_favorites),
     (commands::is_events_command, App::cmd_show_events),
+    (commands::is_logs_command, App::cmd_show_logs),
     (commands::is_all_command, App::cmd_show_all),
 ];
 
@@ -35,6 +36,10 @@ impl App {
     /// Ctrl+F so all scroll keys behave identically in every view.
     fn scroll_down(&mut self, amount: usize) {
         let view = self.view_state.current_view;
+        // Manual scrolling in the log view pauses following (G resumes).
+        if view == View::Logs {
+            self.logs.follow = false;
+        }
         // In the graph, j/Down/PageDown move keyboard focus between nodes instead
         // of free-scrolling; the renderer scrolls to keep the focused node on screen.
         if view == View::ResourceGraph {
@@ -56,6 +61,10 @@ impl App {
     /// up when a list view is active (keeping the selection visible).
     fn scroll_up(&mut self, amount: usize) {
         let view = self.view_state.current_view;
+        // Manual scrolling in the log view pauses following (G resumes).
+        if view == View::Logs {
+            self.logs.follow = false;
+        }
         if view == View::ResourceGraph {
             self.move_graph_focus(false);
         } else if let Some(offset) = view.scroll_offset_mut(&mut self.view_state) {
@@ -349,6 +358,10 @@ impl App {
                 self.ui_state.command_mode = true;
                 self.ui_state.command_buffer.clear();
             }
+            // Jump to the newest log line and resume following.
+            crossterm::event::KeyCode::Char('G') if self.view_state.current_view == View::Logs => {
+                self.logs.follow = true;
+            }
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') => {
                 self.scroll_up(1);
             }
@@ -574,6 +587,10 @@ impl App {
                     self.stop_kube_events_watch();
                     self.view_state.current_view = View::ResourceList;
                     self.selection_state.selected_resource_key = None;
+                } else if self.view_state.current_view == View::Logs {
+                    self.logs.stop();
+                    self.view_state.text_search.clear();
+                    self.view_state.current_view = self.view_state.previous_list_view;
                 }
             }
             _ => {}
@@ -730,6 +747,8 @@ impl App {
                                 format!("Switching to context '{}'...", value),
                                 false,
                             ));
+                        } else if command == "logs" {
+                            self.open_log_view(&value);
                         } else if command == "skin" {
                             // Change theme (already previewed, so just confirm)
                             match self.set_theme(&value) {
@@ -922,6 +941,13 @@ impl App {
             View::EventList => {
                 self.stop_kube_events_watch();
                 self.view_state.current_view = View::ResourceList;
+                None
+            }
+            View::Logs => {
+                // Stop the stream; return to wherever logs were opened from.
+                self.logs.stop();
+                self.view_state.text_search.clear();
+                self.view_state.current_view = self.view_state.previous_list_view;
                 None
             }
             View::Help => {
@@ -1468,6 +1494,43 @@ impl App {
         self.start_kube_events_watch();
         self.view_state.current_view = View::EventList;
         self.reset_list_position();
+    }
+
+    /// `:logs [pod]` — stream a Flux controller pod's logs. Without an
+    /// argument, opens a submenu of the discovered controller pods; with one,
+    /// matches a pod by exact name or unique prefix.
+    fn cmd_show_logs(&mut self, cmd: &str) {
+        let arg = commands::extract_command_arg(cmd, "logs")
+            .or_else(|| commands::extract_command_arg(cmd, "log"));
+        let pods = self.controller_pods.get_all_pods();
+
+        let Some(prefix) = arg else {
+            match commands::logs_submenu(&pods, self.config.ui.no_icons) {
+                Some(submenu) => self.view_state.submenu_state = Some(submenu),
+                None => {
+                    self.set_status_message(("No controller pods discovered yet".to_string(), true))
+                }
+            }
+            return;
+        };
+
+        let matched = pods
+            .iter()
+            .find(|pod| pod.name == prefix)
+            .map(|pod| pod.name.clone())
+            .or_else(|| {
+                let mut prefixed = pods.iter().filter(|pod| pod.name.starts_with(&prefix));
+                match (prefixed.next(), prefixed.next()) {
+                    (Some(only), None) => Some(only.name.clone()),
+                    _ => None, // no match, or ambiguous prefix
+                }
+            });
+        match matched {
+            Some(pod) => self.open_log_view(&pod),
+            None => {
+                self.set_status_message((format!("No controller pod matching '{}'", prefix), true))
+            }
+        }
     }
 
     /// `:all` — clear resource-type and health filters and return to the main
@@ -2186,5 +2249,109 @@ mod tests {
 
         app.view_state.filter.clear();
         assert_eq!(app.filtered_kube_events().len(), 2);
+    }
+
+    fn add_controller_pod(app: &mut App, name: &str) {
+        app.controller_pods.upsert_pod(
+            name.to_string(),
+            crate::tui::app::state::ControllerPodInfo {
+                name: name.to_string(),
+                ready: true,
+                version: Some("v1.0.0".to_string()),
+            },
+        );
+    }
+
+    #[test]
+    fn logs_command_matches_pod_by_exact_name_and_prefix() {
+        let mut app = create_test_app(false);
+        add_controller_pod(&mut app, "source-controller-abc123");
+        add_controller_pod(&mut app, "source-watcher-def456");
+
+        // Unique prefix opens the log view
+        app.ui_state.command_buffer = "logs source-c".to_string();
+        app.execute_command();
+        assert_eq!(app.view_state.current_view, View::Logs);
+        assert!(app.logs.follow, "streams start in follow mode");
+
+        // Back stops the session and returns to the list
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert!(app.logs.session.is_none(), "Esc stops the stream");
+
+        // Ambiguous prefix ("source" matches both pods) does not open a stream
+        app.ui_state.command_buffer = "logs source".to_string();
+        app.execute_command();
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+
+        // No match reports an error
+        app.ui_state.command_buffer = "logs nonexistent".to_string();
+        app.execute_command();
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(msg, is_err)| *is_err && msg.contains("nonexistent"))
+        );
+    }
+
+    #[test]
+    fn logs_command_without_arg_opens_pod_submenu() {
+        let mut app = create_test_app(false);
+
+        // No pods discovered yet: error message, no submenu
+        app.ui_state.command_buffer = "logs".to_string();
+        app.execute_command();
+        assert!(app.view_state.submenu_state.is_none());
+        assert!(app.ui_state.status_message.is_some());
+
+        add_controller_pod(&mut app, "helm-controller-xyz");
+        app.ui_state.command_buffer = "logs".to_string();
+        app.execute_command();
+        let submenu = app
+            .view_state
+            .submenu_state
+            .as_ref()
+            .expect("submenu opens");
+        assert_eq!(submenu.command, "logs");
+        assert_eq!(submenu.items.len(), 1);
+
+        // Selecting a pod opens the log view
+        app.handle_key(make_key(KeyCode::Enter));
+        assert_eq!(app.view_state.current_view, View::Logs);
+        assert!(app.view_state.submenu_state.is_none());
+    }
+
+    #[test]
+    fn log_view_scrolling_pauses_follow_and_g_resumes() {
+        let mut app = create_test_app(false);
+        add_controller_pod(&mut app, "source-controller-abc");
+        app.ui_state.command_buffer = "logs source-controller-abc".to_string();
+        app.execute_command();
+        assert!(app.logs.follow);
+
+        app.handle_key(make_key(KeyCode::Char('k')));
+        assert!(!app.logs.follow, "scrolling up pauses following");
+
+        app.handle_key(make_key(KeyCode::Char('G')));
+        assert!(app.logs.follow, "G resumes following");
+    }
+
+    #[test]
+    fn logs_from_event_list_returns_to_event_list() {
+        let mut app = create_test_app(false);
+        add_controller_pod(&mut app, "source-controller-abc");
+        app.view_state.current_view = View::EventList;
+
+        app.ui_state.command_buffer = "logs source-controller-abc".to_string();
+        app.execute_command();
+        assert_eq!(app.view_state.current_view, View::Logs);
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(
+            app.view_state.current_view,
+            View::EventList,
+            "Back returns to the events feed logs were opened from"
+        );
     }
 }

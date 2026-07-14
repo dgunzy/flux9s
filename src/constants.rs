@@ -14,6 +14,13 @@ pub const MAX_RECONCILIATION_HISTORY: usize = 50;
 /// busy cluster can't grow memory without limit.
 pub const MAX_KUBE_EVENTS: usize = 1000;
 
+/// Cap on the controller log view's line buffer; oldest lines are evicted.
+pub const MAX_LOG_LINES: usize = 5000;
+
+/// How many existing lines the log stream starts with (`tail_lines`) before
+/// following new output.
+pub const LOG_TAIL_LINES: i64 = 500;
+
 /// Status message timeout in seconds
 pub const STATUS_MESSAGE_TIMEOUT_SECS: u64 = 4;
 

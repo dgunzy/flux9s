@@ -449,8 +449,63 @@ pub async fn run_tui_with_async_init(
                             let _ = tx.send(result);
                         });
                     }
+
+                    // Start a queued controller log stream. The task tails the
+                    // pod and follows new output until aborted (view closed)
+                    // or the stream ends.
+                    if let Some((req, tx)) = app.logs.dispatch() {
+                        let client = client.clone();
+                        let handle = tokio::spawn(async move {
+                            use crate::tui::app::logs::LogEvent;
+                            use futures::{AsyncBufReadExt, TryStreamExt};
+                            use k8s_openapi::api::core::v1::Pod;
+
+                            tracing::debug!("Streaming logs for {}/{}", req.namespace, req.pod);
+                            let api: kube::Api<Pod> = kube::Api::namespaced(client, &req.namespace);
+                            let params = kube::api::LogParams {
+                                follow: true,
+                                tail_lines: Some(crate::constants::LOG_TAIL_LINES),
+                                ..Default::default()
+                            };
+                            match api.log_stream(&req.pod, &params).await {
+                                Ok(stream) => {
+                                    let mut lines = stream.lines();
+                                    loop {
+                                        match lines.try_next().await {
+                                            Ok(Some(line)) => {
+                                                if tx.send(LogEvent::Line(line)).is_err() {
+                                                    break; // View closed
+                                                }
+                                            }
+                                            Ok(None) => {
+                                                let _ = tx.send(LogEvent::Ended);
+                                                break;
+                                            }
+                                            Err(e) => {
+                                                let _ = tx.send(LogEvent::Error(e.to_string()));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to start log stream for {}/{}: {}",
+                                        req.namespace,
+                                        req.pod,
+                                        e
+                                    );
+                                    let _ = tx.send(LogEvent::Error(e.to_string()));
+                                }
+                            }
+                        });
+                        app.logs.set_handle(handle);
+                    }
                 }
             }
+
+            // Drain streamed log lines into the log view's buffer.
+            app.logs.drain();
 
             // Poll fetch results and store them for the views.
             if let Some(result) = app.async_state.yaml.try_recv() {

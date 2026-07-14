@@ -511,6 +511,18 @@ impl App {
                         f.render_widget(paragraph, area);
                     }
                 }
+                View::Logs => {
+                    views::render_controller_logs(
+                        f,
+                        area,
+                        self.logs.session.as_ref(),
+                        self.logs.is_loading(),
+                        self.logs.follow,
+                        &mut self.view_state.log_scroll_offset,
+                        &mut self.view_state.text_search,
+                        &self.theme,
+                    );
+                }
                 View::EventList => {
                     let events = self.filtered_kube_events();
                     views::render_kube_events(

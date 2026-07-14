@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Controller pod log viewer (#192): `:logs` opens a submenu of the discovered
+  Flux controller pods (`:logs <pod|prefix>` streams one directly). Logs are
+  tailed and followed live in a bounded buffer; scrolling up pauses following
+  and `G` jumps back to the newest line; `/` searches the buffer. The stream
+  runs only while the view is open.
+- ResourceSet step visualization (#193): the detail view of a step-based
+  ResourceSet lists its ordered steps with per-step phase (done / applying /
+  failed / pending) derived from the status conditions, plus each step's
+  resource count, template marker, and timeout.
+
 ## [0.11.1] - 2026-07-13
 
 ### Changes\n- Version bump to 0.11.1
