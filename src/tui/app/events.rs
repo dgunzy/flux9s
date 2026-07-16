@@ -26,6 +26,7 @@ const COMMAND_TABLE: &[(fn(&str) -> bool, CommandHandler)] = &[
     (commands::is_unhealthy_command, App::cmd_filter_unhealthy),
     (commands::is_favorites_command, App::cmd_show_favorites),
     (commands::is_events_command, App::cmd_show_events),
+    (commands::is_pulse_command, App::cmd_show_pulse),
     (commands::is_logs_command, App::cmd_show_logs),
     (commands::is_all_command, App::cmd_show_all),
 ];
@@ -653,6 +654,9 @@ impl App {
                     self.logs_after_workload_load = false;
                     self.view_state.text_search.clear();
                     self.view_state.current_view = View::WorkloadList;
+                } else if self.view_state.current_view == View::Pulse {
+                    self.view_state.text_search.clear();
+                    self.view_state.current_view = View::ResourceList;
                 }
             }
             _ => {}
@@ -1128,6 +1132,11 @@ impl App {
                 self.logs_after_workload_load = false;
                 self.view_state.text_search.clear();
                 self.view_state.current_view = View::WorkloadList;
+                None
+            }
+            View::Pulse => {
+                self.view_state.text_search.clear();
+                self.view_state.current_view = View::ResourceList;
                 None
             }
             View::Help => {
@@ -1713,6 +1722,13 @@ impl App {
         self.start_kube_events_watch();
         self.view_state.current_view = View::EventList;
         self.reset_list_position();
+    }
+
+    /// `:pulse` — open the cluster pulse dashboard.
+    fn cmd_show_pulse(&mut self, _cmd: &str) {
+        self.view_state.pulse_scroll_offset = 0;
+        self.view_state.text_search.clear();
+        self.view_state.current_view = View::Pulse;
     }
 
     /// `:logs [pod]` — stream a Flux controller pod's logs. Without an
@@ -2851,5 +2867,20 @@ mod tests {
 
         assert!(app.view_state.submenu_state.is_none(), "submenu closes");
         assert!(app.ui_state.command_mode, "command mode opens");
+    }
+
+    #[test]
+    fn pulse_command_opens_dashboard_and_esc_returns() {
+        let mut app = create_test_app(false);
+        add_resource(&mut app);
+
+        app.ui_state.command_buffer = "pulse".to_string();
+        let result = app.execute_command();
+
+        assert_eq!(result, None);
+        assert_eq!(app.view_state.current_view, View::Pulse);
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
     }
 }

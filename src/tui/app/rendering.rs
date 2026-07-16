@@ -515,6 +515,23 @@ impl App {
                         &self.theme,
                     );
                 }
+                View::Pulse => {
+                    let resources = self.pulse_resources();
+                    // Cloned so the &self method borrow ends before the
+                    // &mut view_state borrows below.
+                    let flux_report = self.flux_report_object().cloned();
+                    views::render_pulse(
+                        f,
+                        area,
+                        &resources,
+                        flux_report.as_ref(),
+                        &self.controller_pods.get_all_pods(),
+                        self.namespace.as_deref(),
+                        &mut self.view_state.pulse_scroll_offset,
+                        &mut self.view_state.text_search,
+                        &self.theme,
+                    );
+                }
                 View::Help => {
                     render_help(f, area, &self.theme, self.namespace_hotkeys());
                 }

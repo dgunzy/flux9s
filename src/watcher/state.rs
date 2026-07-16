@@ -104,6 +104,25 @@ pub struct ResourceInfo {
     pub reconciliation_history: Vec<ReconciliationEvent>, // Limited to last N events
 }
 
+impl ResourceInfo {
+    /// Effective readiness: unknown (`None`) counts as ready — stateless
+    /// kinds are normalized upstream, so `None` means "no signal yet".
+    pub fn effective_ready(&self) -> bool {
+        self.ready.unwrap_or(true)
+    }
+
+    /// Effective suspension: unknown counts as not suspended.
+    pub fn effective_suspended(&self) -> bool {
+        self.suspended.unwrap_or(false)
+    }
+
+    /// The single health classification used by the health filters and the
+    /// pulse dashboard: healthy = ready and not suspended.
+    pub fn is_healthy(&self) -> bool {
+        self.effective_ready() && !self.effective_suspended()
+    }
+}
+
 /// Extract labels from a Kubernetes resource JSON object
 pub fn extract_labels(obj: &serde_json::Value) -> HashMap<String, String> {
     obj.get("metadata")

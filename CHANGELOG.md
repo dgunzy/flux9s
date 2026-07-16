@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Cluster pulse dashboard (#195): `:pulse` answers "is my GitOps pipeline
+  healthy?" at a glance — ready/failed/suspended totals and per-kind counts
+  for the current namespace scope, the most recent failures with their
+  messages for fast triage, and the FluxReport's distribution, entitlement,
+  operator, and sync info alongside live controller pod health. Renders
+  instantly from the watch state (no fetch) and updates in real time.
+
+### Added
 - Workload drill-down (#194): `Enter` on a graph workload group opens the
   workload list; `Enter` on a workload opens its detail — rollout status and
   replica health, containers with images, a pods table (phase, ready,

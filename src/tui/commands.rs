@@ -22,6 +22,10 @@ pub const APP_COMMANDS: &[Command] = &[
         takes_args: false,
     },
     Command {
+        name: "pulse",
+        takes_args: false,
+    },
+    Command {
         name: "logs",
         takes_args: true,
     },
@@ -146,6 +150,12 @@ pub fn find_matching_commands(prefix: &str) -> Vec<String> {
 pub fn is_events_command(cmd: &str) -> bool {
     let cmd_lower = cmd.to_lowercase();
     cmd_lower == "events" || cmd_lower == "event" || cmd_lower == "ev"
+}
+
+/// Check if command opens the pulse dashboard
+pub fn is_pulse_command(cmd: &str) -> bool {
+    let cmd_lower = cmd.to_lowercase();
+    cmd_lower == "pulse" || cmd_lower == "dashboard"
 }
 
 /// Check if command opens the controller log viewer (with or without a pod argument)

@@ -57,6 +57,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         (":favorites", "View favorites"),
         (":fav", "View favorites"),
         (":events", "Live Kubernetes events feed"),
+        (":pulse", "Cluster health dashboard"),
         (":logs [pod]", "Stream controller logs"),
         (":q", "Quit application"),
     ];

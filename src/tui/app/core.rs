@@ -332,6 +332,25 @@ impl App {
         self.kube_events.clear();
     }
 
+    /// All watched resources in the current namespace scope — the pulse
+    /// dashboard's input. Ignores the list's type/text filters so the pulse
+    /// always shows the whole scope.
+    pub(crate) fn pulse_resources(&self) -> Vec<crate::watcher::ResourceInfo> {
+        let mut resources = self.state.all();
+        if let Some(ref namespace) = self.namespace {
+            resources.retain(|r| r.namespace == *namespace);
+        }
+        resources
+    }
+
+    /// The FluxReport object, when the Flux Operator publishes one.
+    pub(crate) fn flux_report_object(&self) -> Option<&serde_json::Value> {
+        self.resource_objects
+            .iter()
+            .find(|(key, _)| key.starts_with("FluxReport:"))
+            .map(|(_, obj)| obj)
+    }
+
     /// The live events feed filtered by the list filter (matches type, reason,
     /// object, source, namespace and message), newest first. Returns owned
     /// clones so callers can hold the list while mutating view state.
@@ -552,9 +571,11 @@ impl App {
                 .selected_resource_key
                 .as_deref()
                 .and_then(ResourceKey::parse),
-            // Logs and workload views show pods/workloads, which are not
-            // watched Flux resources.
-            View::Logs | View::WorkloadList | View::WorkloadDetail | View::Help => None,
+            // Logs, workload views and the pulse dashboard don't point at a
+            // single watched Flux resource.
+            View::Logs | View::WorkloadList | View::WorkloadDetail | View::Pulse | View::Help => {
+                None
+            }
         }
     }
 
@@ -704,18 +725,10 @@ impl App {
 
         match self.view_state.health_filter {
             HealthFilter::Healthy => {
-                resources.retain(|r| {
-                    let is_ready = r.ready.unwrap_or(true);
-                    let is_suspended = r.suspended.unwrap_or(false);
-                    is_ready && !is_suspended
-                });
+                resources.retain(crate::watcher::ResourceInfo::is_healthy);
             }
             HealthFilter::Unhealthy => {
-                resources.retain(|r| {
-                    let is_ready = r.ready.unwrap_or(true);
-                    let is_suspended = r.suspended.unwrap_or(false);
-                    !is_ready || is_suspended
-                });
+                resources.retain(|r| !r.is_healthy());
             }
             HealthFilter::All => {}
         }

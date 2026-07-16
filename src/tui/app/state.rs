@@ -31,6 +31,9 @@ pub enum View {
     /// One workload's rollout status, containers, pods, and events (#194).
     /// Back returns to the workload list.
     WorkloadDetail,
+    /// Cluster pulse dashboard (#195): per-kind health counts, recent
+    /// failures, and FluxReport distribution info. Opened with `:pulse`.
+    Pulse,
     #[allow(dead_code)] // Reserved for future alternative help view implementation
     Help,
 }
@@ -49,6 +52,7 @@ impl View {
             View::ResourceHistory => Some(&mut vs.history_scroll_offset),
             View::Logs => Some(&mut vs.log_scroll_offset),
             View::WorkloadDetail => Some(&mut vs.workload_scroll_offset),
+            View::Pulse => Some(&mut vs.pulse_scroll_offset),
             _ => None,
         }
     }
@@ -69,6 +73,7 @@ impl View {
                 | View::ResourceTrace
                 | View::Logs
                 | View::WorkloadDetail
+                | View::Pulse
         )
     }
 
@@ -211,6 +216,8 @@ pub struct ViewState {
     pub log_scroll_offset: usize,
     /// Scroll offset for the workload detail view
     pub workload_scroll_offset: usize,
+    /// Scroll offset for the pulse dashboard
+    pub pulse_scroll_offset: usize,
     /// Where Back from the log view returns to, when logs were opened from
     /// somewhere other than a root list view (e.g. a workload's pods).
     /// Consumed on Back; `None` falls back to `previous_list_view`.
@@ -259,6 +266,7 @@ impl Default for ViewState {
             history_scroll_offset: 0,
             log_scroll_offset: 0,
             workload_scroll_offset: 0,
+            pulse_scroll_offset: 0,
             logs_back_view: None,
             workload_rows: Vec::new(),
             graph_scroll_offset: 0,
@@ -614,6 +622,17 @@ mod tests {
         assert!(View::Logs.is_text_search_view());
         assert!(
             View::Logs
+                .scroll_offset_mut(&mut ViewState::default())
+                .is_some()
+        );
+
+        // The pulse dashboard behaves the same way: a root-level,
+        // searchable, line-scrolled text view.
+        assert!(!View::Pulse.is_nested_view());
+        assert!(!View::Pulse.is_list_view());
+        assert!(View::Pulse.is_text_search_view());
+        assert!(
+            View::Pulse
                 .scroll_offset_mut(&mut ViewState::default())
                 .is_some()
         );

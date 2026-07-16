@@ -97,6 +97,8 @@ Type these commands in command mode (press `:`):
 | `:fav`             | Alias for `:favorites`                   |
 | `:events`          | Live Kubernetes events feed              |
 | `:ev`              | Alias for `:events`                      |
+| `:pulse`           | Cluster health dashboard                 |
+| `:dashboard`       | Alias for `:pulse`                       |
 | `:logs`            | Controller log viewer (pod submenu)      |
 | `:logs <pod>`      | Stream a controller pod by name/prefix   |
 | `:skin <name>`     | Change theme/skin (direct)               |
@@ -286,6 +288,19 @@ resource list's MESSAGE column truncates.
 
 Events also appear in the describe view (`d`): each resource's describe output
 ends with a kubectl-style Events section listing that resource's recent events.
+
+### Pulse Dashboard (`:pulse`)
+
+An at-a-glance answer to "is my GitOps pipeline healthy?", updating in real
+time from the watch state:
+
+- Ready / failed / suspended totals and a per-kind breakdown, scoped to the
+  current namespace (or the whole cluster with `:ns all`)
+- The most recent failures with their reconcile messages, for fast triage
+  (jump to the full list with `:unhealthy`)
+- Flux distribution info from the FluxReport — version, install status,
+  entitlement, operator version, and sync source — plus live controller
+  pod health
 
 ### Controller Logs (`:logs`)
 
