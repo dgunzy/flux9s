@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opt-in dynamic CRD discovery (#197): with `discoverFluxResources: true`,
+  flux9s watches CRDs labeled `app.kubernetes.io/part-of=flux` — the same
+  label the Flux Operator's FluxReport reads — and shows their resources
+  live: unified list with readiness from standard conditions, `:` commands
+  from the CRD's own names and short names, `y`/`d`, filtering, and pulse
+  counts. Kinds register and deregister dynamically as CRDs are labeled or
+  deleted. Discovered kinds are strictly view-only (mutating operations are
+  gated to built-in Flux kinds), built-in CRDs are excluded from discovery,
+  and with the flag off (default) no CRD watch runs at all.
 - Cluster pulse dashboard (#195): `:pulse` answers "is my GitOps pipeline
   healthy?" at a glance — ready/failed/suspended totals and per-kind counts
   for the current namespace scope, the most recent failures with their

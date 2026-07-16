@@ -132,9 +132,13 @@ pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String,
                         resource_type.to_lowercase() + "es",
                     ));
                 }
-                // For all other resources (including CRDs), return an error
-                // The caller should handle this by using DynamicObject with proper discovery
+                // For all other resources: consult the dynamically
+                // discovered kinds (#197) before giving up. The registry is
+                // empty unless discoverFluxResources is enabled.
                 _ => {
+                    if let Some(extra) = crate::models::extra_kinds::global().get(resource_type) {
+                        return Ok(extra.gvk());
+                    }
                     return Err(anyhow::anyhow!(
                         "Resource type '{}' is not a Flux or Kubernetes built-in resource. \
                     For CRDs and custom resources, use DynamicObject with API discovery.",

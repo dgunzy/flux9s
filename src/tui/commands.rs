@@ -134,6 +134,22 @@ pub fn find_matching_commands(prefix: &str) -> Vec<String> {
         }
     }
 
+    // Dynamically discovered kinds (#197): kind names, plurals, and CRD
+    // short names complete like built-in resource commands. The registry is
+    // empty unless discovery is enabled, so this adds nothing by default.
+    for extra in crate::models::extra_kinds::global().kind_names() {
+        if let Some(kind) = crate::models::extra_kinds::global().get(&extra) {
+            for alias in std::iter::once(kind.kind.to_lowercase())
+                .chain(std::iter::once(kind.plural.to_lowercase()))
+                .chain(kind.short_names.iter().map(|s| s.to_lowercase()))
+            {
+                if alias.starts_with(&prefix_lower) && !crd_matches.contains(&alias) {
+                    crd_matches.push(alias);
+                }
+            }
+        }
+    }
+
     // Sort matches alphabetically
     crd_matches.sort();
     app_matches.sort();

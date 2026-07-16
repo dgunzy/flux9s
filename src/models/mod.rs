@@ -13,6 +13,9 @@ pub mod _generated;
 // Manual extensions
 pub mod extensions;
 
+// Dynamically discovered extra resource kinds (#197)
+pub mod extra_kinds;
+
 // Flux resource kind definitions
 pub mod flux_resource_kind;
 

@@ -26,6 +26,7 @@ fn create_test_config() -> Config {
         read_only: false,
         default_namespace: "".to_string(),
         default_controller_namespace: "".to_string(),
+        discover_flux_resources: false,
         namespace_hotkeys: vec![],
         ui: UiConfig {
             enable_mouse: false,

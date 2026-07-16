@@ -343,6 +343,23 @@ impl App {
         resources
     }
 
+    /// Drop every watched resource of a kind (a discovered CRD was deleted).
+    pub(crate) fn purge_kind(&mut self, kind: &str) {
+        let prefix = format!("{}:", kind);
+        let keys: Vec<String> = self
+            .state
+            .all()
+            .iter()
+            .filter(|r| r.resource_type == kind)
+            .map(|r| crate::watcher::resource_key(&r.namespace, &r.name, &r.resource_type))
+            .collect();
+        for key in keys {
+            self.state.remove(&key);
+        }
+        self.resource_objects
+            .retain(|key, _| !key.starts_with(&prefix));
+    }
+
     /// The FluxReport object, when the Flux Operator publishes one.
     pub(crate) fn flux_report_object(&self) -> Option<&serde_json::Value> {
         self.resource_objects
@@ -890,6 +907,7 @@ mod tests {
             read_only: false,
             default_namespace: "".to_string(),
             default_controller_namespace: "".to_string(),
+            discover_flux_resources: false,
             namespace_hotkeys: vec![],
             ui: UiConfig {
                 enable_mouse: false,

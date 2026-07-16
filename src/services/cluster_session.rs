@@ -77,6 +77,7 @@ impl ClusterSession {
             client.clone(),
             namespace.clone(),
             controller_namespace.to_string(),
+            false, // headless sessions don't run CRD discovery
         );
 
         watcher
@@ -127,6 +128,7 @@ impl ClusterSession {
             client.clone(),
             namespace.clone(),
             config.default_controller_namespace.clone(),
+            false, // headless sessions don't run CRD discovery
         );
 
         watcher
@@ -180,6 +182,7 @@ impl ClusterSession {
             client.clone(),
             namespace.clone(),
             config.default_controller_namespace.clone(),
+            false, // headless sessions don't run CRD discovery
         );
 
         watcher
@@ -329,7 +332,9 @@ impl ClusterSession {
             | WatchEvent::PodDeleted(_)
             | WatchEvent::DeploymentApplied(_)
             | WatchEvent::KubeEventApplied(_)
-            | WatchEvent::KubeEventDeleted(_) => {}
+            | WatchEvent::KubeEventDeleted(_)
+            | WatchEvent::ExtraKindDiscovered(_)
+            | WatchEvent::ExtraKindRemoved(_) => {}
         }
     }
 
@@ -372,6 +377,7 @@ impl ClusterSession {
             new_client.clone(),
             self.namespace.clone(),
             controller_namespace.to_string(),
+            false, // headless sessions don't run CRD discovery
         );
 
         new_watcher

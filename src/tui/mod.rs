@@ -172,6 +172,7 @@ pub async fn run_tui_with_async_init(
     let kubeconfig_path_clone = kubeconfig_path.map(|p| p.to_path_buf());
     let controller_namespace = config.default_controller_namespace.clone();
     let controller_namespace_for_init = controller_namespace.clone();
+    let discovery_enabled = config.discover_flux_resources;
     let (kube_init_tx, mut kube_init_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         tracing::debug!("Starting async Kubernetes initialization");
@@ -271,6 +272,7 @@ pub async fn run_tui_with_async_init(
             client.clone(),
             default_namespace.clone(),
             controller_namespace_for_init,
+            discovery_enabled,
         );
 
         // Start watching all Flux resources
@@ -693,6 +695,7 @@ pub async fn run_tui_with_async_init(
                                         new_client.clone(),
                                         new_default_namespace.clone(),
                                         controller_namespace.clone(),
+                                        app.config.discover_flux_resources,
                                     );
 
                                 // Start watching all resources with the new watcher
@@ -927,6 +930,31 @@ pub async fn run_tui_with_async_init(
                         }
                         crate::watcher::WatchEvent::KubeEventDeleted(uid) => {
                             app.kube_events.remove(&uid);
+                        }
+                        crate::watcher::WatchEvent::ExtraKindDiscovered(extra) => {
+                            // Register (idempotent) and (re)start the dynamic
+                            // watcher — a no-op when it is already running,
+                            // which self-heals after namespace/context restarts.
+                            if crate::models::extra_kinds::global().insert(extra.clone()) {
+                                tracing::info!(
+                                    "Discovered Flux-labeled kind {} ({}/{})",
+                                    extra.kind,
+                                    extra.group,
+                                    extra.version
+                                );
+                            }
+                            if let Some(ref mut w) = app.watcher {
+                                w.watch_extra(&extra);
+                            }
+                        }
+                        crate::watcher::WatchEvent::ExtraKindRemoved(kind) => {
+                            if crate::models::extra_kinds::global().remove(&kind).is_some() {
+                                tracing::info!("Discovered kind {} removed (CRD deleted)", kind);
+                                if let Some(ref mut w) = app.watcher {
+                                    w.stop_extra(&kind);
+                                }
+                                app.purge_kind(&kind);
+                            }
                         }
                     }
                 }

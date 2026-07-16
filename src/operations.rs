@@ -363,8 +363,10 @@ impl FluxOperation for DeleteOperation {
         "Delete"
     }
 
-    fn is_valid_for(&self, _resource_type: &str) -> bool {
-        true // Delete works for all resources
+    fn is_valid_for(&self, resource_type: &str) -> bool {
+        // All built-in Flux kinds; dynamically discovered kinds (#197) are
+        // view-only, so mutations never apply to them.
+        crate::models::FluxResourceKind::parse_optional(resource_type).is_some()
     }
 }
 
@@ -464,8 +466,10 @@ impl FluxOperation for ReconcileOperation {
         "Reconcile"
     }
 
-    fn is_valid_for(&self, _resource_type: &str) -> bool {
-        true // Reconcile works for all Flux resources
+    fn is_valid_for(&self, resource_type: &str) -> bool {
+        // All built-in Flux kinds; dynamically discovered kinds (#197) are
+        // view-only, so the reconcile annotation never applies to them.
+        crate::models::FluxResourceKind::parse_optional(resource_type).is_some()
     }
 }
 

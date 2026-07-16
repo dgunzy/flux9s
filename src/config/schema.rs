@@ -21,6 +21,14 @@ pub struct Config {
     #[serde(default = "default_namespace")]
     pub default_controller_namespace: String,
 
+    /// Opt-in dynamic discovery of Flux-adjacent CRDs (#197). When true,
+    /// flux9s watches CustomResourceDefinitions labeled
+    /// `app.kubernetes.io/part-of=<flux instance>` — the same label the Flux
+    /// Operator's FluxReport uses — and shows their resources with generic
+    /// columns (view-only). Default false: no CRD watch, no extra API calls.
+    #[serde(default)]
+    pub discover_flux_resources: bool,
+
     /// UI configuration
     #[serde(default)]
     pub ui: UiConfig,
@@ -57,6 +65,39 @@ pub struct Config {
 }
 
 impl Config {
+    /// A config with every field populated — the field-enumeration source for
+    /// `config list` and the completeness tests, since `skip_serializing_if`
+    /// hides empty fields from a serialized real config.
+    ///
+    /// Deliberately constructed without `..Default::default()`: adding a
+    /// field to the schema fails compilation here, forcing the reference
+    /// docs, `config get`/`set`, and the docs site to be updated with it.
+    pub fn fully_populated() -> Self {
+        Self {
+            read_only: true,
+            default_namespace: "flux-system".to_string(),
+            default_controller_namespace: "flux-system".to_string(),
+            discover_flux_resources: true,
+            ui: UiConfig {
+                enable_mouse: true,
+                headless: true,
+                no_icons: true,
+                skin: "default".to_string(),
+                skin_read_only: Some("default".to_string()),
+                splashless: true,
+            },
+            namespace_hotkeys: vec!["flux-system".to_string()],
+            context_skins: HashMap::from([("my-context".to_string(), "default".to_string())]),
+            cluster: HashMap::from([(
+                "my-cluster".to_string(),
+                serde_yaml::Value::String("value".to_string()),
+            )]),
+            favorites: vec!["Kustomization:flux-system:my-app".to_string()],
+            default_resource_filter: Some("Kustomization".to_string()),
+            connect_timeout_seconds: default_connect_timeout_seconds(),
+        }
+    }
+
     /// Resolve which skin to use for the given context.
     ///
     /// Priority order:
@@ -150,6 +191,7 @@ impl Default for Config {
             read_only: default_read_only(),
             default_namespace: default_namespace(),
             default_controller_namespace: default_namespace(),
+            discover_flux_resources: false,
             ui: UiConfig::default(),
             namespace_hotkeys: Vec::new(), // Empty means use auto-discovered defaults
             context_skins: HashMap::new(),

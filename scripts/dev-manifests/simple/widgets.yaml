@@ -1,0 +1,34 @@
+# Widget CRs for the discovered-kind fixture (see 00-discovered-crd.yaml).
+# One healthy, one failing — statuses are set in the manifest (the CRD has
+# no status subresource), so readiness renders without a real controller.
+apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: widget-healthy
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  size: large
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: Reconciled
+      message: Widget is operational
+      lastTransitionTime: "2026-07-16T00:00:00Z"
+---
+apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: widget-broken
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  size: small
+status:
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: ProcessingError
+      message: widget assembly failed
+      lastTransitionTime: "2026-07-16T00:00:00Z"

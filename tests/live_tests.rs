@@ -287,3 +287,73 @@ async fn workload_drilldown_fetches_pods_and_containers() {
         "events lookup should succeed"
     );
 }
+
+/// #197: a part-of-labeled CRD on the cluster parses through the real
+/// discovery path, and its instances are listable via the derived
+/// ApiResource — the exact plumbing the dynamic watcher uses. The fixture
+/// (widgets.example.com + two Widget CRs) is planted by dev-clusters.sh.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn labeled_crd_discovers_and_lists_instances() {
+    use flux9s::models::extra_kinds::{ExtraKind, PART_OF_LABEL, PART_OF_VALUE};
+    use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+    use kube::core::DynamicObject;
+
+    let client = client_for(&simple_context()).await;
+
+    let crds: kube::Api<CustomResourceDefinition> = kube::Api::all(client.clone());
+    let crd = eventually("the labeled widgets CRD", 60, || {
+        let crds = crds.clone();
+        async move { crds.get("widgets.example.com").await.ok() }
+    })
+    .await;
+
+    // The fixture carries the operator's part-of label — the discovery
+    // watcher's selector would match it
+    assert_eq!(
+        crd.metadata
+            .labels
+            .as_ref()
+            .and_then(|l| l.get(PART_OF_LABEL))
+            .map(String::as_str),
+        Some(PART_OF_VALUE),
+    );
+
+    // The real discovery parse (guard rails included)
+    let extra = ExtraKind::from_crd(&crd).expect("labeled namespaced CRD should register");
+    assert_eq!(extra.kind, "Widget");
+    assert_eq!(extra.plural, "widgets");
+    assert_eq!(extra.short_names, ["wd"]);
+
+    // Instances list through the derived ApiResource — the same construction
+    // the dynamic watcher and y/d fetches use
+    let (group, version, plural) = extra.gvk();
+    let api_resource = kube::core::ApiResource {
+        api_version: format!("{}/{}", group, version),
+        group,
+        version,
+        kind: extra.kind.clone(),
+        plural,
+    };
+    let widgets: kube::Api<DynamicObject> =
+        kube::Api::namespaced_with(client, "flux-resources", &api_resource);
+    let list = eventually("widget fixtures", 60, || {
+        let widgets = widgets.clone();
+        async move {
+            let list = widgets.list(&Default::default()).await.ok()?;
+            (list.items.len() >= 2).then_some(list)
+        }
+    })
+    .await;
+
+    // Readiness extraction works on the fixtures' standard conditions
+    let mut ready_states = std::collections::HashMap::new();
+    for item in &list.items {
+        let json = serde_json::to_value(item).unwrap();
+        let (_, ready, _, _) = flux9s::watcher::extract_status_fields(&json);
+        ready_states.insert(item.name_any(), ready);
+    }
+    use kube::ResourceExt;
+    assert_eq!(ready_states.get("widget-healthy"), Some(&Some(true)));
+    assert_eq!(ready_states.get("widget-broken"), Some(&Some(false)));
+}

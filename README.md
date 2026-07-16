@@ -35,6 +35,7 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 - **Controller logs** - Stream any Flux controller pod's logs live with `:logs` (follow, search, bounded buffer)
 - **Workload drill-down** - Open a graph workload group to walk Deployments/StatefulSets/DaemonSets: rollout status, containers, pods, events, and pod logs
 - **Pulse dashboard** - `:pulse` shows cluster health at a glance: per-kind counts, recent failures, and Flux distribution info
+- **CRD discovery (opt-in)** - `discoverFluxResources: true` dynamically shows any CRD labeled `app.kubernetes.io/part-of=flux` (Flagger, tofu-controller, ExternalArtifact-SDK controllers), view-only with generic columns
 - **Graph visualization** - Visualize resource relationships and dependencies (Kustomization, HelmRelease, etc.)
 - **Reconciliation history** - View reconciliation history for resources that track it
 - **Favorites** - Mark frequently accessed resources for quick access
