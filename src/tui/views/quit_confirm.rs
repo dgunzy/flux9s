@@ -8,7 +8,7 @@ use crate::tui::theme::Theme;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -88,7 +88,7 @@ pub fn render_quit_confirm(f: &mut Frame, area: Rect, theme: &Theme) {
         .title("Quit flux9s?")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.operation_warning))
-        .style(Style::default().fg(theme.text_primary).bg(Color::Black));
+        .style(Style::default().fg(theme.text_primary));
     let paragraph = Paragraph::new(lines)
         .block(block)
         .alignment(ratatui::layout::Alignment::Center);

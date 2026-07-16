@@ -138,6 +138,8 @@ When you type `:ctx` and press Enter without specifying a context name, flux9s d
 
 The submenu appears as a centered overlay on top of the current view, making it easy to see and select your desired context without needing to remember exact names.
 
+All submenus support **filtering with the same keys as the resource list**: press `/` to start filtering, type to narrow the list, `Enter` to apply the filter, and `Esc` to cancel it (a second `Esc` closes the menu). `PageUp`/`PageDown` (or `Ctrl+f`/`Ctrl+b`) page through long lists, and `:` closes the menu straight into command mode.
+
 #### Theme Submenu (`:skin`)
 
 When you type `:skin` and press Enter without specifying a theme name, flux9s displays an interactive menu of available themes with live preview.
@@ -228,6 +230,7 @@ The graph view displays:
 - `j` / `k` (or `↓` / `↑`) - Move the highlighted focus between nodes; the view scrolls to keep the focused node visible.
 - `Enter` - Open the focused node's resource in the detail view. Aggregate nodes (workload/resource groups) and external upstream URLs aren't directly openable.
 - `y` / `d` - View the focused node's YAML or describe output directly, including managed workloads (Deployments, Services, etc.).
+- `Enter` on a **workload group** - Drill into the workload list: `Enter` on a workload opens its detail (rollout status, containers and images, pods with restarts, events), and `l` streams a pod's logs. `Esc` walks back up the chain.
 - `Esc` / `Backspace` - Return to the graph (when you opened a view from it), then back to the resource list.
 
 Focus starts on the resource you opened the graph from, so you can immediately walk its sources and dependencies.

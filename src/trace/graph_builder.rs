@@ -384,22 +384,21 @@ async fn discover_inventory_resources(
                         status_desc
                     );
 
-                    // Format: "Kind|name|namespace|ready|status"
-                    // We'll parse this in the rendering code
+                    // Encoded via WorkloadRef — the single source of truth for
+                    // the line format the renderer and workload list decode.
                     let status_indicator = match ready {
                         Some(true) => "●",
                         Some(false) => "○",
                         None => "?",
                     };
-                    let status_text = status_desc.unwrap_or_else(|| "Unknown".to_string());
-                    let workload_info = format!(
-                        "{}|{}|{}|{}|{}",
-                        workload_entry.kind,
-                        workload_entry.name,
-                        workload_entry.namespace,
-                        status_indicator,
-                        status_text
-                    );
+                    let workload_info = crate::kube::workloads::WorkloadRef {
+                        kind: workload_entry.kind.clone(),
+                        name: workload_entry.name.clone(),
+                        namespace: workload_entry.namespace.clone(),
+                        indicator: status_indicator.to_string(),
+                        status: status_desc.unwrap_or_else(|| "Unknown".to_string()),
+                    }
+                    .to_graph_line();
                     workload_list.push(workload_info);
                 }
 

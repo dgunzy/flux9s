@@ -450,6 +450,24 @@ pub async fn run_tui_with_async_init(
                         });
                     }
 
+                    if let Some((rk, tx)) = app.async_state.workload.dispatch() {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            tracing::debug!("Fetching workload data for {}", rk);
+                            let result = crate::kube::workloads::fetch_workload_data(
+                                &client,
+                                &rk.resource_type,
+                                &rk.namespace,
+                                &rk.name,
+                            )
+                            .await;
+                            if let Err(ref e) = result {
+                                tracing::warn!("Failed to fetch workload data for {}: {}", rk, e);
+                            }
+                            let _ = tx.send(result);
+                        });
+                    }
+
                     // Start a queued controller log stream. The task tails the
                     // pod and follows new output until aborted (view closed)
                     // or the stream ends.
@@ -553,6 +571,20 @@ pub async fn run_tui_with_async_init(
                         app.set_status_message((format!("Graph building failed: {}", e), true));
                         // Return to the previous view instead of an empty graph
                         app.set_view(app.previous_list_view());
+                    }
+                }
+            }
+
+            if let Some(result) = app.async_state.workload.try_recv() {
+                match result {
+                    // May continue straight into pod logs (l from the list)
+                    Ok(workload) => app.on_workload_loaded(workload),
+                    Err(e) => {
+                        app.async_state.workload.set_error();
+                        app.logs_after_workload_load = false;
+                        app.set_status_message((format!("Failed to fetch workload: {}", e), true));
+                        // Return to the workload list instead of an empty detail
+                        app.set_view(crate::tui::app::state::View::WorkloadList);
                     }
                 }
             }

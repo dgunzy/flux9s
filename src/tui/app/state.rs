@@ -25,6 +25,12 @@ pub enum View {
     /// Controller pod log viewer, opened with `:logs`. The log stream runs
     /// only while this view is active.
     Logs,
+    /// Workloads of a graph WorkloadGroup node (#194): Enter opens a
+    /// workload's detail. Back returns to the graph.
+    WorkloadList,
+    /// One workload's rollout status, containers, pods, and events (#194).
+    /// Back returns to the workload list.
+    WorkloadDetail,
     #[allow(dead_code)] // Reserved for future alternative help view implementation
     Help,
 }
@@ -42,6 +48,7 @@ impl View {
             View::ResourceTrace => Some(&mut vs.trace_scroll_offset),
             View::ResourceHistory => Some(&mut vs.history_scroll_offset),
             View::Logs => Some(&mut vs.log_scroll_offset),
+            View::WorkloadDetail => Some(&mut vs.workload_scroll_offset),
             _ => None,
         }
     }
@@ -57,7 +64,11 @@ impl View {
     pub fn is_text_search_view(self) -> bool {
         matches!(
             self,
-            View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace | View::Logs
+            View::ResourceYAML
+                | View::ResourceDescribe
+                | View::ResourceTrace
+                | View::Logs
+                | View::WorkloadDetail
         )
     }
 
@@ -198,6 +209,15 @@ pub struct ViewState {
     pub history_scroll_offset: usize,
     /// Scroll offset for the controller log view
     pub log_scroll_offset: usize,
+    /// Scroll offset for the workload detail view
+    pub workload_scroll_offset: usize,
+    /// Where Back from the log view returns to, when logs were opened from
+    /// somewhere other than a root list view (e.g. a workload's pods).
+    /// Consumed on Back; `None` falls back to `previous_list_view`.
+    pub logs_back_view: Option<View>,
+    /// Workload rows shown by the WorkloadList view, decoded from the graph
+    /// WorkloadGroup node that was opened.
+    pub workload_rows: Vec<crate::kube::workloads::WorkloadRef>,
     /// Scroll offset for graph view
     pub graph_scroll_offset: usize,
     /// Index (into the graph's node list) of the currently focused graph node.
@@ -238,6 +258,9 @@ impl Default for ViewState {
             trace_scroll_offset: 0,
             history_scroll_offset: 0,
             log_scroll_offset: 0,
+            workload_scroll_offset: 0,
+            logs_back_view: None,
+            workload_rows: Vec::new(),
             graph_scroll_offset: 0,
             graph_focus_index: None,
             previous_list_view: View::ResourceList,
@@ -327,6 +350,8 @@ pub struct AsyncOperationState {
     pub trace: AsyncTask<ResourceKey, crate::trace::TraceResult>,
     /// Relationship graph backing the graph view.
     pub graph: AsyncTask<ResourceKey, crate::trace::ResourceGraph>,
+    /// Workload drill-down fetch backing the workload detail view (#194).
+    pub workload: AsyncTask<ResourceKey, crate::kube::workloads::WorkloadData>,
 
     /// Mutating operation (suspend, resume, reconcile, delete). The result
     /// payload is `()`; success/failure feeds the status message.
@@ -343,6 +368,7 @@ impl AsyncOperationState {
         self.describe.clear();
         self.trace.clear();
         self.graph.clear();
+        self.workload.clear();
         self.operation.clear();
         self.last_operation_key = None;
         self.confirmation_pending = None;

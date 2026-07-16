@@ -7,7 +7,7 @@ use crate::tui::theme::Theme;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
@@ -15,24 +15,28 @@ use ratatui::{
 /// Render the submenu overlay
 ///
 /// The submenu is displayed as a centered popup overlay over the current view.
-pub fn render_submenu(f: &mut Frame, area: Rect, submenu: &SubmenuState, theme: &Theme) {
+/// Takes `&mut` because the scroll offset is reconciled here, where the real
+/// list height is known (event handlers can't know the popup geometry).
+pub fn render_submenu(f: &mut Frame, area: Rect, submenu: &mut SubmenuState, theme: &Theme) {
+    let filtered = submenu.filtered_items().len() as u16;
+
     // Calculate popup size - take up a reasonable portion of the screen
     let popup_width = area.width.clamp(30, 60); // Between 30-60 columns
-    let popup_height = (submenu.items.len() as u16)
+    let popup_height = filtered
         .saturating_add(6) // Items + border + title + help
         .clamp(10, area.height.saturating_sub(4)); // Between 10 and area height - 4
 
     // Center the popup
     let popup_area = centered_rect(popup_width, popup_height, area);
 
-    // Clear the background area to make it opaque
+    // Clear the background area to make it opaque (terminal default
+    // background, like the other overlays — no hardcoded colors)
     f.render_widget(Clear, popup_area);
 
-    // Render the block with a solid background
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.table_selected_style())
-        .style(Style::default().fg(theme.text_primary).bg(Color::Black));
+        .border_style(Style::default().fg(theme.text_label))
+        .style(Style::default().fg(theme.text_primary));
 
     f.render_widget(block, popup_area);
 
@@ -53,24 +57,39 @@ pub fn render_submenu(f: &mut Frame, area: Rect, submenu: &SubmenuState, theme: 
         ])
         .split(inner_area);
 
-    // Render title
-    if let Some(title) = &submenu.title {
-        let title_paragraph = Paragraph::new(title.as_str())
+    // Render title, appending the filter while it is being typed (with a
+    // cursor, like the resource-list filter) or applied
+    let filter_suffix = if submenu.filter_mode {
+        format!(" /{}▌", submenu.filter)
+    } else if !submenu.filter.is_empty() {
+        format!(" /{}", submenu.filter)
+    } else {
+        String::new()
+    };
+    let title = format!(
+        "{}{}",
+        submenu.title.as_deref().unwrap_or_default(),
+        filter_suffix
+    );
+    if !title.is_empty() {
+        let title_paragraph = Paragraph::new(title)
             .style(
                 Style::default()
-                    .fg(theme.table_selected)
-                    .bg(Color::Black)
+                    .fg(theme.text_label)
                     .add_modifier(Modifier::BOLD),
             )
             .alignment(Alignment::Center);
         f.render_widget(title_paragraph, chunks[0]);
     }
 
-    // Render list items
+    // Reconcile the scroll with the height we are actually rendering into
     let list_height = chunks[1].height as usize;
+    submenu.clamp_scroll(list_height);
+
+    // Render the filtered list items
     let visible_items: Vec<ListItem> = submenu
-        .items
-        .iter()
+        .filtered_items()
+        .into_iter()
         .enumerate()
         .skip(submenu.scroll_offset)
         .take(list_height)
@@ -103,14 +122,13 @@ pub fn render_submenu(f: &mut Frame, area: Rect, submenu: &SubmenuState, theme: 
         })
         .collect();
 
-    let list =
-        List::new(visible_items).style(Style::default().fg(theme.text_primary).bg(Color::Black));
+    let list = List::new(visible_items).style(Style::default().fg(theme.text_primary));
     f.render_widget(list, chunks[1]);
 
     // Render help text at the bottom
     if let Some(help) = &submenu.help_text {
         let help_paragraph = Paragraph::new(help.as_str())
-            .style(Style::default().fg(theme.text_secondary).bg(Color::Black))
+            .style(Style::default().fg(theme.text_secondary))
             .alignment(Alignment::Center);
         f.render_widget(help_paragraph, chunks[2]);
     }

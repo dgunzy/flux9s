@@ -17,6 +17,11 @@ pub const MAX_KUBE_EVENTS: usize = 1000;
 /// Cap on the controller log view's line buffer; oldest lines are evicted.
 pub const MAX_LOG_LINES: usize = 5000;
 
+/// Selection jump for PageUp/PageDown (and Ctrl+f/Ctrl+b) inside submenus.
+/// A fixed jump rather than a "page": the popup's height varies and the
+/// scroll self-corrects at render time.
+pub const SUBMENU_PAGE_JUMP: usize = 10;
+
 /// How many existing lines the log stream starts with (`tail_lines`) before
 /// following new output.
 pub const LOG_TAIL_LINES: i64 = 500;

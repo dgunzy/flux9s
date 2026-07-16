@@ -307,7 +307,7 @@ impl App {
             // If help, submenu, or quit confirm is active, render it on top!
             if self.ui_state.show_help {
                 render_help(f, area, &self.theme, self.namespace_hotkeys());
-            } else if let Some(ref submenu) = self.view_state.submenu_state {
+            } else if let Some(ref mut submenu) = self.view_state.submenu_state {
                 render_submenu(f, area, submenu, &self.theme);
             }
             if self.ui_state.show_quit_confirm {
@@ -332,49 +332,6 @@ impl App {
 
         if self.ui_state.show_help {
             render_help(f, area, &self.theme, self.namespace_hotkeys());
-        } else if let Some(ref submenu) = self.view_state.submenu_state {
-            // First render the current view in the background
-            match self.view_state.current_view {
-                View::ResourceList => {
-                    let resources = self.get_filtered_resources();
-                    render_resource_list(
-                        f,
-                        area,
-                        &resources,
-                        self.view_state.selected_index,
-                        &mut self.view_state.scroll_offset,
-                        &self.view_state.selected_resource_type,
-                        &self.resource_objects,
-                        &self.theme,
-                        self.config.ui.no_icons,
-                        &self.selection_state.favorites,
-                        self.view_state.sort_field,
-                        self.view_state.sort_reverse,
-                    );
-                }
-                View::ResourceFavorites => {
-                    let resources = self.get_filtered_resources();
-                    render_resource_list(
-                        f,
-                        area,
-                        &resources,
-                        self.view_state.selected_index,
-                        &mut self.view_state.scroll_offset,
-                        &self.view_state.selected_resource_type,
-                        &self.resource_objects,
-                        &self.theme,
-                        self.config.ui.no_icons,
-                        &self.selection_state.favorites,
-                        self.view_state.sort_field,
-                        self.view_state.sort_reverse,
-                    );
-                }
-                _ => {
-                    // For other views, just show empty background
-                }
-            }
-            // Then render submenu overlay on top
-            render_submenu(f, area, submenu, &self.theme);
         } else {
             match self.view_state.current_view {
                 View::ResourceList => {
@@ -537,9 +494,36 @@ impl App {
                         &self.theme,
                     );
                 }
+                View::WorkloadList => {
+                    views::render_workload_list(
+                        f,
+                        area,
+                        &self.view_state.workload_rows,
+                        self.view_state.selected_index,
+                        &mut self.view_state.scroll_offset,
+                        &self.theme,
+                    );
+                }
+                View::WorkloadDetail => {
+                    views::render_workload_detail(
+                        f,
+                        area,
+                        self.async_state.workload.result(),
+                        self.async_state.workload.is_loading(),
+                        &mut self.view_state.workload_scroll_offset,
+                        &mut self.view_state.text_search,
+                        &self.theme,
+                    );
+                }
                 View::Help => {
                     render_help(f, area, &self.theme, self.namespace_hotkeys());
                 }
+            }
+
+            // Submenu popup overlays whatever view is active. Takes `&mut`
+            // so the scroll can be reconciled with the popup's real height.
+            if let Some(ref mut submenu) = self.view_state.submenu_state {
+                render_submenu(f, area, submenu, &self.theme);
             }
         }
 

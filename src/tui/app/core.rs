@@ -36,6 +36,9 @@ pub struct App {
     pub(crate) kube_events: KubeEventStore,
     /// Controller pod log stream (active while the log view is open).
     pub(crate) logs: super::logs::LogState,
+    /// Set when `l` on the workload list requested a workload: open its pod
+    /// logs as soon as the fetch completes. Consumed on load.
+    pub(crate) logs_after_workload_load: bool,
     /// Path to the active log file, shown on the connection error screen.
     pub(crate) log_path: Option<std::path::PathBuf>,
     /// Watchers currently in a degraded (erroring/reconnecting) state.
@@ -87,6 +90,7 @@ impl App {
             controller_pods: ControllerPodState::default(),
             kube_events: KubeEventStore::default(),
             logs: super::logs::LogState::default(),
+            logs_after_workload_load: false,
             log_path: None,
             degraded_watchers: HashSet::new(),
         }
@@ -548,8 +552,9 @@ impl App {
                 .selected_resource_key
                 .as_deref()
                 .and_then(ResourceKey::parse),
-            // Logs show controller pods, which are not watched Flux resources.
-            View::Logs | View::Help => None,
+            // Logs and workload views show pods/workloads, which are not
+            // watched Flux resources.
+            View::Logs | View::WorkloadList | View::WorkloadDetail | View::Help => None,
         }
     }
 
@@ -566,7 +571,30 @@ impl App {
             self.view_state.previous_list_view = self.view_state.current_view;
         }
         let namespace = self.config.default_controller_namespace.clone();
+        self.view_state.logs_back_view = None;
         self.logs.request(namespace, pod_name.to_string());
+        self.view_state.log_scroll_offset = 0;
+        self.view_state.text_search.clear();
+        self.view_state.current_view = View::Logs;
+    }
+
+    /// Store a loaded workload; when the load was initiated by `l` on the
+    /// workload list, immediately continue into its pod logs.
+    pub fn on_workload_loaded(&mut self, workload: crate::kube::workloads::WorkloadData) {
+        self.async_state.workload.set_result(workload);
+        if std::mem::take(&mut self.logs_after_workload_load)
+            && self.view_state.current_view == View::WorkloadDetail
+        {
+            self.open_workload_pod_logs();
+        }
+    }
+
+    /// Open the log view for an arbitrary pod (e.g. a workload's pod from the
+    /// drill-down). The Back target (`logs_back_view`) is recorded where the
+    /// flow started — the `l` keypress — so it survives the pod submenu.
+    pub(crate) fn open_pod_logs(&mut self, namespace: &str, pod_name: &str) {
+        self.logs
+            .request(namespace.to_string(), pod_name.to_string());
         self.view_state.log_scroll_offset = 0;
         self.view_state.text_search.clear();
         self.view_state.current_view = View::Logs;

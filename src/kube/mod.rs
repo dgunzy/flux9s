@@ -16,6 +16,7 @@ pub mod events;
 pub mod fetch;
 pub mod health;
 pub mod inventory;
+pub mod workloads;
 
 #[allow(unused_imports)] // Public API re-exports used by lib consumers
 pub use api::{get_api_resource_with_fallback, get_gvk_for_resource_type};

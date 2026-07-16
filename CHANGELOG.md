@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Workload drill-down (#194): `Enter` on a graph workload group opens the
+  workload list; `Enter` on a workload opens its detail — rollout status and
+  replica health, containers with images, a pods table (phase, ready,
+  restarts, age), and the workload's events. `l` streams a pod's logs
+  (directly for a single pod, via a pod submenu otherwise), and Back walks
+  the whole chain in reverse: logs → detail → list → graph. Read-only.
+- Submenu filtering and paging (#128): `/` filters `:ctx`/`:skin`/`:logs`
+  menus with the same keys as the resource list (type to narrow, Enter to
+  apply, Esc to cancel), PageUp/PageDown (or Ctrl+f/b) page through long
+  menus, and `:` drops straight into command mode.
+
+### Fixed
+- Submenu selections no longer scroll below the visible popup: the scroll is
+  now reconciled at render time with the popup's actual height instead of a
+  hardcoded estimate in the key handler.
+- Submenus (and the quit dialog) no longer hardcode black backgrounds or
+  low-contrast title colors — they follow the active skin like every other
+  overlay, fixing illegible popups across themes.
+- `l` now also works from the workload list: it fetches the workload and
+  continues straight into its pod logs once loaded — and Back from those
+  logs returns to wherever `l` was pressed (list or detail).
+
 ## [0.12.0] - 2026-07-14
 
 ### Changes\n- Version bump to 0.12.0

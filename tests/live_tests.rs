@@ -238,3 +238,52 @@ async fn legacy_sources_resolve_via_version_fallback() {
         "Flux 2.2.x serves OCIRepository at v1beta2 — discovery must fall back from v1"
     );
 }
+
+/// #194: the workload drill-down fetch returns rollout data, containers, and
+/// pods for a real controller Deployment.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn workload_drilldown_fetches_pods_and_containers() {
+    let client = client_for(&simple_context()).await;
+
+    let workload = eventually("source-controller workload data", 120, || {
+        let client = client.clone();
+        async move {
+            let data = flux9s::kube::workloads::fetch_workload_data(
+                &client,
+                "Deployment",
+                "flux-system",
+                "source-controller",
+            )
+            .await
+            .ok()?;
+            // A healthy controller has a ready pod behind its selector
+            if data.ready == Some(true) && !data.pods.is_empty() {
+                Some(data)
+            } else {
+                None
+            }
+        }
+    })
+    .await;
+
+    assert!(
+        workload.summary.iter().any(|(k, _)| k == "Replicas"),
+        "Deployment summary includes replica rollout"
+    );
+    assert!(
+        workload
+            .containers
+            .iter()
+            .any(|c| c.image.contains("source-controller")),
+        "containers carry their images: {:?}",
+        workload.containers
+    );
+    let pod = &workload.pods[0];
+    assert!(pod.name.starts_with("source-controller-"));
+    assert_eq!(pod.phase, "Running");
+    assert!(
+        workload.events_error.is_none(),
+        "events lookup should succeed"
+    );
+}

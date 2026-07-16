@@ -49,6 +49,8 @@ impl App {
         } else {
             let max_index = if view == View::EventList {
                 self.filtered_kube_events().len().saturating_sub(1)
+            } else if view == View::WorkloadList {
+                self.view_state.workload_rows.len().saturating_sub(1)
             } else {
                 self.get_filtered_resources().len().saturating_sub(1)
             };
@@ -435,6 +437,55 @@ impl App {
                 // Jump to the event's involved resource when flux9s watches it.
                 self.navigate_to_selected_event_resource();
             }
+            crossterm::event::KeyCode::Enter
+                if self.view_state.current_view == View::WorkloadList =>
+            {
+                // Open the selected workload's detail (async fetch).
+                if let Some(row) = self
+                    .view_state
+                    .workload_rows
+                    .get(self.view_state.selected_index)
+                {
+                    self.async_state.workload.request(ResourceKey::new(
+                        row.kind.clone(),
+                        row.namespace.clone(),
+                        row.name.clone(),
+                    ));
+                    self.logs_after_workload_load = false;
+                    self.view_state.workload_scroll_offset = 0;
+                    self.view_state.text_search.clear();
+                    self.view_state.current_view = View::WorkloadDetail;
+                }
+            }
+            // Stream logs for the detailed workload's pods (#194).
+            crossterm::event::KeyCode::Char('l')
+                if self.view_state.current_view == View::WorkloadDetail =>
+            {
+                self.view_state.logs_back_view = Some(View::WorkloadDetail);
+                self.open_workload_pod_logs();
+            }
+            // `l` straight from the workload list: fetch the workload and
+            // open its pod logs as soon as the data arrives.
+            crossterm::event::KeyCode::Char('l')
+                if self.view_state.current_view == View::WorkloadList =>
+            {
+                if let Some(row) = self
+                    .view_state
+                    .workload_rows
+                    .get(self.view_state.selected_index)
+                {
+                    self.async_state.workload.request(ResourceKey::new(
+                        row.kind.clone(),
+                        row.namespace.clone(),
+                        row.name.clone(),
+                    ));
+                    self.logs_after_workload_load = true;
+                    self.view_state.logs_back_view = Some(View::WorkloadList);
+                    self.view_state.workload_scroll_offset = 0;
+                    self.view_state.text_search.clear();
+                    self.view_state.current_view = View::WorkloadDetail;
+                }
+            }
             crossterm::event::KeyCode::Enter if self.view_state.current_view.is_list_view() => {
                 // Save current view as previous list view before navigating
                 self.view_state.previous_list_view = self.view_state.current_view;
@@ -590,7 +641,18 @@ impl App {
                 } else if self.view_state.current_view == View::Logs {
                     self.logs.stop();
                     self.view_state.text_search.clear();
-                    self.view_state.current_view = self.view_state.previous_list_view;
+                    self.view_state.current_view = self
+                        .view_state
+                        .logs_back_view
+                        .take()
+                        .unwrap_or(self.view_state.previous_list_view);
+                } else if self.view_state.current_view == View::WorkloadList {
+                    self.view_state.current_view = View::ResourceGraph;
+                } else if self.view_state.current_view == View::WorkloadDetail {
+                    self.async_state.workload.clear();
+                    self.logs_after_workload_load = false;
+                    self.view_state.text_search.clear();
+                    self.view_state.current_view = View::WorkloadList;
                 }
             }
             _ => {}
@@ -690,23 +752,92 @@ impl App {
 
     fn handle_submenu_key(&mut self, key: KeyEvent) -> Option<bool> {
         if let Some(ref mut submenu) = self.view_state.submenu_state {
+            // Filter input mode mirrors the resource-list filter: `/` enters,
+            // typing edits, Enter applies (keeps the filter), Esc cancels.
+            if submenu.filter_mode {
+                match key.code {
+                    crossterm::event::KeyCode::Esc => {
+                        submenu.clear_filter();
+                        self.preview_theme_in_submenu();
+                    }
+                    crossterm::event::KeyCode::Enter => {
+                        submenu.filter_mode = false;
+                    }
+                    crossterm::event::KeyCode::Backspace => {
+                        submenu.pop_filter_char();
+                        self.preview_theme_in_submenu();
+                    }
+                    crossterm::event::KeyCode::Char(c)
+                        if !key
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    {
+                        submenu.push_filter_char(c);
+                        self.preview_theme_in_submenu();
+                    }
+                    _ => {}
+                }
+                return None;
+            }
+
             match key.code {
+                // Enter filter mode, same as the resource list (#128)
+                crossterm::event::KeyCode::Char('/') => {
+                    submenu.filter_mode = true;
+                }
+                // `:` falls through to command mode: close the submenu
+                // (restoring any theme preview) and start typing a command.
+                crossterm::event::KeyCode::Char(':') => {
+                    if submenu.command == "skin" {
+                        if let Some(original_theme) = self.view_state.preview_original_theme.clone()
+                        {
+                            let _ = self.set_theme(&original_theme);
+                        }
+                    }
+                    self.view_state.submenu_state = None;
+                    self.view_state.preview_original_theme = None;
+                    self.ui_state.command_mode = true;
+                    self.ui_state.command_buffer.clear();
+                }
+                // Scroll is reconciled at render time from the popup's actual
+                // height, so navigation only moves the selection here.
                 crossterm::event::KeyCode::Char('j') | crossterm::event::KeyCode::Down => {
-                    submenu.move_down();
-                    // Update scroll if needed (assuming we have enough visible space)
-                    let visible_height = 20; // Rough estimate for submenu height
-                    submenu.update_scroll(visible_height);
+                    submenu.move_down(1);
                     // Preview theme if this is a skin submenu
                     self.preview_theme_in_submenu();
                 }
                 crossterm::event::KeyCode::Char('k') | crossterm::event::KeyCode::Up => {
-                    submenu.move_up();
-                    let visible_height = 20;
-                    submenu.update_scroll(visible_height);
+                    submenu.move_up(1);
                     // Preview theme if this is a skin submenu
                     self.preview_theme_in_submenu();
                 }
-                // Save/persist current selection (for skin submenu)
+                // Page through long menus (#128)
+                crossterm::event::KeyCode::PageDown => {
+                    submenu.move_down(crate::constants::SUBMENU_PAGE_JUMP);
+                    self.preview_theme_in_submenu();
+                }
+                crossterm::event::KeyCode::PageUp => {
+                    submenu.move_up(crate::constants::SUBMENU_PAGE_JUMP);
+                    self.preview_theme_in_submenu();
+                }
+                crossterm::event::KeyCode::Char('f')
+                    if key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    submenu.move_down(crate::constants::SUBMENU_PAGE_JUMP);
+                    self.preview_theme_in_submenu();
+                }
+                crossterm::event::KeyCode::Char('b')
+                    if key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    submenu.move_up(crate::constants::SUBMENU_PAGE_JUMP);
+                    self.preview_theme_in_submenu();
+                }
+                // Save/persist current selection (for skin submenu).
+                // Filter typing happens in filter mode, so 's' is free here.
                 crossterm::event::KeyCode::Char('s') | crossterm::event::KeyCode::Char('S')
                     if submenu.command == "skin" =>
                 {
@@ -749,6 +880,12 @@ impl App {
                             ));
                         } else if command == "logs" {
                             self.open_log_view(&value);
+                        } else if command == "pod-logs" {
+                            // Workload pod logs: the value is "namespace/pod".
+                            if let Some((namespace, pod)) = value.split_once('/') {
+                                let (namespace, pod) = (namespace.to_string(), pod.to_string());
+                                self.open_pod_logs(&namespace, &pod);
+                            }
                         } else if command == "skin" {
                             // Change theme (already previewed, so just confirm)
                             match self.set_theme(&value) {
@@ -765,7 +902,12 @@ impl App {
                     }
                 }
                 crossterm::event::KeyCode::Esc => {
-                    // Cancel submenu - restore original theme if previewing
+                    // An active type-ahead filter clears first; a second Esc
+                    // cancels the submenu (restoring the theme if previewing).
+                    if submenu.clear_filter() {
+                        self.preview_theme_in_submenu();
+                        return None;
+                    }
                     if submenu.command == "skin" {
                         if let Some(original_theme) = self.view_state.preview_original_theme.clone()
                         {
@@ -852,7 +994,7 @@ impl App {
     /// resource. Aggregate nodes (workload/resource groups) and external upstream
     /// URLs are not directly navigable and just show a hint instead.
     fn navigate_to_focused_graph_node(&mut self) {
-        let has_focused_node = self
+        let focused_node = self
             .async_state
             .graph
             .result()
@@ -861,13 +1003,35 @@ impl App {
                     .graph_focus_index
                     .and_then(|idx| graph.nodes.get(idx))
             })
-            .is_some();
+            .map(|node| (node.node_type, node.description.clone()));
         let Some(rk) = self.focused_graph_node_target() else {
-            if has_focused_node {
-                self.set_status_message((
-                    "Aggregate node — select an individual Flux resource to open it".to_string(),
-                    false,
-                ));
+            match focused_node {
+                // The workload group drills into the workload list (#194):
+                // its description carries one encoded WorkloadRef per line.
+                Some((crate::trace::NodeType::WorkloadGroup, description)) => {
+                    let rows: Vec<_> = description
+                        .as_deref()
+                        .unwrap_or_default()
+                        .lines()
+                        .filter_map(crate::kube::workloads::WorkloadRef::parse_graph_line)
+                        .collect();
+                    if rows.is_empty() {
+                        self.set_status_message(("No workloads in this group".to_string(), false));
+                        return;
+                    }
+                    self.view_state.workload_rows = rows;
+                    self.view_state.selected_index = 0;
+                    self.view_state.scroll_offset = 0;
+                    self.view_state.current_view = View::WorkloadList;
+                }
+                Some(_) => {
+                    self.set_status_message((
+                        "Aggregate node — select an individual Flux resource to open it"
+                            .to_string(),
+                        false,
+                    ));
+                }
+                None => {}
             }
             return;
         };
@@ -947,7 +1111,23 @@ impl App {
                 // Stop the stream; return to wherever logs were opened from.
                 self.logs.stop();
                 self.view_state.text_search.clear();
-                self.view_state.current_view = self.view_state.previous_list_view;
+                self.view_state.current_view = self
+                    .view_state
+                    .logs_back_view
+                    .take()
+                    .unwrap_or(self.view_state.previous_list_view);
+                None
+            }
+            View::WorkloadList => {
+                // Entered from a graph workload group — return to the graph.
+                self.view_state.current_view = View::ResourceGraph;
+                None
+            }
+            View::WorkloadDetail => {
+                self.async_state.workload.clear();
+                self.logs_after_workload_load = false;
+                self.view_state.text_search.clear();
+                self.view_state.current_view = View::WorkloadList;
                 None
             }
             View::Help => {
@@ -1011,6 +1191,45 @@ impl App {
         self.view_state.detail_back_view = None;
         self.selection_state.selected_resource_key = Some(key);
         self.view_state.current_view = View::ResourceDetail;
+    }
+
+    /// Stream logs for the detailed workload's pods: directly when there is
+    /// exactly one pod, via a pod submenu when there are several.
+    pub(crate) fn open_workload_pod_logs(&mut self) {
+        let Some(workload) = self.async_state.workload.result() else {
+            return; // Still loading
+        };
+        match workload.pods.as_slice() {
+            [] => {
+                self.set_status_message((
+                    format!("{}/{} has no pods to stream", workload.kind, workload.name),
+                    false,
+                ));
+            }
+            [only] => {
+                let (namespace, pod) = (workload.namespace.clone(), only.name.clone());
+                self.open_pod_logs(&namespace, &pod);
+            }
+            pods => {
+                let items: Vec<crate::tui::submenu::SubmenuItem> = pods
+                    .iter()
+                    .map(|pod| {
+                        crate::tui::submenu::SubmenuItem::with_display(
+                            format!("{}/{}", workload.namespace, pod.name),
+                            format!("{} ({}, ready {})", pod.name, pod.phase, pod.ready),
+                        )
+                    })
+                    .collect();
+                self.view_state.submenu_state = Some(
+                    crate::tui::submenu::SubmenuState::new("pod-logs".to_string(), items)
+                        .with_title("Pod Logs".to_string())
+                        .with_help(
+                            "j/k: Navigate | /: Filter | Enter: Stream logs | Esc: Cancel"
+                                .to_string(),
+                        ),
+                );
+            }
+        }
     }
 
     fn prepare_selected_resource_key_for_nested_view(&mut self) -> Option<ResourceKey> {
@@ -2353,5 +2572,284 @@ mod tests {
             View::EventList,
             "Back returns to the events feed logs were opened from"
         );
+    }
+
+    /// Build an app on a graph whose workload group carries two encoded
+    /// workload rows (the #194 drill-down entry point).
+    fn app_on_graph_with_workloads() -> App {
+        use crate::kube::workloads::WorkloadRef;
+        use crate::trace::{NodeType, ResourceGraph};
+
+        let mut app = create_test_app(false);
+        add_resource(&mut app);
+
+        let lines = [
+            WorkloadRef {
+                kind: "Deployment".to_string(),
+                name: "podinfo".to_string(),
+                namespace: "flux-system".to_string(),
+                indicator: "\u{25cf}".to_string(),
+                status: "Replicas: 1/1".to_string(),
+            },
+            WorkloadRef {
+                kind: "StatefulSet".to_string(),
+                name: "redis".to_string(),
+                namespace: "flux-system".to_string(),
+                indicator: "\u{25cb}".to_string(),
+                status: "Replicas: 0/1".to_string(),
+            },
+        ]
+        .iter()
+        .map(WorkloadRef::to_graph_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        let mut graph = ResourceGraph::new();
+        graph.add_node(graph_node(
+            "Kustomization",
+            "my-kustomization",
+            NodeType::Object,
+        ));
+        let mut group = graph_node("Workloads", "Workloads (2)", NodeType::WorkloadGroup);
+        group.description = Some(lines);
+        graph.add_node(group);
+        app.set_graph_result(graph);
+        app.view_state.current_view = View::ResourceGraph;
+        app.view_state.graph_focus_index = Some(1);
+        app
+    }
+
+    #[test]
+    fn workload_group_enter_opens_workload_list() {
+        let mut app = app_on_graph_with_workloads();
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::WorkloadList);
+        assert_eq!(app.view_state.workload_rows.len(), 2);
+        assert_eq!(app.view_state.workload_rows[0].name, "podinfo");
+        assert_eq!(app.view_state.selected_index, 0);
+
+        // Back returns to the graph
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceGraph);
+    }
+
+    #[test]
+    fn workload_group_without_rows_shows_hint() {
+        let mut app = app_on_graph();
+        app.view_state.graph_focus_index = Some(2); // undescribed workload group
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::ResourceGraph);
+        assert!(app.ui_state.status_message.is_some());
+    }
+
+    #[test]
+    fn workload_list_enter_requests_detail_and_back_chain_holds() {
+        let mut app = app_on_graph_with_workloads();
+        app.handle_key(make_key(KeyCode::Enter)); // -> WorkloadList
+        app.handle_key(make_key(KeyCode::Char('j'))); // select redis
+        app.handle_key(make_key(KeyCode::Enter)); // -> WorkloadDetail
+
+        assert_eq!(app.view_state.current_view, View::WorkloadDetail);
+        assert_eq!(
+            app.async_state
+                .workload
+                .pending()
+                .map(crate::watcher::ResourceKey::to_key_string)
+                .as_deref(),
+            Some("StatefulSet:flux-system:redis")
+        );
+
+        // Full back chain: detail -> list -> graph
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::WorkloadList);
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceGraph);
+    }
+
+    fn workload_data(pods: &[&str]) -> crate::kube::workloads::WorkloadData {
+        crate::kube::workloads::WorkloadData {
+            kind: "Deployment".to_string(),
+            name: "podinfo".to_string(),
+            namespace: "flux-system".to_string(),
+            ready: Some(true),
+            summary: Vec::new(),
+            containers: Vec::new(),
+            pods: pods
+                .iter()
+                .map(|name| crate::kube::workloads::PodRow {
+                    name: name.to_string(),
+                    phase: "Running".to_string(),
+                    ready: "1/1".to_string(),
+                    restarts: 0,
+                    age: None,
+                })
+                .collect(),
+            events: Vec::new(),
+            events_error: None,
+        }
+    }
+
+    #[test]
+    fn workload_logs_single_pod_streams_and_returns_to_detail() {
+        let mut app = app_on_graph_with_workloads();
+        app.view_state.current_view = View::WorkloadDetail;
+        app.async_state
+            .workload
+            .set_result(workload_data(&["podinfo-abc"]));
+
+        app.handle_key(make_key(KeyCode::Char('l')));
+
+        assert_eq!(app.view_state.current_view, View::Logs);
+        assert_eq!(
+            app.view_state.logs_back_view,
+            Some(View::WorkloadDetail),
+            "Back from pod logs returns to the workload detail"
+        );
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::WorkloadDetail);
+        assert!(app.logs.session.is_none(), "Esc stops the stream");
+    }
+
+    #[test]
+    fn workload_logs_multiple_pods_open_submenu() {
+        let mut app = app_on_graph_with_workloads();
+        app.view_state.current_view = View::WorkloadDetail;
+        app.async_state
+            .workload
+            .set_result(workload_data(&["podinfo-abc", "podinfo-def"]));
+
+        app.handle_key(make_key(KeyCode::Char('l')));
+
+        let submenu = app
+            .view_state
+            .submenu_state
+            .as_ref()
+            .expect("multiple pods open a submenu");
+        assert_eq!(submenu.command, "pod-logs");
+        assert_eq!(submenu.items.len(), 2);
+        assert_eq!(submenu.items[0].value, "flux-system/podinfo-abc");
+
+        // Selecting a pod opens its log stream
+        app.handle_key(make_key(KeyCode::Enter));
+        assert_eq!(app.view_state.current_view, View::Logs);
+        assert_eq!(app.view_state.logs_back_view, Some(View::WorkloadDetail));
+    }
+
+    #[test]
+    fn l_from_workload_list_continues_into_pod_logs_on_load() {
+        let mut app = app_on_graph_with_workloads();
+        app.handle_key(make_key(KeyCode::Enter)); // -> WorkloadList
+
+        app.handle_key(make_key(KeyCode::Char('l')));
+        assert_eq!(app.view_state.current_view, View::WorkloadDetail);
+        assert!(app.logs_after_workload_load, "auto-logs intent recorded");
+        assert!(app.async_state.workload.pending().is_some());
+
+        // Simulate the fetch completing (what the main loop does)
+        let _ = app.async_state.workload.dispatch();
+        app.on_workload_loaded(workload_data(&["podinfo-abc"]));
+
+        assert_eq!(
+            app.view_state.current_view,
+            View::Logs,
+            "single-pod workload streams immediately after loading"
+        );
+        assert!(!app.logs_after_workload_load, "intent consumed");
+
+        // Back returns to where `l` was pressed — the workload LIST
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::WorkloadList);
+    }
+
+    #[test]
+    fn plain_enter_does_not_auto_open_logs_on_load() {
+        let mut app = app_on_graph_with_workloads();
+        app.handle_key(make_key(KeyCode::Enter)); // -> WorkloadList
+        app.handle_key(make_key(KeyCode::Enter)); // -> WorkloadDetail (plain)
+
+        let _ = app.async_state.workload.dispatch();
+        app.on_workload_loaded(workload_data(&["podinfo-abc"]));
+
+        assert_eq!(
+            app.view_state.current_view,
+            View::WorkloadDetail,
+            "Enter shows the detail; it must not jump into logs"
+        );
+    }
+
+    #[test]
+    fn submenu_filter_follows_resource_filter_convention() {
+        let mut app = create_test_app(false);
+        add_controller_pod(&mut app, "source-controller-abc");
+        add_controller_pod(&mut app, "helm-controller-def");
+        app.ui_state.command_buffer = "logs".to_string();
+        app.execute_command();
+
+        // Keys don't filter until `/` enters filter mode
+        app.handle_key(make_key(KeyCode::Char('x')));
+        let submenu = app.view_state.submenu_state.as_ref().unwrap();
+        assert!(
+            submenu.filter.is_empty(),
+            "typing without / must not filter"
+        );
+        assert!(!submenu.filter_mode);
+
+        // `/` enters filter mode; typing narrows; Enter applies (keeps filter)
+        app.handle_key(make_key(KeyCode::Char('/')));
+        assert!(app.view_state.submenu_state.as_ref().unwrap().filter_mode);
+        app.handle_key(make_key(KeyCode::Char('h')));
+        let submenu = app.view_state.submenu_state.as_ref().unwrap();
+        assert_eq!(submenu.filter, "h");
+        assert_eq!(submenu.filtered_items().len(), 1);
+        app.handle_key(make_key(KeyCode::Enter));
+        let submenu = app.view_state.submenu_state.as_ref().unwrap();
+        assert!(!submenu.filter_mode, "Enter applies the filter");
+        assert_eq!(submenu.filter, "h", "filter survives applying");
+
+        // Enter now selects the filtered item (streams its logs)
+        app.handle_key(make_key(KeyCode::Enter));
+        assert_eq!(app.view_state.current_view, View::Logs);
+        let (request, _tx) = app.logs.dispatch().expect("log stream queued");
+        assert_eq!(request.pod, "helm-controller-def");
+    }
+
+    #[test]
+    fn esc_in_submenu_filter_mode_cancels_like_resource_filter() {
+        let mut app = create_test_app(false);
+        add_controller_pod(&mut app, "source-controller-abc");
+        app.ui_state.command_buffer = "logs".to_string();
+        app.execute_command();
+
+        app.handle_key(make_key(KeyCode::Char('/')));
+        app.handle_key(make_key(KeyCode::Char('z')));
+        // Esc exits filter mode and clears the filter — submenu stays open
+        app.handle_key(make_key(KeyCode::Esc));
+        let submenu = app.view_state.submenu_state.as_ref().unwrap();
+        assert!(!submenu.filter_mode);
+        assert!(submenu.filter.is_empty());
+        assert_eq!(submenu.filtered_items().len(), 1);
+
+        // A second Esc closes the submenu
+        app.handle_key(make_key(KeyCode::Esc));
+        assert!(app.view_state.submenu_state.is_none());
+    }
+
+    #[test]
+    fn colon_in_submenu_opens_command_mode() {
+        let mut app = create_test_app(false);
+        add_controller_pod(&mut app, "source-controller-abc");
+        app.ui_state.command_buffer = "logs".to_string();
+        app.execute_command();
+        assert!(app.view_state.submenu_state.is_some());
+
+        app.handle_key(make_key(KeyCode::Char(':')));
+
+        assert!(app.view_state.submenu_state.is_none(), "submenu closes");
+        assert!(app.ui_state.command_mode, "command mode opens");
     }
 }

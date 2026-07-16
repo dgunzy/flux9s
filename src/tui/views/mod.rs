@@ -22,6 +22,7 @@ mod resource_list;
 mod splash;
 mod submenu;
 pub mod trace;
+mod workloads;
 mod yaml;
 
 pub use confirmation::*;
@@ -43,4 +44,5 @@ pub use resource_fields::*;
 pub use resource_list::*;
 pub use splash::*;
 pub use submenu::*;
+pub use workloads::*;
 pub use yaml::*;

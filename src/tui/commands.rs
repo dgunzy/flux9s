@@ -287,7 +287,7 @@ impl CommandSubmenu for ContextSubmenu {
         // Create submenu state with title and help text
         let state = SubmenuState::new("ctx".to_string(), items)
             .with_title("Select Context".to_string())
-            .with_help("j/k: Navigate | Enter: Select | Esc: Cancel".to_string());
+            .with_help("j/k: Navigate | /: Filter | Enter: Select | Esc: Cancel".to_string());
 
         Ok(Some(state))
     }
@@ -337,7 +337,9 @@ impl CommandSubmenu for ThemeSubmenu {
         // Create submenu state with title and help text
         let state = SubmenuState::new("skin".to_string(), items)
             .with_title("Select Theme".to_string())
-            .with_help("j/k: Navigate | Enter: Apply | s: Save | Esc: Cancel".to_string());
+            .with_help(
+                "j/k: Navigate | /: Filter | Enter: Apply | s: Save | Esc: Cancel".to_string(),
+            );
 
         Ok(Some(state))
     }
@@ -377,7 +379,7 @@ pub fn logs_submenu(
     Some(
         SubmenuState::new("logs".to_string(), items)
             .with_title("Controller Logs".to_string())
-            .with_help("j/k: Navigate | Enter: Stream logs | Esc: Cancel".to_string()),
+            .with_help("j/k: Navigate | /: Filter | Enter: Stream logs | Esc: Cancel".to_string()),
     )
 }
 
