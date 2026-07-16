@@ -124,6 +124,11 @@ You can filter by resource type using commands like:
 
 All resource type commands support autocomplete with `Tab` key.
 
+With [`discoverFluxResources`](../configuration/#discovering-flux-adjacent-resource-kinds)
+enabled, CRDs labeled `app.kubernetes.io/part-of=flux` (the Flux Operator's
+convention) also get commands here — the kind name, plural, and `kubectl`
+short names all work, and the kinds appear in the unified list (view-only).
+
 ## Interactive Submenus
 
 Some commands open interactive selection menus when used without arguments, providing an easier way to select from available options.

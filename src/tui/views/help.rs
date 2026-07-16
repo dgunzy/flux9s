@@ -61,6 +61,14 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         (":logs [pod]", "Stream controller logs"),
         (":q", "Quit application"),
     ];
+    // Discovered kinds (#197) get a dynamic entry only when discovery has
+    // actually registered something — no noise for normal users.
+    let discovered = crate::models::extra_kinds::global().kind_names();
+    let discovered_entry = format!(":{} …", discovered.join(", :").to_lowercase());
+    let mut general_items = general_items;
+    if !crate::models::extra_kinds::global().is_empty() {
+        general_items.push((discovered_entry.as_str(), "Discovered kinds (CRD)"));
+    }
     render_help_column(f, column_chunks[1], "GENERAL", &general_items, theme);
 
     // NAVIGATION column

@@ -1489,11 +1489,17 @@ impl App {
             }
         }
 
-        // Fallback: a resource-type command (e.g. `:ks`, `:hr`), else unknown.
+        // Fallback: a resource-type command (e.g. `:ks`, `:hr`), else a
+        // dynamically discovered kind (#197), else unknown.
         if let Some(display_name) = crate::watcher::get_display_name_for_command(&cmd_lower) {
             self.view_state.selected_resource_type = Some(display_name.to_string());
             self.reset_list_position();
             self.invalidate_layout_cache(); // Resource type filter affects header display
+        } else if let Some(kind) = crate::models::extra_kinds::global().resolve_command(&cmd_lower)
+        {
+            self.view_state.selected_resource_type = Some(kind);
+            self.reset_list_position();
+            self.invalidate_layout_cache();
         } else if !cmd.is_empty() {
             self.set_status_message((
                 format!(
@@ -1823,6 +1829,7 @@ mod tests {
             read_only,
             default_namespace: "".to_string(),
             default_controller_namespace: "".to_string(),
+            discover_flux_resources: false,
             namespace_hotkeys: vec![],
             ui: UiConfig {
                 enable_mouse: false,
@@ -2882,5 +2889,81 @@ mod tests {
 
         app.handle_key(make_key(KeyCode::Esc));
         assert_eq!(app.view_state.current_view, View::ResourceList);
+    }
+
+    /// #197: without discovery, unknown kinds stay unknown (zero impact);
+    /// once a kind is registered, its CRD-derived aliases resolve like
+    /// built-in resource commands. Uses a unique kind name because the
+    /// registry is process-global.
+    #[test]
+    fn discovered_kind_commands_resolve_only_when_registered() {
+        use crate::models::extra_kinds::{ExtraKind, global};
+
+        let mut app = create_test_app(false);
+
+        // Zero impact: unregistered kind is an unknown command
+        app.ui_state.command_buffer = "zephyrtest".to_string();
+        app.execute_command();
+        assert!(app.view_state.selected_resource_type.is_none());
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(msg, is_err)| *is_err && msg.contains("Unknown command"))
+        );
+
+        global().insert(ExtraKind {
+            kind: "ZephyrTest".to_string(),
+            group: "example.com".to_string(),
+            version: "v1".to_string(),
+            plural: "zephyrtests".to_string(),
+            short_names: vec!["zt9".to_string()],
+        });
+
+        // Kind, plural, and short name now resolve to the type filter
+        for token in ["zephyrtest", "zephyrtests", "zt9"] {
+            app.view_state.selected_resource_type = None;
+            app.ui_state.command_buffer = token.to_string();
+            app.execute_command();
+            assert_eq!(
+                app.view_state.selected_resource_type.as_deref(),
+                Some("ZephyrTest"),
+                "{token} should resolve"
+            );
+        }
+
+        // Autocomplete offers the discovered aliases
+        let matches = crate::tui::commands::find_matching_commands("zephyr");
+        assert!(matches.contains(&"zephyrtest".to_string()));
+        assert!(matches.contains(&"zephyrtests".to_string()));
+
+        // GVK resolution works for read-only fetches (y/d)
+        let gvk = crate::kube::get_gvk_for_resource_type("ZephyrTest").unwrap();
+        assert_eq!(
+            gvk,
+            (
+                "example.com".to_string(),
+                "v1".to_string(),
+                "zephyrtests".to_string()
+            )
+        );
+
+        // Discovered kinds stay view-only: no operation considers them valid
+        let registry = crate::tui::OperationRegistry::new();
+        for key in ['s', 'r', 'R', 'W'] {
+            if let Some(op) = registry.get_by_keybinding(key) {
+                assert!(
+                    !op.is_valid_for("ZephyrTest"),
+                    "operation '{key}' must not apply to discovered kinds"
+                );
+            }
+        }
+
+        // Cleanup the process-global registry
+        global().remove("ZephyrTest");
+        assert!(
+            crate::kube::get_gvk_for_resource_type("ZephyrTest").is_err(),
+            "removal restores the unknown-kind error"
+        );
     }
 }

@@ -32,6 +32,7 @@ flux9s config path
 | `defaultControllerNamespace` | string | `flux-system` | Namespace where Flux controllers run |
 | `defaultResourceFilter` | string | *(none)* | Resource type shown at startup (e.g., `Kustomization`) |
 | `connectTimeoutSeconds` | integer | `10` | Startup Kubernetes API health-check timeout in seconds |
+| `discoverFluxResources` | boolean | `false` | Opt-in dynamic discovery of Flux-adjacent CRDs (see below) |
 | `ui.enableMouse` | bool | `false` | Enable mouse support |
 | `ui.headless` | bool | `false` | Hide the header bar |
 | `ui.noIcons` | bool | `false` | Disable Unicode icons for terminal compatibility |
@@ -125,6 +126,40 @@ Accepted values are any resource type name or alias:
 You can also change the filter interactively during a session by typing `:ks`, `:hr`, etc. in the TUI, or `:all` to clear it.
 
 ---
+
+### Discovering Flux-Adjacent Resource Kinds
+
+```yaml
+discoverFluxResources: true
+```
+
+Off by default. When enabled, flux9s watches CustomResourceDefinitions
+labeled `app.kubernetes.io/part-of=flux` — the **same label the Flux
+Operator's FluxReport uses** to enumerate reconcilers — and shows their
+resources alongside the built-in kinds: they appear in the unified list with
+generic columns (readiness from standard conditions), get `:` commands from
+the CRD's own names (`:widget`, its plural, and any `kubectl` short names),
+and support `y`/`d`. Kinds appear and disappear live as CRDs are labeled or
+removed — no restart needed.
+
+To register a kind (for example Flagger's Canary), label its CRD once:
+
+```bash
+kubectl label crd canaries.flagger.app app.kubernetes.io/part-of=flux
+```
+
+That single label registers it with both the Flux Operator's report and
+flux9s.
+
+Guard rails:
+
+- Discovered kinds are **view-only**: suspend, resume, reconcile, and delete
+  never apply to them
+- Built-in Flux kinds are excluded from discovery (the FluxInstance labels
+  its own CRDs, and those are already watched natively)
+- Cluster-scoped CRDs are skipped
+- When the flag is off (the default), no CRD watch runs and no extra API
+  calls are made
 
 ### Kubernetes API Connection Timeout
 

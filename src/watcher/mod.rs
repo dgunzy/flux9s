@@ -96,6 +96,12 @@ pub enum WatchEvent {
     KubeEventApplied(serde_json::Value), // event_json
     /// A Kubernetes Event was deleted (TTL expiry)
     KubeEventDeleted(String), // event uid
+    /// A part-of-labeled CRD was discovered (#197); the main loop registers
+    /// the kind and starts its dynamic watcher
+    ExtraKindDiscovered(crate::models::extra_kinds::ExtraKind),
+    /// A previously discovered CRD was deleted; the main loop deregisters
+    /// the kind, stops its watcher, and purges its resources
+    ExtraKindRemoved(String), // kind name
 }
 
 /// Trait for watchable Flux resources
@@ -134,6 +140,12 @@ pub struct ResourceWatcher {
     /// tearing down the resource watchers, since Events are the churniest
     /// resource in a cluster and shouldn't be paid for while unused.
     kube_events_handle: Option<JoinHandle<()>>,
+    /// Opt-in CRD discovery (#197). Off by default: when false, neither the
+    /// CRD watcher nor any dynamic kind watcher ever starts.
+    discovery_enabled: bool,
+    /// Dynamic watchers for discovered kinds, keyed by kind name so a
+    /// deleted CRD can stop exactly its own watcher.
+    extra_handles: std::collections::HashMap<String, JoinHandle<()>>,
 }
 
 impl ResourceWatcher {
@@ -145,6 +157,7 @@ impl ResourceWatcher {
         client: Client,
         namespace: Option<String>,
         controller_namespace: String,
+        discovery_enabled: bool,
     ) -> (Self, mpsc::UnboundedReceiver<WatchEvent>) {
         let (tx, rx) = mpsc::unbounded_channel();
         (
@@ -155,6 +168,8 @@ impl ResourceWatcher {
                 event_tx: tx,
                 handles: Vec::new(),
                 kube_events_handle: None,
+                discovery_enabled,
+                extra_handles: std::collections::HashMap::new(),
             },
             rx,
         )
@@ -747,6 +762,12 @@ impl ResourceWatcher {
         // Flux Controller Deployments (for bundle version tracking)
         self.watch_flux_deployments()?;
 
+        // Opt-in CRD discovery (#197): watches part-of-labeled CRDs and
+        // reports them for dynamic registration. No-op unless enabled.
+        if self.discovery_enabled {
+            self.watch_crd_discovery()?;
+        }
+
         tracing::debug!("All watchers started ({} total)", self.handles.len());
         Ok(())
     }
@@ -851,6 +872,194 @@ impl ResourceWatcher {
         }
     }
 
+    /// Watch part-of-labeled CRDs and report kinds for dynamic registration
+    /// (#197). Uses the same label the Flux Operator's FluxReport reads, so
+    /// labeling a CRD once makes it visible to both. Guard rails (built-in
+    /// exclusion, namespaced-only) are applied by `ExtraKind::from_crd`.
+    fn watch_crd_discovery(&mut self) -> Result<()> {
+        use crate::models::extra_kinds::{ExtraKind, PART_OF_LABEL, PART_OF_VALUE};
+        use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+
+        let client = self.client.clone();
+        let event_tx = self.event_tx.clone();
+
+        let handle = tokio::spawn(async move {
+            let api: Api<CustomResourceDefinition> = Api::all(client);
+            let config =
+                watcher::Config::default().labels(&format!("{}={}", PART_OF_LABEL, PART_OF_VALUE));
+            let mut w = Box::pin(watcher(api, config).backoff(CappedBackoff::new()));
+            let mut error_count = 0u32;
+
+            const WATCHER_NAME: &str = "CRD discovery";
+            tracing::debug!(
+                "Starting CRD discovery watcher ({}={})",
+                PART_OF_LABEL,
+                PART_OF_VALUE
+            );
+
+            while let Some(event) = w.next().await {
+                let ev = match event {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        if is_forbidden_error(&format!("{}", e)) {
+                            if error_count > 0 {
+                                let _ = event_tx
+                                    .send(WatchEvent::WatcherRecovered(WATCHER_NAME.to_string()));
+                            }
+                            let _ = event_tx.send(WatchEvent::Error(
+                                "CRD discovery forbidden by RBAC (discoverFluxResources needs CRD read access)"
+                                    .to_string(),
+                            ));
+                            tracing::info!("CRD discovery forbidden by RBAC, stopping: {}", e);
+                            break;
+                        }
+                        error_count += 1;
+                        if error_count == 1 {
+                            let _ = event_tx
+                                .send(WatchEvent::WatcherDegraded(WATCHER_NAME.to_string()));
+                        }
+                        if error_count == 1 || error_count.is_multiple_of(10) {
+                            tracing::warn!("CRD discovery error ({}): {}", error_count, e);
+                        }
+                        continue;
+                    }
+                };
+
+                if error_count > 0 && !matches!(ev, watcher::Event::Init) {
+                    error_count = 0;
+                    let _ = event_tx.send(WatchEvent::WatcherRecovered(WATCHER_NAME.to_string()));
+                }
+
+                match ev {
+                    watcher::Event::InitApply(crd) | watcher::Event::Apply(crd) => {
+                        if let Some(extra) = ExtraKind::from_crd(&crd) {
+                            let _ = event_tx.send(WatchEvent::ExtraKindDiscovered(extra));
+                        }
+                    }
+                    watcher::Event::Delete(crd) => {
+                        let kind = crd.spec.names.kind.clone();
+                        let _ = event_tx.send(WatchEvent::ExtraKindRemoved(kind));
+                    }
+                    watcher::Event::Init | watcher::Event::InitDone => {
+                        tracing::debug!("CRD discovery watcher initialized");
+                    }
+                }
+            }
+        });
+
+        self.handles.push(handle);
+        Ok(())
+    }
+
+    /// Start a dynamic watcher for a discovered kind (#197). A no-op when a
+    /// watcher for the kind is already running, so re-discovery after
+    /// namespace/context restarts self-heals.
+    pub fn watch_extra(&mut self, extra: &crate::models::extra_kinds::ExtraKind) {
+        if !self.discovery_enabled {
+            return;
+        }
+        if self
+            .extra_handles
+            .get(&extra.kind)
+            .is_some_and(|handle| !handle.is_finished())
+        {
+            return;
+        }
+
+        let client = self.client.clone();
+        let namespace = self.current_namespace.clone();
+        let event_tx = self.event_tx.clone();
+        let resource_type = extra.kind.clone();
+        let api_resource = kube::core::ApiResource {
+            group: extra.group.clone(),
+            version: extra.version.clone(),
+            api_version: format!("{}/{}", extra.group, extra.version),
+            kind: extra.kind.clone(),
+            plural: extra.plural.clone(),
+        };
+
+        let handle = tokio::spawn(async move {
+            let api: Api<DynamicObject> = match namespace {
+                Some(ref ns) => Api::namespaced_with(client, ns, &api_resource),
+                None => Api::all_with(client, &api_resource),
+            };
+            let mut w =
+                Box::pin(watcher(api, watcher::Config::default()).backoff(CappedBackoff::new()));
+            let mut error_count = 0u32;
+            tracing::debug!("Starting discovered-kind watcher for {}", resource_type);
+
+            while let Some(event) = w.next().await {
+                let ev = match event {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        if is_forbidden_error(&format!("{}", e)) {
+                            if error_count > 0 {
+                                let _ = event_tx
+                                    .send(WatchEvent::WatcherRecovered(resource_type.clone()));
+                            }
+                            tracing::info!(
+                                "{} watcher forbidden by RBAC, stopping: {}",
+                                resource_type,
+                                e
+                            );
+                            break;
+                        }
+                        error_count += 1;
+                        if error_count == 1 {
+                            let _ =
+                                event_tx.send(WatchEvent::WatcherDegraded(resource_type.clone()));
+                        }
+                        if error_count == 1 || error_count.is_multiple_of(10) {
+                            tracing::warn!(
+                                "{} watcher error ({}): {}",
+                                resource_type,
+                                error_count,
+                                e
+                            );
+                        }
+                        continue;
+                    }
+                };
+
+                if error_count > 0 && !matches!(ev, watcher::Event::Init) {
+                    error_count = 0;
+                    let _ = event_tx.send(WatchEvent::WatcherRecovered(resource_type.clone()));
+                }
+
+                match ev {
+                    watcher::Event::InitApply(obj) | watcher::Event::Apply(obj) => {
+                        let name = obj.name_any();
+                        let ns = obj.namespace().unwrap_or_default();
+                        if let Ok(obj_json) = serde_json::to_value(&obj) {
+                            let _ = event_tx.send(WatchEvent::Applied(
+                                resource_type.clone(),
+                                ns,
+                                name,
+                                obj_json,
+                            ));
+                        }
+                    }
+                    watcher::Event::Delete(obj) => {
+                        let name = obj.name_any();
+                        let ns = obj.namespace().unwrap_or_default();
+                        let _ = event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
+                    }
+                    watcher::Event::Init | watcher::Event::InitDone => {}
+                }
+            }
+        });
+
+        self.extra_handles.insert(extra.kind.clone(), handle);
+    }
+
+    /// Stop the dynamic watcher for one discovered kind (its CRD is gone).
+    pub fn stop_extra(&mut self, kind: &str) {
+        if let Some(handle) = self.extra_handles.remove(kind) {
+            tracing::debug!("Stopping discovered-kind watcher for {}", kind);
+            handle.abort();
+        }
+    }
+
     /// Abort all watcher tasks
     pub fn stop(&mut self) {
         tracing::debug!("Stopping {} watchers", self.handles.len());
@@ -858,6 +1067,18 @@ impl ResourceWatcher {
             handle.abort();
         }
         self.handles.clear();
+        for (_, handle) in self.extra_handles.drain() {
+            handle.abort();
+        }
+        // Discovered kinds belong to the cluster this watcher was pointed at.
+        // Clearing here covers every teardown path — context switch (old
+        // watcher dropped), namespace restart, shutdown — so `:` aliases and
+        // the help entry never outlive their cluster. The restarted discovery
+        // watcher re-emits `ExtraKindDiscovered` for whatever the new target
+        // actually has.
+        if self.discovery_enabled {
+            crate::models::extra_kinds::global().clear();
+        }
         self.stop_kube_events();
     }
 }

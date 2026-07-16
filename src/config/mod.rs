@@ -39,7 +39,32 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
         }
         "defaultResourceFilter" => Ok(config.default_resource_filter.clone().unwrap_or_default()),
         "connectTimeoutSeconds" => Ok(config.connect_timeout_seconds.to_string()),
-        _ => Err(anyhow::anyhow!("Unknown configuration key: {}", key)),
+        "discoverFluxResources" => Ok(config.discover_flux_resources.to_string()),
+        // Any field the arms above don't special-case is resolved from the
+        // serialized config, so new schema fields are gettable without a new
+        // arm. `skip_serializing_if` hides empty fields from the serialized
+        // config — the fully-populated skeleton tells "empty" apart from
+        // "not a config key at all".
+        _ => {
+            let resolve = |value: &serde_yaml::Value| -> Option<serde_yaml::Value> {
+                key.split('.')
+                    .try_fold(value.clone(), |node, part| node.get(part).cloned())
+            };
+            let current = serde_yaml::to_value(config)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize configuration: {}", e))?;
+            if let Some(node) = resolve(&current) {
+                return serde_yaml::to_string(&node)
+                    .map(|s| s.trim_end().to_string())
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize {}: {}", key, e));
+            }
+            let skeleton = serde_yaml::to_value(schema::Config::fully_populated())
+                .map_err(|e| anyhow::anyhow!("Failed to serialize configuration: {}", e))?;
+            if resolve(&skeleton).is_some() {
+                Ok(String::new()) // real field, currently empty/unset
+            } else {
+                Err(anyhow::anyhow!("Unknown configuration key: {}", key))
+            }
+        }
     }
 }
 
@@ -57,6 +82,11 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
         }
         "defaultControllerNamespace" => {
             config.default_controller_namespace = value.to_string();
+        }
+        "discoverFluxResources" => {
+            config.discover_flux_resources = value
+                .parse()
+                .context("discoverFluxResources must be 'true' or 'false'")?;
         }
         "ui.enableMouse" => {
             config.ui.enable_mouse = value
@@ -174,5 +204,27 @@ mod tests {
         let err = set_config_value(&mut config, "connectTimeoutSeconds", "0").unwrap_err();
 
         assert!(err.to_string().contains("positive integer"));
+    }
+
+    #[test]
+    fn get_resolves_fields_without_dedicated_arms() {
+        // Fields with no match arm (and any future field) resolve through the
+        // serialized-config fallback instead of "Unknown configuration key".
+        let mut config = schema::Config::default();
+        config
+            .context_skins
+            .insert("prod".to_string(), "dracula".to_string());
+
+        let skins = get_config_value(&config, "contextSkins").unwrap();
+        assert!(skins.contains("prod: dracula"));
+
+        // Empty-and-skipped fields are real keys that answer with nothing.
+        assert_eq!(get_config_value(&config, "favorites").unwrap(), "");
+        assert_eq!(get_config_value(&config, "cluster").unwrap(), "");
+
+        let err = get_config_value(&config, "noSuchKey").unwrap_err();
+        assert!(err.to_string().contains("Unknown configuration key"));
+        let err = get_config_value(&config, "ui.noSuchKey").unwrap_err();
+        assert!(err.to_string().contains("Unknown configuration key"));
     }
 }

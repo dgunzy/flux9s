@@ -232,130 +232,273 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
     Ok(())
 }
 
-/// Returns " # (default)" suffix when the value matches its default, empty string otherwise
-fn default_marker<T: PartialEq>(current: &T, default: &T) -> &'static str {
-    if current == default {
-        "  # (default)"
-    } else {
-        ""
+/// Display configuration with all fields visible, annotating defaults.
+fn display_config_with_defaults(config: &Config) {
+    print!("{}", render_config_listing(config));
+    print!("{}", reference_text());
+}
+
+/// Render the full configuration as annotated YAML.
+///
+/// The field set comes from [`Config::fully_populated`] — serde serialization
+/// of the *real* config omits `skip_serializing_if` fields, so walking the
+/// fully-populated skeleton is what guarantees every field (present and
+/// future) appears in the listing. Values come from the user's config;
+/// fields it omitted render as their empty form with a `# (default)` marker.
+fn render_config_listing(config: &Config) -> String {
+    let current = serde_yaml::to_value(config).unwrap_or_default();
+    let defaults = serde_yaml::to_value(Config::default()).unwrap_or_default();
+    let skeleton = serde_yaml::to_value(Config::fully_populated()).unwrap_or_default();
+
+    let mut out = String::new();
+    if let Some(skel) = skeleton.as_mapping() {
+        render_section(
+            &mut out,
+            skel,
+            current.as_mapping(),
+            defaults.as_mapping(),
+            0,
+        );
+    }
+    out
+}
+
+fn render_section(
+    out: &mut String,
+    skeleton: &serde_yaml::Mapping,
+    current: Option<&serde_yaml::Mapping>,
+    defaults: Option<&serde_yaml::Mapping>,
+    indent: usize,
+) {
+    use serde_yaml::Value;
+
+    let pad = "  ".repeat(indent);
+    for (key, skel_val) in skeleton {
+        let key_str = key.as_str().unwrap_or_default();
+        let cur = current.and_then(|m| m.get(key));
+        let def = defaults.and_then(|m| m.get(key));
+        // A field the user's config omitted is at its (empty) default.
+        let marker = if normalize(cur, skel_val) == normalize(def, skel_val) {
+            "  # (default)"
+        } else {
+            ""
+        };
+
+        match skel_val {
+            // Struct sections (e.g. `ui`) recurse over the skeleton's keys so
+            // omitted subfields still show. Free-form user maps (contextSkins,
+            // cluster) render the user's actual entries — the skeleton only
+            // holds sample data for those. The defaults config tells them
+            // apart: struct sections serialize their fields, user maps are
+            // empty-and-skipped by default.
+            Value::Mapping(skel_inner) => {
+                let struct_like = def
+                    .and_then(Value::as_mapping)
+                    .is_some_and(|m| !m.is_empty());
+                if struct_like {
+                    out.push_str(&format!("{pad}{key_str}:\n"));
+                    render_section(
+                        out,
+                        skel_inner,
+                        cur.and_then(Value::as_mapping),
+                        def.and_then(Value::as_mapping),
+                        indent + 1,
+                    );
+                } else {
+                    match cur.and_then(Value::as_mapping).filter(|m| !m.is_empty()) {
+                        Some(m) => {
+                            out.push_str(&format!("{pad}{key_str}:\n"));
+                            let yaml = serde_yaml::to_string(&Value::Mapping(m.clone()))
+                                .unwrap_or_default();
+                            for line in yaml.lines() {
+                                out.push_str(&format!("{pad}  {line}\n"));
+                            }
+                        }
+                        None => out.push_str(&format!("{pad}{key_str}: {{}}{marker}\n")),
+                    }
+                }
+            }
+            Value::Sequence(_) => {
+                match cur.and_then(Value::as_sequence).filter(|s| !s.is_empty()) {
+                    Some(seq) => {
+                        out.push_str(&format!("{pad}{key_str}:{marker}\n"));
+                        for item in seq {
+                            out.push_str(&format!("{pad}  - {}\n", scalar_str(item)));
+                        }
+                    }
+                    None => out.push_str(&format!("{pad}{key_str}: []{marker}\n")),
+                }
+            }
+            _ => {
+                let rendered = cur.map(scalar_str).unwrap_or_else(|| "~".to_string());
+                out.push_str(&format!("{pad}{key_str}: {rendered}{marker}\n"));
+            }
+        }
     }
 }
 
-/// Display configuration with all fields visible, annotating which values are defaults
-fn display_config_with_defaults(config: &Config) {
-    let d = Config::default();
-
-    println!(
-        "readOnly: {}{}",
-        config.read_only,
-        default_marker(&config.read_only, &d.read_only)
-    );
-    println!(
-        "defaultNamespace: {}{}",
-        config.default_namespace,
-        default_marker(&config.default_namespace, &d.default_namespace)
-    );
-    println!(
-        "defaultControllerNamespace: {}{}",
-        config.default_controller_namespace,
-        default_marker(
-            &config.default_controller_namespace,
-            &d.default_controller_namespace
-        )
-    );
-    match &config.default_resource_filter {
-        Some(f) => println!("defaultResourceFilter: {}", f),
-        None => println!("defaultResourceFilter: ~  # (default: none, shows all resource types)"),
+/// A field missing from a serialized config was skipped because it is empty;
+/// resolve it to the empty value of its type (per the skeleton) so it
+/// compares equal to an equally-empty default.
+fn normalize(value: Option<&serde_yaml::Value>, skeleton: &serde_yaml::Value) -> serde_yaml::Value {
+    use serde_yaml::Value;
+    match value {
+        Some(v) => v.clone(),
+        None => match skeleton {
+            Value::Mapping(_) => Value::Mapping(serde_yaml::Mapping::new()),
+            Value::Sequence(_) => Value::Sequence(Vec::new()),
+            _ => Value::Null,
+        },
     }
-    println!(
-        "connectTimeoutSeconds: {}{}",
-        config.connect_timeout_seconds,
-        default_marker(&config.connect_timeout_seconds, &d.connect_timeout_seconds)
-    );
-    println!();
+}
 
-    println!("ui:");
-    println!(
-        "  enableMouse: {}{}",
-        config.ui.enable_mouse,
-        default_marker(&config.ui.enable_mouse, &d.ui.enable_mouse)
-    );
-    println!(
-        "  headless: {}{}",
-        config.ui.headless,
-        default_marker(&config.ui.headless, &d.ui.headless)
-    );
-    println!(
-        "  noIcons: {}{}",
-        config.ui.no_icons,
-        default_marker(&config.ui.no_icons, &d.ui.no_icons)
-    );
-    println!(
-        "  skin: {}{}",
-        config.ui.skin,
-        default_marker(&config.ui.skin, &d.ui.skin)
-    );
-    if let Some(ref skin_ro) = config.ui.skin_read_only {
-        println!("  skinReadOnly: {}", skin_ro);
-    } else {
-        println!("  skinReadOnly: ~  # (default: uses 'skin' when readOnly=true)");
+fn scalar_str(value: &serde_yaml::Value) -> String {
+    use serde_yaml::Value;
+    match value {
+        Value::Null => "~".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        other => serde_yaml::to_string(other)
+            .unwrap_or_default()
+            .trim_end()
+            .to_string(),
     }
-    println!(
-        "  splashless: {}{}",
-        config.ui.splashless,
-        default_marker(&config.ui.splashless, &d.ui.splashless)
-    );
-    println!();
+}
 
-    if config.namespace_hotkeys.is_empty() {
-        println!("namespaceHotkeys: []  # (default: auto-discover at startup)");
-    } else {
-        println!("namespaceHotkeys:");
-        for (idx, ns) in config.namespace_hotkeys.iter().enumerate() {
-            println!("  - {}  # Hotkey {}", ns, idx);
+/// The configuration reference appended to `config list`. Every schema field
+/// must be mentioned here — enforced by `reference_docs_cover_every_field`.
+fn reference_text() -> String {
+    let mut s = String::from("\n# Configuration Reference:\n");
+    for line in [
+        "readOnly - Disable modification operations (default: true)",
+        "defaultNamespace - Starting namespace (default: flux-system)",
+        "defaultControllerNamespace - Flux controller namespace (default: flux-system)",
+        "discoverFluxResources - Discover CRDs labeled app.kubernetes.io/part-of=flux as view-only kinds (default: false)",
+        "defaultResourceFilter - Resource type filter at startup, e.g. \"Kustomization\" (default: none, shows all)",
+        "connectTimeoutSeconds - Startup Kubernetes API health-check timeout in seconds (default: 10)",
+        "ui.enableMouse - Enable mouse support (default: false)",
+        "ui.headless - Hide header (default: false)",
+        "ui.noIcons - Disable Unicode icons (default: false)",
+        "ui.skin - Default skin name (default: default)",
+        "ui.skinReadOnly - Skin for readonly mode, overrides ui.skin when readOnly=true",
+        "ui.splashless - Skip startup splash (default: false)",
+        "namespaceHotkeys - Array of namespace names for 0-9 hotkeys (max 10, default: auto-discover)",
+        "contextSkins - Map of context name to skin name (default: empty)",
+        "cluster - Map of cluster name to cluster-specific settings (default: empty)",
+        "favorites - List of favorited resource keys, e.g. \"Kustomization:flux-system:my-app\" (default: empty)",
+    ] {
+        s.push_str(&format!("#   {line}\n"));
+    }
+    s.push_str("#\n# Environment Variables (override config):\n");
+    for line in [
+        "FLUX9S_SKIN - Override skin (highest priority)",
+        "FLUX9S_READ_ONLY - Override readonly mode",
+        "FLUX9S_DEFAULT_NAMESPACE - Override default namespace",
+        "FLUX9S_DEFAULT_RESOURCE_FILTER - Override default resource filter",
+        "FLUX9S_CONNECT_TIMEOUT - Override Kubernetes API connect timeout in seconds",
+    ] {
+        s.push_str(&format!("#   {line}\n"));
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dotted camelCase paths for every config field, from the fully
+    /// populated skeleton (a serialized real config hides skipped fields).
+    fn all_field_paths() -> Vec<String> {
+        let skeleton = serde_yaml::to_value(Config::fully_populated()).unwrap();
+        let defaults = serde_yaml::to_value(Config::default()).unwrap();
+        let mut paths = Vec::new();
+        collect_paths(
+            skeleton.as_mapping().unwrap(),
+            defaults.as_mapping(),
+            "",
+            &mut paths,
+        );
+        paths
+    }
+
+    fn collect_paths(
+        skeleton: &serde_yaml::Mapping,
+        defaults: Option<&serde_yaml::Mapping>,
+        prefix: &str,
+        out: &mut Vec<String>,
+    ) {
+        use serde_yaml::Value;
+        for (key, skel_val) in skeleton {
+            let key_str = key.as_str().unwrap();
+            let path = if prefix.is_empty() {
+                key_str.to_string()
+            } else {
+                format!("{prefix}.{key_str}")
+            };
+            let def = defaults.and_then(|m| m.get(key));
+            // Recurse into struct sections only — free-form maps hold sample
+            // data, not fields (same rule as render_section).
+            match skel_val {
+                Value::Mapping(inner)
+                    if def
+                        .and_then(Value::as_mapping)
+                        .is_some_and(|m| !m.is_empty()) =>
+                {
+                    collect_paths(inner, def.and_then(Value::as_mapping), &path, out);
+                }
+                _ => out.push(path),
+            }
         }
     }
-    println!();
 
-    if config.context_skins.is_empty() {
-        println!("contextSkins: {{}}  # (default: empty, no context-specific skins)");
-    } else {
-        println!("contextSkins:");
-        for (context, skin) in &config.context_skins {
-            println!("  {}: {}", context, skin);
+    #[test]
+    fn listing_shows_every_field_even_when_unset() {
+        // A default config skips every optional field when serialized — the
+        // listing must show them all anyway (the bug this guards against:
+        // discoverFluxResources missing from `config list`).
+        let listing = render_config_listing(&Config::default());
+        for path in all_field_paths() {
+            let leaf = path.rsplit('.').next().unwrap();
+            assert!(
+                listing.contains(&format!("{leaf}:")),
+                "config list output is missing field '{path}'"
+            );
+        }
+        // Everything in a default config is at its default.
+        assert!(listing.contains("readOnly: true  # (default)"));
+        assert!(listing.contains("favorites: []  # (default)"));
+        assert!(listing.contains("contextSkins: {}  # (default)"));
+        assert!(listing.contains("defaultResourceFilter: ~  # (default)"));
+    }
+
+    #[test]
+    fn listing_marks_only_defaults() {
+        let mut config = Config {
+            discover_flux_resources: true,
+            favorites: vec!["Kustomization:flux-system:apps".to_string()],
+            ..Config::default()
+        };
+        config.ui.skin = "nord".to_string();
+
+        let listing = render_config_listing(&config);
+        assert!(listing.contains("discoverFluxResources: true\n"));
+        assert!(listing.contains("skin: nord\n"));
+        assert!(listing.contains("- Kustomization:flux-system:apps"));
+        assert!(!listing.contains("discoverFluxResources: true  # (default)"));
+        assert!(!listing.contains("skin: nord  # (default)"));
+    }
+
+    #[test]
+    fn reference_docs_cover_every_field() {
+        // Adding a schema field first breaks Config::fully_populated (a
+        // compile error), then this test until the reference documents it.
+        let reference = reference_text();
+        for path in all_field_paths() {
+            assert!(
+                reference.contains(&path),
+                "configuration reference is missing an entry for '{path}'"
+            );
         }
     }
-    println!();
-    println!();
-
-    println!("# Configuration Reference:");
-    println!("#   readOnly - Disable modification operations (default: true)");
-    println!("#   defaultNamespace - Starting namespace (default: flux-system)");
-    println!("#   defaultControllerNamespace - Flux controller namespace (default: flux-system)");
-    println!(
-        "#   defaultResourceFilter - Resource type filter at startup, e.g. \"Kustomization\" (default: none, shows all)"
-    );
-    println!(
-        "#   connectTimeoutSeconds - Startup Kubernetes API health-check timeout in seconds (default: 10)"
-    );
-    println!("#   ui.enableMouse - Enable mouse support (default: false)");
-    println!("#   ui.headless - Hide header (default: false)");
-    println!("#   ui.noIcons - Disable Unicode icons (default: false)");
-    println!("#   ui.skin - Default skin name (default: default)");
-    println!("#   ui.skinReadOnly - Skin for readonly mode, overrides ui.skin when readOnly=true");
-    println!("#   ui.splashless - Skip startup splash (default: false)");
-    println!(
-        "#   namespaceHotkeys - Array of namespace names for 0-9 hotkeys (max 10, default: auto-discover)"
-    );
-    println!("#   contextSkins - Map of context name to skin name (default: empty)");
-    println!(
-        "#   favorites - List of favorited resource keys, e.g. \"Kustomization:flux-system:my-app\" (default: empty)"
-    );
-    println!("#");
-    println!("# Environment Variables (override config):");
-    println!("#   FLUX9S_SKIN - Override skin (highest priority)");
-    println!("#   FLUX9S_READ_ONLY - Override readonly mode");
-    println!("#   FLUX9S_DEFAULT_NAMESPACE - Override default namespace");
-    println!("#   FLUX9S_DEFAULT_RESOURCE_FILTER - Override default resource filter");
-    println!("#   FLUX9S_CONNECT_TIMEOUT - Override Kubernetes API connect timeout in seconds");
 }
