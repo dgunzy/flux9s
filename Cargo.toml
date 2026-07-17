@@ -127,7 +127,7 @@ flate2 = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2.5"
 tempfile = "3.10"
-directories = "5.0"
+directories = "6.0"
 csscolorparser = "0.8"
 
 # CLI argument parsing
