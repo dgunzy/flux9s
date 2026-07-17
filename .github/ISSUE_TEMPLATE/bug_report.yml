@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in flux9s isn't working right
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead? Screenshots of the TUI help a lot.
+    validations:
+      required: true
+
+  - type: input
+    id: flux9s-version
+    attributes:
+      label: flux9s version
+      description: Output of `flux9s --version`
+      placeholder: flux9s 0.12.0
+    validations:
+      required: true
+
+  - type: input
+    id: flux-version
+    attributes:
+      label: Flux version
+      description: Output of `flux version` (or the version shown in the flux9s header)
+      placeholder: v2.9.2
+    validations:
+      required: false
+
+  - type: input
+    id: k8s-version
+    attributes:
+      label: Kubernetes version / distribution
+      placeholder: v1.33 (EKS), kind v0.30.0, ...
+    validations:
+      required: false
+
+  - type: input
+    id: install-method
+    attributes:
+      label: How did you install flux9s?
+      placeholder: brew / cargo install / binstall / GitHub release / source
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug log
+      description: |
+        If reproducible, run `flux9s --debug`, reproduce the issue, and paste the
+        relevant part of the log file (path is printed on startup). Redact
+        cluster names/URLs as needed.
+      render: text
+    validations:
+      required: false

@@ -19,6 +19,7 @@ use clap::Parser;
 /// Flux TUI - A K9s-inspired terminal UI for monitoring Flux GitOps resources
 #[derive(Parser, Debug)]
 #[command(name = "flux9s")]
+#[command(version)]
 #[command(about = "A K9s-inspired terminal UI for monitoring Flux GitOps resources", long_about = None)]
 struct Args {
     /// Enable debug logging
@@ -48,6 +49,11 @@ enum Command {
     },
     /// Display version information
     Version,
+    /// Generate shell completions (bash, zsh, fish, elvish, powershell)
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 #[tokio::main]
@@ -57,6 +63,15 @@ async fn main() -> Result<()> {
     // Handle version command
     if let Some(Command::Version) = args.command {
         cli::display_version(args.debug);
+        return Ok(());
+    }
+
+    // Handle completions command
+    if let Some(Command::Completions { shell }) = args.command {
+        use clap::CommandFactory;
+        let mut cmd = Args::command();
+        let name = cmd.get_name().to_string();
+        clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
         return Ok(());
     }
 

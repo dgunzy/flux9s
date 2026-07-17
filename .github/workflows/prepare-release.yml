@@ -94,7 +94,7 @@ jobs:
             -H "anthropic-version: 2023-06-01" \
             -d @- << EOF
           {
-            "model": "claude-3-haiku-20240307",
+            "model": "claude-haiku-4-5-20251001",
             "max_tokens": 1024,
             "messages": [{
               "role": "user",
@@ -108,9 +108,11 @@ jobs:
           CHANGELOG=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
 
           if [ -z "$CHANGELOG" ]; then
-            echo "Warning: Claude API returned empty response"
-            echo "API Response: $RESPONSE"
-            CHANGELOG="### Changes\n- Version bump to $VERSION"
+            # Surface the failure loudly: a retired model name sat here for
+            # months producing "Version bump" fallback entries (with literal
+            # \n artifacts from echo) in every release since 0.9.x.
+            echo "::warning title=Changelog generation failed::Claude API returned no text; using fallback entry. Response: $RESPONSE"
+            CHANGELOG=$(printf '### Changed\n- Version bump to %s' "$VERSION")
           fi
 
           # Save to file for next step
@@ -123,8 +125,8 @@ jobs:
           VERSION="${{ steps.version.outputs.new_version }}"
           DATE=$(date +%Y-%m-%d)
 
-          # Read AI-generated changelog
-          AI_CHANGELOG=$(cat /tmp/ai_changelog.txt 2>/dev/null || echo "### Changes\n- Version bump to $VERSION")
+          # Read AI-generated changelog (printf, not echo: \n must be real)
+          AI_CHANGELOG=$(cat /tmp/ai_changelog.txt 2>/dev/null || printf '### Changed\n- Version bump to %s' "$VERSION")
 
           # Create the new changelog entry
           cat > /tmp/changelog_entry.txt << EOF

@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Keep the SHA-pinned actions current (pins never move on their own)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for routine bumps; majors stay separate for review
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]

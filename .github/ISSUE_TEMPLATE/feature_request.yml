@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an idea or improvement for flux9s
+labels: [feature]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the workflow or pain point, not just the solution — "when X happens I have to leave flux9s to do Y".
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like to happen?
+      description: If you have a UX in mind (keybinding, `:` command, view), sketch it. K9s prior art is a plus.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: How do you handle this today?
+    validations:
+      required: false

@@ -362,6 +362,13 @@ flux9s config set ui.skinReadOnly rose-pine
 
 # Import and set a skin
 flux9s config skins set navy.yaml
+
+# Show the installed version
+flux9s --version
+
+# Generate shell completions (bash, zsh, fish, elvish, powershell)
+flux9s completions zsh > "${fpath[1]}/_flux9s"   # zsh
+flux9s completions bash > /etc/bash_completion.d/flux9s   # bash
 ```
 
 {{% alert title="Skin Compatibility" color="warning" %}}

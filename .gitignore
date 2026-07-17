@@ -20,3 +20,6 @@ Thumbs.db
 .claude
 .wolf
 .antigravitycli
+
+# Compiled Rust artifacts (never belong in the repo)
+*.rlib

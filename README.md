@@ -169,6 +169,8 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `config set ui.skinReadOnly rose-pine` - set a skin that is in your systems flux9s/skins dir when readonly enabled.
 - `flux9s config set connectTimeoutSeconds 15` - set the startup Kubernetes API health-check timeout.
 - `flux9s config skins set navy.yaml` - import a skin, validate, set in config.
+- `flux9s completions zsh` - generate shell completions (bash, zsh, fish, elvish, powershell); e.g. `flux9s completions zsh > "${fpath[1]}/_flux9s"`.
+- `flux9s --version` / `flux9s version` - show the installed version (`version` also checks for updates).
 
 > **Note:** Not all K9s skins are compatible with flux9s. flux9s skins follow a similar format but may require adjustments to work properly.
 

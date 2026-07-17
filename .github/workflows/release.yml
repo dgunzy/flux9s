@@ -124,9 +124,11 @@ jobs:
           path: ${{ matrix.asset_name }}
 
   build-windows:
-    name: Build x86_64-pc-windows-msvc (non-blocking)
+    # Windows is a first-class release target (binstall metadata and users
+    # depend on the zip) — a failed build must block the release, not
+    # silently ship without it.
+    name: Build x86_64-pc-windows-msvc
     needs: test
-    continue-on-error: true
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

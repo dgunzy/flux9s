@@ -3,12 +3,15 @@ name = "flux9s"
 
 version = "0.12.0"
 edition = "2024"
+# Minimum supported Rust version — enforced by the msrv job in ci.yml.
+# Floor comes from the dependency graph (cookie_store requires 1.88).
+rust-version = "1.88"
 authors = ["Dan Guns <danbguns@gmail.com>"]
 description = "A K9s-inspired terminal UI for monitoring Flux GitOps resources"
 license = "Apache-2.0"
 repository = "https://github.com/dgunzy/flux9s"
 homepage = "https://github.com/dgunzy/flux9s"
-documentation = "https://docs.rs/flux9s"
+documentation = "https://flux9s.ca"
 keywords = ["kubernetes", "flux", "gitops", "tui", "k9s"]
 categories = ["command-line-utilities", "development-tools"]
 
@@ -129,6 +132,7 @@ csscolorparser = "0.8"
 
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
 
 # OpenSSL - explicit dependency for vendored feature support
 openssl = { version = "0.10", optional = true }
@@ -200,3 +204,11 @@ required-features = ["tui"]
 # The OpenSSL `tls-server-name` fix (flux9s #170 / kube-rs #991, PR kube-rs/kube#1993)
 # shipped in kube 4.0.0, so the interim [patch.crates-io] fork pin has been removed (flux9s #171).
 # Reproduction harness: scripts/repro-tls-server-name.sh.
+
+# Optimize release binaries for distribution (brew, binstall, GitHub releases):
+# fat LTO + single codegen unit trade compile time for size/speed, strip drops
+# debug symbols end users never see.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
