@@ -146,7 +146,7 @@ update-informer = "1.1"
 
 [dev-dependencies]
 # Testing
-mockall = "0.13"
+mockall = "0.15"
 insta = "1.46.0"
 
 [package.metadata.binstall]
