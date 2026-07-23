@@ -34,6 +34,8 @@ pub enum View {
     /// Cluster pulse dashboard (#195): per-kind health counts, recent
     /// failures, and FluxReport distribution info. Opened with `:pulse`.
     Pulse,
+    /// Waiting for external editor / SSA apply
+    ResourceEdit,
     #[allow(dead_code)] // Reserved for future alternative help view implementation
     Help,
 }
@@ -368,6 +370,20 @@ pub struct AsyncOperationState {
     pub last_operation_key: Option<char>,
     /// Operation waiting for the user's confirmation dialog.
     pub confirmation_pending: Option<PendingOperation>,
+
+    // Edit operation
+    /// Resource being edited (key used for SSA apply)
+    pub edit_pending: Option<ResourceKey>,
+    /// Full fetched JSON object (includes resourceVersion) for the resource being edited
+    pub edit_full_yaml: Option<serde_json::Value>,
+    /// YAML string from the editor — queued for SSA apply
+    pub edit_save_pending: Option<String>,
+    /// Receiver for the async SSA apply result
+    pub edit_save_result_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>>,
+    /// Error message from the last failed save attempt
+    pub edit_error_message: Option<String>,
+    /// True once the external editor has been launched for the current edit
+    pub edit_editor_launched: bool,
 }
 
 impl AsyncOperationState {
@@ -380,6 +396,13 @@ impl AsyncOperationState {
         self.operation.clear();
         self.last_operation_key = None;
         self.confirmation_pending = None;
+
+        self.edit_pending = None;
+        self.edit_full_yaml = None;
+        self.edit_save_pending = None;
+        self.edit_save_result_rx = None;
+        self.edit_error_message = None;
+        self.edit_editor_launched = false;
     }
 }
 

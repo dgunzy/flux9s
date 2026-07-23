@@ -62,6 +62,11 @@ pub struct Config {
     /// `FLUX9S_CONNECT_TIMEOUT` environment variable.
     #[serde(default = "default_connect_timeout_seconds")]
     pub connect_timeout_seconds: u64,
+
+    /// Preferred editor override. Checked after FLUX9S_EDITOR env var,
+    /// before $VISUAL and $EDITOR. Leave unset to use $VISUAL/$EDITOR/vi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<String>,
 }
 
 impl Config {
@@ -95,6 +100,7 @@ impl Config {
             favorites: vec!["Kustomization:flux-system:my-app".to_string()],
             default_resource_filter: Some("Kustomization".to_string()),
             connect_timeout_seconds: default_connect_timeout_seconds(),
+            editor: Some("vim".to_string()),
         }
     }
 
@@ -199,6 +205,7 @@ impl Default for Config {
             favorites: Vec::new(), // Empty by default
             default_resource_filter: None,
             connect_timeout_seconds: default_connect_timeout_seconds(),
+            editor: None,
         }
     }
 }
@@ -267,5 +274,20 @@ ui:
         assert_eq!(config.default_namespace, "my-ns");
         assert_eq!(config.connect_timeout_seconds, 15);
         assert_eq!(config.ui.skin, "dracula");
+    }
+
+    #[test]
+    fn test_config_without_editor_field_deserializes_as_none() {
+        // Older config files without the editor field should still deserialize fine.
+        let yaml = "readOnly: false\n";
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.editor.is_none());
+    }
+
+    #[test]
+    fn test_config_with_editor_field() {
+        let yaml = "readOnly: false\neditor: nvim\n";
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.editor.as_deref(), Some("nvim"));
     }
 }

@@ -530,8 +530,23 @@ pub async fn run_tui_with_async_init(
             // Poll fetch results and store them for the views.
             if let Some(result) = app.async_state.yaml.try_recv() {
                 match result {
-                    Ok(yaml) => app.async_state.yaml.set_result(yaml),
+                    Ok(yaml) => {
+                        // When editing, route to edit_full_yaml instead of the YAML view
+                        if app.view_state.current_view == crate::tui::app::state::View::ResourceEdit
+                        {
+                            app.async_state.edit_full_yaml = Some(yaml);
+                        } else {
+                            app.async_state.yaml.set_result(yaml);
+                        }
+                    }
                     Err(e) => {
+                        // If edit was pending, cancel it and return to list
+                        if app.view_state.current_view == crate::tui::app::state::View::ResourceEdit
+                        {
+                            app.async_state.edit_pending = None;
+                            app.async_state.edit_editor_launched = false;
+                            app.view_state.current_view = app.view_state.previous_list_view;
+                        }
                         app.async_state.yaml.set_error();
                         app.set_status_message((format!("Failed to fetch YAML: {}", e), true));
                     }
@@ -644,6 +659,100 @@ pub async fn run_tui_with_async_init(
             // Check for operation execution results
             if let Some(result) = app.try_get_operation_result() {
                 app.set_operation_result(result);
+            }
+
+            // If we have a full YAML ready for editing, launch the system editor synchronously.
+            // Must run on the main thread so we can properly suspend/resume the TUI terminal.
+            if app.view_state.current_view == crate::tui::app::state::View::ResourceEdit
+                && app.async_state.edit_full_yaml.is_some()
+                && app.async_state.edit_save_pending.is_none()
+                && app.async_state.edit_save_result_rx.is_none()
+                && !app.async_state.edit_editor_launched
+            {
+                app.async_state.edit_editor_launched = true;
+
+                if let Some(full_yaml_json) = app.async_state.edit_full_yaml.take() {
+                    let yaml_str =
+                        serde_yaml::to_string(&full_yaml_json).unwrap_or_else(|_| "{}".to_string());
+                    let editor_candidates =
+                        crate::editor::editor_candidates(app.config.editor.as_deref());
+                    let enable_mouse = app.config.ui.enable_mouse;
+
+                    // Suspend TUI: leave raw mode and alternate screen so the editor
+                    // can take over the terminal normally.
+                    disable_raw_mode()?;
+                    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                    if enable_mouse {
+                        execute!(terminal.backend_mut(), DisableMouseCapture)?;
+                    }
+
+                    let edit_result: anyhow::Result<Option<String>> = (|| {
+                        let mut tmp = tempfile::NamedTempFile::new()?;
+                        use std::io::Write;
+                        tmp.write_all(yaml_str.as_bytes())?;
+                        let tmp_path = tmp.path().to_path_buf();
+
+                        crate::editor::open_in_editor_with_fallback(&editor_candidates, &tmp_path)?;
+
+                        let edited = std::fs::read_to_string(&tmp_path)?;
+                        if edited.trim() == yaml_str.trim() {
+                            Ok(None)
+                        } else {
+                            Ok(Some(edited))
+                        }
+                    })();
+
+                    // Re-enter TUI: restore raw mode and alternate screen.
+                    enable_raw_mode()?;
+                    execute!(io::stdout(), EnterAlternateScreen)?;
+                    if enable_mouse {
+                        execute!(io::stdout(), EnableMouseCapture)?;
+                    }
+                    terminal.clear()?;
+
+                    match edit_result {
+                        Ok(Some(edited_yaml)) => {
+                            app.async_state.edit_save_pending = Some(edited_yaml);
+                        }
+                        Ok(None) => {
+                            app.set_status_message((
+                                "Edit cancelled (no changes)".to_string(),
+                                false,
+                            ));
+                            app.async_state.edit_pending = None;
+                            app.async_state.edit_editor_launched = false;
+                            app.view_state.current_view = app.view_state.previous_list_view;
+                        }
+                        Err(e) => {
+                            app.set_status_message((format!("Editor error: {}", e), true));
+                            app.async_state.edit_pending = None;
+                            app.async_state.edit_editor_launched = false;
+                            app.view_state.current_view = app.view_state.previous_list_view;
+                        }
+                    }
+                }
+            }
+
+            // Trigger SSA apply if edited YAML is pending
+            if kube_initialized {
+                if let Some(req) = app.trigger_edit_save() {
+                    tokio::spawn(async move {
+                        let result = crate::operations::apply_resource_yaml(
+                            &req.client,
+                            &req.resource_key.resource_type,
+                            &req.resource_key.namespace,
+                            &req.resource_key.name,
+                            &req.yaml_to_apply,
+                        )
+                        .await;
+                        let _ = req.tx.send(result);
+                    });
+                }
+            }
+
+            // Check for SSA apply results
+            if let Some(result) = app.try_get_edit_save_result() {
+                app.set_edit_save_result(result);
             }
 
             // Check if favorites need to be saved
