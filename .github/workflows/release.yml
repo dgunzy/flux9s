@@ -192,11 +192,20 @@ jobs:
         with:
           toolchain: stable
 
+      # Idempotent: crates.io versions are immutable, so a re-run for a version
+      # that's already published (e.g. finishing a release whose signing step
+      # failed) skips publish instead of failing the whole workflow.
       - name: Publish to crates.io
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |
-          cargo publish --token $CRATES_IO_TOKEN
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+          if curl -sf -H "User-Agent: flux9s-release-ci" \
+               "https://crates.io/api/v1/crates/flux9s/${VERSION}" >/dev/null; then
+            echo "flux9s ${VERSION} is already on crates.io — skipping publish."
+          else
+            cargo publish --token "$CRATES_IO_TOKEN"
+          fi
 
   release:
     name: Create GitHub Release
@@ -252,17 +261,17 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Keyless signing of the checksum file: one signature covers every asset.
-      # Verify with:
-      #   cosign verify-blob --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \
+      # Keyless signing of the checksum file: one bundle covers every asset.
+      # cosign v3 replaced --output-signature/--output-certificate with a single
+      # Sigstore --bundle (signature + cert + Rekor entry in one JSON). Verify:
+      #   cosign verify-blob --bundle SHA256SUMS.cosign.bundle \
       #     --certificate-identity-regexp 'https://github.com/dgunzy/flux9s/.+' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
       - name: Sign checksums (cosign keyless)
         run: |
           cd dist
           cosign sign-blob --yes \
-            --output-signature SHA256SUMS.sig \
-            --output-certificate SHA256SUMS.pem \
+            --bundle SHA256SUMS.cosign.bundle \
             SHA256SUMS
 
       # SLSA build provenance for each binary archive. Verify with:

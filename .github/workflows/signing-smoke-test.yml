@@ -1,0 +1,40 @@
+# Validates the cosign keyless sign+verify round-trip used by release.yml,
+# WITHOUT publishing or tagging anything. Run it on demand before cutting a
+# release; it also self-checks whenever the release/signing workflows change.
+name: Signing smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/signing-smoke-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cosign-roundtrip:
+    name: cosign sign + verify (dummy blob)
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # keyless OIDC — same as the release job
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Mirrors the exact sign invocation in release.yml, then verifies it, so a
+      # broken cosign flag/version fails HERE instead of mid-release.
+      - name: Sign + verify a dummy checksum file
+        run: |
+          echo "flux9s signing smoke test $(date -u)" > SHA256SUMS
+          cosign sign-blob --yes \
+            --bundle SHA256SUMS.cosign.bundle \
+            SHA256SUMS
+          cosign verify-blob \
+            --bundle SHA256SUMS.cosign.bundle \
+            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.+" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            SHA256SUMS
+          echo "✓ cosign sign + verify round-trip OK"
