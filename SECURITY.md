@@ -29,15 +29,14 @@ Dependabot. The build also runs OpenSSF Scorecard, CodeQL, and gitleaks.
 
 ## Verifying releases
 
-Every release ships a `SHA256SUMS` file, a cosign signature over it, and SLSA
-build-provenance attestations for each archive.
+Every release ships a `SHA256SUMS` file, a cosign Sigstore bundle over it
+(`SHA256SUMS.cosign.bundle`), and SLSA build-provenance attestations for each archive.
 
 Verify the checksums are authentic (cosign keyless):
 
 ```bash
 cosign verify-blob \
-  --certificate SHA256SUMS.pem \
-  --signature SHA256SUMS.sig \
+  --bundle SHA256SUMS.cosign.bundle \
   --certificate-identity-regexp 'https://github.com/dgunzy/flux9s/.+' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
