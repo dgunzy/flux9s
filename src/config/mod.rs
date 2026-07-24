@@ -32,6 +32,7 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
         "ui.skin" => Ok(config.ui.skin.clone()),
         "ui.skinReadOnly" => Ok(config.ui.skin_read_only.clone().unwrap_or_default()),
         "ui.splashless" => Ok(config.ui.splashless.to_string()),
+        "ui.rbacWarnings" => Ok(config.ui.rbac_warnings.to_string()),
         "namespaceHotkeys" => {
             // Return as YAML array
             serde_yaml::to_string(&config.namespace_hotkeys)
@@ -118,6 +119,11 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
             config.ui.splashless = value
                 .parse()
                 .context("ui.splashless must be 'true' or 'false'")?;
+        }
+        "ui.rbacWarnings" => {
+            config.ui.rbac_warnings = value
+                .parse()
+                .context("ui.rbacWarnings must be 'true' or 'false'")?;
         }
         "namespaceHotkeys" => {
             // Parse as YAML array or comma-separated list

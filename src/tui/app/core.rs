@@ -44,6 +44,10 @@ pub struct App {
     /// Watchers currently in a degraded (erroring/reconnecting) state.
     /// Non-empty set drives the "watch degraded" banner.
     pub(crate) degraded_watchers: HashSet<String>,
+    /// Flux kinds whose watcher stopped because RBAC forbids them (HTTP 403).
+    /// Drives the contextual "restricted" empty-state (#210). Distinct from
+    /// missing CRDs, which stay silent so sparse clusters aren't noisy.
+    pub(crate) forbidden_watchers: HashSet<String>,
 }
 
 impl App {
@@ -93,6 +97,7 @@ impl App {
             logs_after_workload_load: false,
             log_path: None,
             degraded_watchers: HashSet::new(),
+            forbidden_watchers: HashSet::new(),
         }
     }
 
@@ -101,9 +106,54 @@ impl App {
         self.degraded_watchers.insert(watcher);
     }
 
-    /// Mark a watcher as recovered after a successful watch event.
+    /// Mark a watcher as recovered after a successful watch event. A watcher
+    /// that comes back also clears any RBAC-forbidden flag for the same kind.
     pub fn watch_recovered(&mut self, watcher: &str) {
         self.degraded_watchers.remove(watcher);
+        self.forbidden_watchers.remove(watcher);
+    }
+
+    /// Mark a Flux kind's watcher as forbidden by RBAC (stopped on HTTP 403).
+    pub fn watch_forbidden(&mut self, watcher: String) {
+        // A forbidden watcher has stopped, so it can't also be "reconnecting".
+        self.degraded_watchers.remove(&watcher);
+        self.forbidden_watchers.insert(watcher);
+    }
+
+    /// Contextual access notice for the resource list's empty-state, or `None`
+    /// to fall back to the normal "no resources" message. Returns `None` when
+    /// the `rbacWarnings` config is off (silent mode) or nothing is restricted.
+    ///
+    /// - A specific restricted kind is selected → name it.
+    /// - Unified list with restrictions → summarize the restricted kinds.
+    pub fn access_notice(&self) -> Option<String> {
+        if !self.config.ui.rbac_warnings || self.forbidden_watchers.is_empty() {
+            return None;
+        }
+        let lock = if self.config.ui.no_icons {
+            "[restricted]"
+        } else {
+            "🔒"
+        };
+        match &self.view_state.selected_resource_type {
+            Some(kind) if self.forbidden_watchers.contains(kind) => Some(format!(
+                "{lock} Restricted — your RBAC can't list {kind} in this scope"
+            )),
+            Some(_) => None, // The selected kind isn't the restricted one.
+            None => {
+                let mut kinds: Vec<&String> = self.forbidden_watchers.iter().collect();
+                kinds.sort();
+                let list = kinds
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Some(format!(
+                    "{lock} {} resource type(s) restricted by RBAC: {list}",
+                    kinds.len()
+                ))
+            }
+        }
     }
 
     /// Whether any watcher is currently degraded (drives the warning banner).
@@ -120,8 +170,9 @@ impl App {
     pub fn set_connected(&mut self) {
         self.ui_state.connection_status = crate::tui::app::state::ConnectionStatus::Connected;
         self.ui_state.cached_terminal_size = None;
-        // Fresh watchers — any degraded state belongs to the old set.
+        // Fresh watchers — any degraded/forbidden state belongs to the old set.
         self.degraded_watchers.clear();
+        self.forbidden_watchers.clear();
     }
 
     /// Record a fatal connection error to display on the error screen.
@@ -443,6 +494,7 @@ impl App {
         self.kube_events.clear();
         self.logs.stop();
         self.degraded_watchers.clear();
+        self.forbidden_watchers.clear();
         self.view_state.selected_index = 0;
         self.view_state.scroll_offset = 0;
         self.view_state.selected_resource_type = None;
@@ -939,6 +991,7 @@ mod tests {
                 skin: "default".to_string(),
                 skin_read_only: None,
                 splashless: true,
+                rbac_warnings: true,
             },
             context_skins: HashMap::new(),
             cluster: HashMap::new(),

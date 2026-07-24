@@ -240,9 +240,10 @@ impl App {
                         self.state.clear();
                         self.resource_objects.clear();
                         self.controller_pods.clear();
-                        // Restarted watchers start clean; stale degraded state
-                        // from the old set would otherwise never clear.
+                        // Restarted watchers start clean; stale degraded/forbidden
+                        // state from the old set would otherwise never clear.
                         self.degraded_watchers.clear();
+                        self.forbidden_watchers.clear();
                         if let Some(ref mut watcher) = self.watcher {
                             if let Err(e) = watcher.set_namespace(new_namespace) {
                                 self.set_status_message((
@@ -1763,6 +1764,7 @@ impl App {
             self.controller_pods.clear();
             self.kube_events.clear();
             self.degraded_watchers.clear();
+            self.forbidden_watchers.clear();
 
             if let Some(ref mut watcher) = self.watcher {
                 if let Err(e) = watcher.set_namespace(new_namespace) {
@@ -1911,6 +1913,7 @@ mod tests {
                 skin: "default".to_string(),
                 skin_read_only: None,
                 splashless: true,
+                rbac_warnings: true,
             },
             context_skins: HashMap::new(),
             cluster: HashMap::new(),
@@ -2921,6 +2924,68 @@ mod tests {
         app.ui_state.command_buffer = "ns all".to_string();
         app.execute_command();
         assert_eq!(app.namespace, None);
+    }
+
+    #[test]
+    fn forbidden_watcher_state_tracks_and_clears() {
+        let mut app = create_test_app(false);
+        assert!(app.forbidden_watchers.is_empty());
+
+        app.watch_forbidden("HelmRelease".to_string());
+        assert!(!app.forbidden_watchers.is_empty());
+        assert!(app.forbidden_watchers.contains("HelmRelease"));
+
+        // A recovered watch for the same kind clears the restriction.
+        app.watch_recovered("HelmRelease");
+        assert!(app.forbidden_watchers.is_empty());
+
+        // Marking forbidden also drops any prior degraded flag for that kind.
+        app.watch_degraded("HelmRelease".to_string());
+        app.watch_forbidden("HelmRelease".to_string());
+        assert!(!app.degraded_watchers.contains("HelmRelease"));
+        assert!(app.forbidden_watchers.contains("HelmRelease"));
+    }
+
+    #[test]
+    fn access_notice_is_contextual_and_respects_config() {
+        let mut app = create_test_app(false);
+        // Nothing restricted -> no notice.
+        assert_eq!(app.access_notice(), None);
+
+        app.watch_forbidden("HelmRelease".to_string());
+
+        // Unified list (no selected type) -> summary mentioning the kind.
+        app.view_state.selected_resource_type = None;
+        let notice = app.access_notice().expect("unified notice");
+        assert!(
+            notice.contains("HelmRelease"),
+            "notice names the kind: {notice}"
+        );
+
+        // Selected the restricted kind -> specific notice.
+        app.view_state.selected_resource_type = Some("HelmRelease".to_string());
+        assert!(app.access_notice().unwrap().contains("HelmRelease"));
+
+        // Selected a DIFFERENT, non-restricted kind -> no false alarm.
+        app.view_state.selected_resource_type = Some("Kustomization".to_string());
+        assert_eq!(app.access_notice(), None);
+
+        // Config off -> silent, even when restricted and viewing the kind.
+        app.view_state.selected_resource_type = Some("HelmRelease".to_string());
+        app.config.ui.rbac_warnings = false;
+        assert_eq!(app.access_notice(), None);
+    }
+
+    #[test]
+    fn switching_namespace_clears_forbidden_state() {
+        let mut app = create_test_app(false);
+        app.watch_forbidden("HelmRelease".to_string());
+        assert!(!app.forbidden_watchers.is_empty());
+
+        // A namespace switch restarts watchers, so stale RBAC state must clear.
+        app.ui_state.command_buffer = "ns kube-system".to_string();
+        app.execute_command();
+        assert!(app.forbidden_watchers.is_empty());
     }
 
     #[test]

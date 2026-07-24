@@ -35,6 +35,7 @@ fn create_test_config() -> Config {
             skin: "default".to_string(),
             skin_read_only: None,
             splashless: true, // Skip splash for tests
+            rbac_warnings: true,
         },
         context_skins: HashMap::new(),
         cluster: HashMap::new(),
@@ -349,6 +350,7 @@ fn test_render_resource_list() {
                 &HashSet::new(),
                 SortField::Default,
                 false,
+                None,
             );
         })
         .unwrap();
@@ -391,6 +393,7 @@ fn test_render_resource_list_with_selection() {
                 &HashSet::new(),
                 SortField::Default,
                 false,
+                None,
             );
         })
         .unwrap();
@@ -430,6 +433,7 @@ fn test_render_resource_list_with_resource_type_filter() {
                 &HashSet::new(),
                 SortField::Default,
                 false,
+                None,
             );
         })
         .unwrap();
@@ -462,6 +466,7 @@ fn test_render_resource_list_empty() {
                 &HashSet::new(),
                 SortField::Default,
                 false,
+                None,
             );
         })
         .unwrap();

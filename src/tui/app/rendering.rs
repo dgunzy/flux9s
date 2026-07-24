@@ -329,6 +329,7 @@ impl App {
             match self.view_state.current_view {
                 View::ResourceList => {
                     let resources = self.get_filtered_resources();
+                    let access_notice = self.access_notice();
                     render_resource_list(
                         f,
                         area,
@@ -342,6 +343,7 @@ impl App {
                         &self.selection_state.favorites,
                         self.view_state.sort_field,
                         self.view_state.sort_reverse,
+                        access_notice.as_deref(),
                     );
                 }
                 View::ResourceDetail => {
@@ -409,6 +411,9 @@ impl App {
                         &self.selection_state.favorites,
                         self.view_state.sort_field,
                         self.view_state.sort_reverse,
+                        // Favorites is curated; an empty list there isn't an RBAC
+                        // signal, so keep the neutral empty-state.
+                        None,
                     );
                 }
                 View::ResourceGraph => {

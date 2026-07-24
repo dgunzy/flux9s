@@ -199,6 +199,7 @@ mod tests {
                 skin: "default".to_string(),
                 skin_read_only: None,
                 splashless: true,
+                rbac_warnings: true,
             },
             context_skins: HashMap::new(),
             cluster: HashMap::new(),

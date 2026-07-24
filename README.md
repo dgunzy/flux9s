@@ -4,6 +4,7 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 
 [![CI](https://img.shields.io/github/actions/workflow/status/dgunzy/flux9s/ci.yml?branch=main&logo=github&label=CI)](https://github.com/dgunzy/flux9s/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/dgunzy/flux9s/badge)](https://scorecard.dev/viewer/?uri=github.com/dgunzy/flux9s)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13780/badge)](https://www.bestpractices.dev/projects/13780)
 [![Crates.io](https://img.shields.io/crates/v/flux9s?logo=rust&color=blue)](https://crates.io/crates/flux9s)
 [![Downloads](https://img.shields.io/crates/d/flux9s?logo=rust&label=downloads)](https://crates.io/crates/flux9s)
 [![License](https://img.shields.io/github/license/dgunzy/flux9s?color=green)](LICENSE)
@@ -43,6 +44,7 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 - **Reconciliation history** - View reconciliation history for resources that track it
 - **Favorites** - Mark frequently accessed resources for quick access
 - **Namespace switching** - Monitor resources across namespaces or cluster-wide
+- **RBAC-aware** - When access is denied (HTTP 403), the list shows a clear "restricted" note instead of a silently empty view; missing CRDs stay quiet (toggle with `ui.rbacWarnings`)
 - **Status indicators** - Visual indicators for resource health and suspension state
 
 ## Installation
