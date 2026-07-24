@@ -120,7 +120,7 @@ serde_yaml = "0.9"
 async-trait = "0.1"
 
 # Helm release decoding
-base64 = "0.22"
+base64 = "0.23"
 flate2 = "1.0"
 
 # Utilities
