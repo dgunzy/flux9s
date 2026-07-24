@@ -33,6 +33,7 @@ flux9s config path
 | `defaultResourceFilter` | string | *(none)* | Resource type shown at startup (e.g., `Kustomization`) |
 | `connectTimeoutSeconds` | integer | `10` | Startup Kubernetes API health-check timeout in seconds |
 | `discoverFluxResources` | boolean | `false` | Opt-in dynamic discovery of Flux-adjacent CRDs (see below) |
+| `editor` | string | *(none)* | Editor command for `e` keybinding; falls back through `$VISUAL`, `$EDITOR`, then `vi` |
 | `ui.enableMouse` | bool | `false` | Enable mouse support |
 | `ui.headless` | bool | `false` | Hide the header bar |
 | `ui.noIcons` | bool | `false` | Disable Unicode icons for terminal compatibility |

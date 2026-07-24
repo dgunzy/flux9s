@@ -532,6 +532,19 @@ impl App {
                         &self.theme,
                     );
                 }
+                View::ResourceEdit => {
+                    let msg = if self.async_state.edit_save_result_rx.is_some() {
+                        "Saving changes..."
+                    } else if self.async_state.edit_editor_launched {
+                        "Editing in external editor..."
+                    } else {
+                        "Loading resource..."
+                    };
+                    let paragraph = Paragraph::new(msg)
+                        .alignment(ratatui::layout::Alignment::Center)
+                        .block(Block::default().borders(Borders::ALL).title("Edit"));
+                    f.render_widget(paragraph, area);
+                }
                 View::Help => {
                     render_help(f, area, &self.theme, self.namespace_hotkeys());
                 }

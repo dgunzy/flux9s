@@ -6,6 +6,7 @@
 mod cli;
 mod config;
 mod constants;
+mod editor;
 mod kube;
 mod models;
 mod operations;

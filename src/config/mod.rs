@@ -40,6 +40,7 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
         "defaultResourceFilter" => Ok(config.default_resource_filter.clone().unwrap_or_default()),
         "connectTimeoutSeconds" => Ok(config.connect_timeout_seconds.to_string()),
         "discoverFluxResources" => Ok(config.discover_flux_resources.to_string()),
+        "editor" => Ok(config.editor.clone().unwrap_or_default()),
         // Any field the arms above don't special-case is resolved from the
         // serialized config, so new schema fields are gettable without a new
         // arm. `skip_serializing_if` hides empty fields from the serialized
@@ -174,6 +175,13 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
             }
             config.connect_timeout_seconds = seconds;
         }
+        "editor" => {
+            if value.is_empty() {
+                config.editor = None;
+            } else {
+                config.editor = Some(value.to_string());
+            }
+        }
         _ => return Err(anyhow::anyhow!("Unknown configuration key: {}", key)),
     }
 
@@ -226,5 +234,23 @@ mod tests {
         assert!(err.to_string().contains("Unknown configuration key"));
         let err = get_config_value(&config, "ui.noSuchKey").unwrap_err();
         assert!(err.to_string().contains("Unknown configuration key"));
+    }
+
+    #[test]
+    fn test_editor_get_set_config_value() {
+        let mut config = schema::Config::default();
+
+        // Default is empty string (None)
+        assert_eq!(get_config_value(&config, "editor").unwrap(), "");
+
+        // Set a value
+        set_config_value(&mut config, "editor", "nvim").unwrap();
+        assert_eq!(get_config_value(&config, "editor").unwrap(), "nvim");
+        assert_eq!(config.editor.as_deref(), Some("nvim"));
+
+        // Clear by setting empty string
+        set_config_value(&mut config, "editor", "").unwrap();
+        assert_eq!(get_config_value(&config, "editor").unwrap(), "");
+        assert!(config.editor.is_none());
     }
 }

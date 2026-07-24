@@ -66,6 +66,7 @@ Use these keyboard shortcuts to navigate flux9s:
 | `R`       | Reconcile resource                                      |
 | `y`       | View resource YAML                                      |
 | `d`       | View describe output                                    |
+| `e`       | Edit resource in system editor (disabled in read-only mode) |
 | `f`       | Toggle favorite                                         |
 | `g`       | View resource graph (Kustomization, HelmRelease, etc.)  |
 | `h`       | View reconciliation history                             |
@@ -342,6 +343,22 @@ Perform actions on selected resources:
 | `Ctrl+d` | Delete resource   | All Flux resources (with confirmation)                                                          |
 
 **Note:** Suspend and Resume operations are only available for resources that support the `spec.suspend` field. Reconcile operations will fail if the resource is currently suspended.
+
+## Editing Resources
+
+Press `e` on any resource to open it in your system editor. flux9s fetches the full resource YAML, opens it in a temporary `.yaml` file, and applies your changes via Server-Side Apply when you save and quit.
+
+**Editor selection** (highest priority first):
+
+1. `FLUX9S_EDITOR` environment variable
+2. `editor` config key (`flux9s config set editor vim`)
+3. `$VISUAL` environment variable
+4. `$EDITOR` environment variable
+5. Fallback: `vi`
+
+GUI editors (VS Code, Sublime Text, Atom, Zed) are automatically invoked with `--wait` so flux9s blocks until you close the editing window.
+
+**Note:** Editing is disabled in read-only mode. The previous view (YAML, detail, graph, or list) is restored after saving, cancelling, or on error.
 
 ## Terminal Commands
 
