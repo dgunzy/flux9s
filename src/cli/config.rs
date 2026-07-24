@@ -377,6 +377,7 @@ fn reference_text() -> String {
         "discoverFluxResources - Discover CRDs labeled app.kubernetes.io/part-of=flux as view-only kinds (default: false)",
         "defaultResourceFilter - Resource type filter at startup, e.g. \"Kustomization\" (default: none, shows all)",
         "connectTimeoutSeconds - Startup Kubernetes API health-check timeout in seconds (default: 10)",
+        "editor - Editor command for resource editing; falls back through $VISUAL, $EDITOR, vi (default: none)",
         "ui.enableMouse - Enable mouse support (default: false)",
         "ui.headless - Hide header (default: false)",
         "ui.noIcons - Disable Unicode icons (default: false)",

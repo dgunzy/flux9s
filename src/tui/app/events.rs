@@ -188,6 +188,7 @@ impl App {
                     | crossterm::event::KeyCode::Char('r')
                     | crossterm::event::KeyCode::Char('R')
                     | crossterm::event::KeyCode::Char('W')
+                    | crossterm::event::KeyCode::Char('e')
             ) | (
                 crossterm::event::KeyModifiers::CONTROL,
                 crossterm::event::KeyCode::Char('d')
@@ -428,6 +429,31 @@ impl App {
                     self.view_state.current_view = View::ResourceDescribe;
                 }
             }
+            crossterm::event::KeyCode::Char('e') => {
+                if self.config.read_only {
+                    self.set_status_message((
+                        "Editing disabled in read-only mode".to_string(),
+                        true,
+                    ));
+                } else if let Some(resource) = self.get_current_resource() {
+                    // Remember the exact view we came from so cancel/save returns there
+                    self.async_state.edit_return_view = self.view_state.current_view;
+                    // Trigger YAML fetch for the full resource object (via AsyncTask)
+                    let rk = ResourceKey::new(
+                        resource.resource_type.clone(),
+                        resource.namespace.clone(),
+                        resource.name.clone(),
+                    );
+                    self.async_state.yaml.request(rk.clone());
+                    self.async_state.edit_pending = Some(rk);
+                    self.async_state.edit_full_yaml = None;
+                    self.async_state.edit_editor_launched = false;
+                    self.async_state.edit_error_message = None;
+                    self.view_state.current_view = View::ResourceEdit;
+                } else {
+                    self.set_status_message(("No resource selected for editing".to_string(), true));
+                }
+            }
             crossterm::event::KeyCode::Enter
                 if self.view_state.current_view == View::ResourceGraph =>
             {
@@ -622,7 +648,17 @@ impl App {
             }
             crossterm::event::KeyCode::Backspace => {
                 // Backspace goes back (same as Escape for detail view)
-                if self.view_state.current_view.is_nested_view() {
+                if self.view_state.current_view == View::ResourceEdit {
+                    // Cancel edit — clear all edit state
+                    self.async_state.edit_pending = None;
+                    self.async_state.edit_full_yaml = None;
+                    self.async_state.edit_save_pending = None;
+                    self.async_state.edit_save_result_rx = None;
+                    self.async_state.edit_error_message = None;
+                    self.async_state.edit_editor_launched = false;
+                    self.view_state.current_view = self.async_state.edit_return_view;
+                    self.async_state.edit_return_view = View::ResourceList;
+                } else if self.view_state.current_view.is_nested_view() {
                     // Mirror Esc: return to the graph if we came from there,
                     // otherwise to the previous list view.
                     if let Some(back) = self.detail_graph_back() {
@@ -1100,6 +1136,18 @@ impl App {
                     self.selection_state.selected_resource_key = None;
                     self.view_state.text_search.clear();
                 }
+                None
+            }
+            View::ResourceEdit => {
+                // Cancel edit — clear all edit state and return to origin view
+                self.async_state.edit_pending = None;
+                self.async_state.edit_full_yaml = None;
+                self.async_state.edit_save_pending = None;
+                self.async_state.edit_save_result_rx = None;
+                self.async_state.edit_error_message = None;
+                self.async_state.edit_editor_launched = false;
+                self.view_state.current_view = self.async_state.edit_return_view;
+                self.async_state.edit_return_view = View::ResourceList;
                 None
             }
             View::ResourceFavorites => {
@@ -1844,6 +1892,7 @@ mod tests {
             favorites: vec![],
             default_resource_filter: None,
             connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
+            editor: None,
         };
         let theme = Theme::default();
         App::new(state, "test-context".to_string(), None, config, theme)

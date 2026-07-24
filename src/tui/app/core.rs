@@ -588,11 +588,14 @@ impl App {
                 .selected_resource_key
                 .as_deref()
                 .and_then(ResourceKey::parse),
-            // Logs, workload views and the pulse dashboard don't point at a
-            // single watched Flux resource.
-            View::Logs | View::WorkloadList | View::WorkloadDetail | View::Pulse | View::Help => {
-                None
-            }
+            // Logs, workload views, the pulse dashboard, and the edit view
+            // don't point at a single watched Flux resource.
+            View::Logs
+            | View::WorkloadList
+            | View::WorkloadDetail
+            | View::Pulse
+            | View::ResourceEdit
+            | View::Help => None,
         }
     }
 
@@ -922,6 +925,7 @@ mod tests {
             favorites: vec![],
             default_resource_filter: None,
             connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
+            editor: None,
         };
         let theme = Theme::default();
         App::new(state, "test-context".to_string(), None, config, theme)

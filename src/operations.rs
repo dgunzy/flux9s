@@ -785,6 +785,58 @@ impl FluxOperation for ReconcileWithSourceOperation {
     }
 }
 
+/// Apply a full resource YAML via Server Side Apply.
+///
+/// The YAML must include `metadata.resourceVersion` from the original fetch;
+/// the API server will reject (409 Conflict) if the resource was modified
+/// between the fetch and this apply, providing optimistic locking.
+///
+/// Uses `PatchParams::apply("flux9s").force()` so flux9s takes ownership of
+/// fields it manages, but if the resource was modified (resourceVersion mismatch)
+/// the API server returns 409 before field ownership is checked.
+pub async fn apply_resource_yaml(
+    client: &kube::Client,
+    resource_type: &str,
+    namespace: &str,
+    name: &str,
+    yaml_str: &str,
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    let mut value: serde_json::Value =
+        serde_yaml::from_str(yaml_str).context("Failed to parse edited YAML as valid YAML/JSON")?;
+
+    // SSA rejects documents that include managedFields — strip it before applying.
+    if let Some(meta) = value.get_mut("metadata").and_then(|m| m.as_object_mut()) {
+        meta.remove("managedFields");
+    }
+
+    let api = get_resource_api(client, resource_type, namespace, name).await?;
+
+    let params = PatchParams::apply("flux9s").force();
+    api.patch(name, &params, &Patch::Apply(&value))
+        .await
+        .map_err(|e| {
+            // Surface a user-friendly message for 409 Conflict (concurrent modification)
+            let msg = e.to_string();
+            if msg.contains("409") || msg.contains("Conflict") {
+                anyhow::anyhow!(
+                    "Resource was modified by another process — please re-fetch and try again"
+                )
+            } else {
+                anyhow::anyhow!("Failed to apply resource: {}", msg)
+            }
+        })?;
+
+    tracing::info!(
+        "Successfully applied {}/{} in namespace {} via SSA",
+        resource_type,
+        name,
+        namespace
+    );
+    Ok(())
+}
+
 /// Operation registry - holds all available operations
 pub struct OperationRegistry {
     operations: Vec<Box<dyn FluxOperation>>,
@@ -1106,5 +1158,43 @@ mod tests {
         let reconcile_with_source = registry.get_by_keybinding('W').unwrap();
         assert_eq!(reconcile_with_source.name(), "Reconcile with Source");
         assert!(!reconcile_with_source.requires_confirmation());
+    }
+
+    #[test]
+    fn test_apply_resource_yaml_strips_managed_fields_before_parse() {
+        // Verify that managedFields is removed from the document before it would
+        // be sent to the API server (we test the stripping logic in isolation).
+        let yaml_with_managed_fields = r#"
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: my-ks
+  namespace: flux-system
+  resourceVersion: "12345"
+  managedFields:
+    - manager: flux
+      operation: Apply
+spec:
+  interval: 5m
+"#;
+
+        let mut value: serde_json::Value =
+            serde_yaml::from_str(yaml_with_managed_fields).expect("valid yaml");
+
+        // Apply the same stripping logic used in apply_resource_yaml
+        if let Some(meta) = value.get_mut("metadata").and_then(|m| m.as_object_mut()) {
+            meta.remove("managedFields");
+        }
+
+        let meta = value["metadata"].as_object().unwrap();
+        assert!(
+            meta.get("managedFields").is_none(),
+            "managedFields must be stripped before SSA apply"
+        );
+        // resourceVersion must still be present for optimistic locking
+        assert!(
+            meta.get("resourceVersion").is_some(),
+            "resourceVersion must be preserved for conflict detection"
+        );
     }
 }

@@ -18,7 +18,7 @@ test:
 
 # Run integration tests
 test-integration:
-    cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests --test graph_tests
+    cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests --test graph_tests --test snapshot_tests
 
 # Run live-cluster regression tests against the dev kind clusters
 # (build them first: ./scripts/dev-clusters.sh ci)

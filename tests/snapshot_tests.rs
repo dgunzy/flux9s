@@ -41,6 +41,7 @@ fn create_test_config() -> Config {
         favorites: vec![],
         default_resource_filter: None,
         connect_timeout_seconds: flux9s::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
+        editor: None,
     }
 }
 
