@@ -88,6 +88,7 @@ Type these commands in command mode (press `:`):
 | `:ctx <name>`      | Switch to a different Kubernetes context |
 | `:ctx`             | Open interactive context selection menu  |
 | `:context <name>`  | Alias for `:ctx <name>`                  |
+| `:ns`              | Open interactive namespace picker menu   |
 | `:ns <namespace>`  | Switch to a specific namespace           |
 | `:namespace <ns>`  | Alias for `:ns <namespace>`              |
 | `:ns all`          | View all namespaces                      |

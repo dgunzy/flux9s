@@ -108,49 +108,17 @@ pub fn get_resource_help_commands() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// Calculate footer height based on navigation segments and namespace hotkeys
+/// Calculate footer height based on navigation segments
 ///
 /// This function uses the exact same logic as `render_navigation_footer` in footer.rs
 /// to ensure consistent height calculations.
-pub fn calculate_footer_height(
-    terminal_width: u16,
-    namespace_hotkeys: &[String],
-    current_namespace: &Option<String>,
-    has_connection_error: bool,
-) -> u16 {
-    use crate::tui::constants::{MAX_FOOTER_NAMESPACE_HOTKEYS, MAX_FOOTER_NAMESPACE_LENGTH};
-
+pub fn calculate_footer_height(terminal_width: u16, has_connection_error: bool) -> u16 {
     // Get base navigation commands
-    let mut nav_segments = if has_connection_error {
+    let nav_segments = if has_connection_error {
         navigation_commands_to_segments_simple(&get_connection_error_commands())
     } else {
         navigation_commands_to_segments_simple(&get_navigation_commands())
     };
-
-    // Add namespace hotkeys (matching footer.rs logic)
-    if !has_connection_error && !namespace_hotkeys.is_empty() {
-        for (idx, ns) in namespace_hotkeys
-            .iter()
-            .take(MAX_FOOTER_NAMESPACE_HOTKEYS)
-            .enumerate()
-        {
-            let display_ns = if ns == "all" {
-                "all".to_string()
-            } else if ns.len() > MAX_FOOTER_NAMESPACE_LENGTH {
-                ns[..MAX_FOOTER_NAMESPACE_LENGTH].to_string()
-            } else {
-                ns.clone()
-            };
-            let label = if (ns == "all" && current_namespace.is_none())
-                || current_namespace.as_ref() == Some(ns)
-            {
-                format!("NS:{}*", display_ns)
-            } else {
-                format!("NS:{}", display_ns)
-            };
-            nav_segments.push((idx.to_string(), label));
-        }
-    }
 
     let footer_available_width = terminal_width.saturating_sub(2); // Account for borders
 
@@ -200,14 +168,14 @@ mod tests {
     #[test]
     fn test_calculate_footer_height_connection_error() {
         // Under a connection error state, the footer has fewer options and fits on one line.
-        let height = calculate_footer_height(80, &[], &None, true);
+        let height = calculate_footer_height(80, true);
         assert_eq!(height, 3); // 1 content line + 2 borders
     }
 
     #[test]
     fn test_calculate_footer_height_normal() {
         // Under normal circumstances, check that it calculates correctly.
-        let height = calculate_footer_height(80, &[], &None, false);
+        let height = calculate_footer_height(80, false);
         // Normally at 80 cols, the default commands (lots of them) wrap to 2 lines.
         assert_eq!(height, 4); // 2 content lines + 2 borders
     }

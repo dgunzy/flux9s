@@ -50,6 +50,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         (":ctx <n>", "Switch context"),
         (":ctx", "Open context submenu"),
         (":ns <n>", "Switch namespace"),
+        (":ns", "Open namespace picker"),
         (":ns all", "Show all namespaces"),
         (":all", "Show all resources"),
         (":healthy", "Show healthy resources"),

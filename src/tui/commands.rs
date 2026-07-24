@@ -409,6 +409,40 @@ pub fn logs_submenu(
     )
 }
 
+/// Build the namespace picker submenu for `:ns` / `:namespace` (no argument).
+///
+/// Lists the selectable namespaces, with `all` for the cluster-wide scope, and
+/// marks the currently watched one. Returns None when there is nothing to pick
+/// from. Uses the same reusable, searchable submenu as `:ctx` and `:skin`.
+pub fn namespace_submenu(namespaces: &[String], current: &Option<String>) -> Option<SubmenuState> {
+    if namespaces.is_empty() {
+        return None;
+    }
+
+    let items: Vec<SubmenuItem> = namespaces
+        .iter()
+        .map(|ns| {
+            let is_current = if ns == "all" {
+                current.is_none()
+            } else {
+                current.as_deref() == Some(ns.as_str())
+            };
+            let display = if is_current {
+                format!("{} (current)", ns)
+            } else {
+                ns.clone()
+            };
+            SubmenuItem::with_display(ns.clone(), display)
+        })
+        .collect();
+
+    Some(
+        SubmenuState::new("ns".to_string(), items)
+            .with_title("Select Namespace".to_string())
+            .with_help("j/k: Navigate | /: Filter | Enter: Select | Esc: Cancel".to_string()),
+    )
+}
+
 /// Returns None if the command doesn't support submenus or if an argument was provided.
 pub fn get_command_submenu(
     cmd: &str,
@@ -599,6 +633,36 @@ mod tests {
             ready,
             version: None,
         }
+    }
+
+    #[test]
+    fn test_namespace_submenu_marks_current_and_all() {
+        assert!(
+            namespace_submenu(&[], &None).is_none(),
+            "no namespaces means no submenu"
+        );
+
+        let namespaces = vec![
+            "all".to_string(),
+            "flux-system".to_string(),
+            "cert-manager".to_string(),
+        ];
+
+        // A specific namespace is current: it is marked, "all" is not.
+        let current = Some("flux-system".to_string());
+        let submenu = namespace_submenu(&namespaces, &current).expect("namespaces make a submenu");
+        assert_eq!(submenu.command, "ns");
+        assert_eq!(submenu.title, Some("Select Namespace".to_string()));
+        // Values stay the bare namespace names for the :ns dispatch.
+        assert_eq!(submenu.items[0].value, "all");
+        assert_eq!(submenu.items[1].value, "flux-system");
+        assert!(!submenu.items[0].display_text.contains("(current)"));
+        assert!(submenu.items[1].display_text.contains("(current)"));
+
+        // Cluster-wide scope (None) marks "all" as current.
+        let submenu = namespace_submenu(&namespaces, &None).unwrap();
+        assert!(submenu.items[0].display_text.contains("(current)"));
+        assert!(!submenu.items[1].display_text.contains("(current)"));
     }
 
     #[test]

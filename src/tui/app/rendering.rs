@@ -132,12 +132,8 @@ impl App {
             self.ui_state.cached_header_height = (content_lines + 2).max(MIN_HEADER_HEIGHT);
 
             // Calculate footer height using centralized function
-            self.ui_state.cached_footer_height = calculate_footer_height(
-                terminal_width,
-                self.namespace_hotkeys(),
-                self.namespace(),
-                self.has_connection_error(),
-            );
+            self.ui_state.cached_footer_height =
+                calculate_footer_height(terminal_width, self.has_connection_error());
         }
 
         let header_height = self.ui_state.cached_header_height;
@@ -203,7 +199,6 @@ impl App {
                 self.config.read_only,
                 &self.theme,
                 self.config.ui.no_icons,
-                self.namespace_hotkeys(),
             );
         }
         self.render_main(f, chunks[1]);
@@ -223,8 +218,6 @@ impl App {
             &self.operation_registry,
             &self.state,
             &self.theme,
-            self.namespace_hotkeys(),
-            &self.namespace,
             self.has_connection_error(),
         );
     }

@@ -45,12 +45,6 @@ pub const MIN_FOOTER_HEIGHT: u16 = 3;
 /// Maximum number of namespace hotkeys (0-9)
 pub const MAX_NAMESPACE_HOTKEYS: usize = 10;
 
-/// Maximum number of namespace hotkeys to display in footer
-pub const MAX_FOOTER_NAMESPACE_HOTKEYS: usize = 3;
-
-/// Maximum namespace name length to display in footer (truncate if longer)
-pub const MAX_FOOTER_NAMESPACE_LENGTH: usize = 8;
-
 /// Splash screen display duration in milliseconds
 pub const SPLASH_DISPLAY_MS: u64 = 1500;
 

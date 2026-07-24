@@ -28,7 +28,6 @@ pub fn render_header(
     read_only: bool,             // Readonly mode status
     theme: &Theme,
     no_icons: bool,
-    namespace_hotkeys: &[String],
 ) {
     // Split header into left (info), middle (controller status), and right (ASCII art)
     let header_chunks = Layout::default()
@@ -180,43 +179,6 @@ pub fn render_header(
                 .fg(theme.status_error)
                 .add_modifier(Modifier::BOLD),
         ));
-    }
-
-    // Add namespace hotkeys after namespace
-    if !namespace_hotkeys.is_empty() {
-        context_line_spans.push(Span::raw("  "));
-        for (idx, ns) in namespace_hotkeys.iter().enumerate() {
-            if idx > 0 {
-                context_line_spans.push(Span::raw(" "));
-            }
-            let display_ns = if ns == "all" {
-                "all"
-            } else if ns.len() > 6 {
-                &ns[..6]
-            } else {
-                ns
-            };
-            // Highlight current namespace
-            let is_current = if ns == "all" {
-                namespace.is_none()
-            } else {
-                namespace.as_ref() == Some(ns)
-            };
-            let hotkey_style = if is_current {
-                Style::default()
-                    .fg(theme
-                        .header_namespace_style(false)
-                        .fg
-                        .unwrap_or(theme.text_primary))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.text_secondary)
-            };
-            context_line_spans.push(Span::styled(
-                format!("{}:{}", idx, display_ns),
-                hotkey_style,
-            ));
-        }
     }
 
     let mut header_lines = vec![Line::from(context_line_spans)];
