@@ -133,7 +133,6 @@ fn test_render_header() {
                 false,
                 &theme,
                 config.ui.no_icons,
-                &[],
             );
         })
         .unwrap();
@@ -168,7 +167,6 @@ fn test_render_header_with_namespace() {
                 false,
                 &theme,
                 config.ui.no_icons,
-                &[],
             );
         })
         .unwrap();
@@ -203,7 +201,6 @@ fn test_render_header_with_filter() {
                 false,
                 &theme,
                 config.ui.no_icons,
-                &[],
             );
         })
         .unwrap();
@@ -239,8 +236,6 @@ fn test_render_footer_navigation() {
                 &operation_registry,
                 &state,
                 &theme,
-                &[],
-                &None,
                 false,
             );
         })
@@ -276,8 +271,6 @@ fn test_render_footer_command_mode() {
                 &operation_registry,
                 &state,
                 &theme,
-                &[],
-                &None,
                 false,
             );
         })
@@ -313,8 +306,6 @@ fn test_render_footer_filter_mode() {
                 &operation_registry,
                 &state,
                 &theme,
-                &[],
-                &None,
                 false,
             );
         })
@@ -768,8 +759,6 @@ fn test_render_footer_connection_error() {
                 &operation_registry,
                 &state,
                 &theme,
-                &[],
-                &None,
                 true, // has_connection_error = true
             );
         })

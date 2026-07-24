@@ -31,8 +31,6 @@ pub fn render_footer(
     operation_registry: &OperationRegistry,
     state: &ResourceState,
     theme: &Theme,
-    namespace_hotkeys: &[String],
-    current_namespace: &Option<String>,
     has_connection_error: bool,
 ) -> usize {
     if command_mode {
@@ -55,14 +53,7 @@ pub fn render_footer(
 
     // Handle default navigation footer (wrapped for smaller screens)
     if !show_help && confirmation_pending.is_none() && status_message.is_none() {
-        return render_navigation_footer(
-            f,
-            area,
-            theme,
-            namespace_hotkeys,
-            current_namespace,
-            has_connection_error,
-        );
+        return render_navigation_footer(f, area, theme, has_connection_error);
     }
 
     // Build footer text for non-default cases
@@ -190,8 +181,6 @@ fn render_navigation_footer(
     f: &mut Frame,
     area: Rect,
     theme: &Theme,
-    namespace_hotkeys: &[String],
-    current_namespace: &Option<String>,
     has_connection_error: bool,
 ) -> usize {
     // Default navigation hints - wrap for smaller screens
@@ -202,42 +191,7 @@ fn render_navigation_footer(
     } else {
         get_navigation_commands()
     };
-    let mut nav_segments = navigation_commands_to_segments(&commands, theme.footer_key);
-
-    // Add namespace hotkeys (show first few that fit)
-    use crate::tui::constants::{MAX_FOOTER_NAMESPACE_HOTKEYS, MAX_FOOTER_NAMESPACE_LENGTH};
-    if !has_connection_error && !namespace_hotkeys.is_empty() {
-        // Show up to MAX_FOOTER_NAMESPACE_HOTKEYS namespace hotkeys in footer
-        for (idx, ns) in namespace_hotkeys
-            .iter()
-            .take(MAX_FOOTER_NAMESPACE_HOTKEYS)
-            .enumerate()
-        {
-            let key = idx.to_string();
-            let display_ns = if ns == "all" {
-                "all".to_string()
-            } else {
-                // Truncate long namespace names
-                if ns.len() > MAX_FOOTER_NAMESPACE_LENGTH {
-                    ns[..MAX_FOOTER_NAMESPACE_LENGTH].to_string()
-                } else {
-                    ns.clone()
-                }
-            };
-            // Highlight current namespace
-            let is_current = if ns == "all" {
-                current_namespace.is_none()
-            } else {
-                current_namespace.as_ref() == Some(ns)
-            };
-            let label = if is_current {
-                format!("NS:{}*", display_ns)
-            } else {
-                format!("NS:{}", display_ns)
-            };
-            nav_segments.push((key, label, theme.footer_key));
-        }
-    }
+    let nav_segments = navigation_commands_to_segments(&commands, theme.footer_key);
 
     // Build wrapped lines similar to header logic
     // Wrap footer content into 2 lines to prevent overflow

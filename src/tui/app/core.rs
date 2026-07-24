@@ -208,6 +208,26 @@ impl App {
         &self.namespace_hotkeys
     }
 
+    /// Namespace options for the `:ns` picker submenu.
+    ///
+    /// Always offers `all` (cluster-wide) first, followed by the discovered /
+    /// configured hotkey namespaces, and guarantees the currently watched
+    /// namespace is selectable even when it is not among the hotkeys.
+    pub fn namespace_picker_options(&self) -> Vec<String> {
+        let mut options = vec!["all".to_string()];
+        for ns in &self.namespace_hotkeys {
+            if ns != "all" && !options.contains(ns) {
+                options.push(ns.clone());
+            }
+        }
+        if let Some(current) = &self.namespace {
+            if !options.contains(current) {
+                options.push(current.clone());
+            }
+        }
+        options
+    }
+
     /// Invalidate the cached layout dimensions, forcing recalculation on next render.
     /// Call this when filter state or resource counts change (anything that affects header height).
     pub(crate) fn invalidate_layout_cache(&mut self) {

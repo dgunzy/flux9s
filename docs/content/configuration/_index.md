@@ -184,6 +184,8 @@ The timeout must be a positive integer. The default is `10` seconds.
 
 Bind namespaces to number keys 0–9 for quick switching. If left empty, flux9s auto-discovers namespaces that contain Flux resources at startup.
 
+The assigned hotkeys are listed in the help overlay (press `?`). For interactive, searchable namespace switching, use the `:ns` command, which opens a picker seeded from these namespaces.
+
 **Via command line:**
 
 ```bash

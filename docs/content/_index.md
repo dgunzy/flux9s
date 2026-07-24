@@ -81,6 +81,7 @@ notoc: true
       <h2>What flux9s is</h2>
       <p><code>flux9s</code> is a terminal UI for operators who want live visibility into Flux resources and the cluster state around them without leaving the shell. It watches Flux resources in real time, keeps a local in-memory view of their current state, and lets you move quickly between lists, details, YAML, traces, graphs, and reconciliation history.</p>
       <p>The project is intentionally keyboard-first and closely follows familiar <a href="https://github.com/derailed/k9s" target="_blank" rel="noopener noreferrer">K9s</a> patterns: <code>j</code>/<code>k</code> navigation, <code>:</code> command mode, context and namespace switching, footer help, and k9s-style skins.</p>
+      <p>flux9s is listed as a community UI in the <a href="https://fluxcd.io/ecosystem/#flux-uis--guis" target="_blank" rel="noopener noreferrer">Flux ecosystem</a>.</p>
 
       <h2>The problem it solves</h2>
       <p>Flux already provides strong controller APIs, and the <a href="https://fluxoperator.dev/web-ui/" target="_blank" rel="noopener noreferrer">Flux Operator Web UI</a> is an excellent browser-based experience for dashboards and cluster-wide visibility. <code>flux9s</code> was built to complement that workflow, not replace it.</p>

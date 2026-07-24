@@ -918,6 +918,14 @@ impl App {
                                 format!("Switching to context '{}'...", value),
                                 false,
                             ));
+                        } else if command == "ns" {
+                            // Namespace picker: "all" watches every namespace.
+                            let new_namespace = if value == "all" {
+                                None
+                            } else {
+                                Some(value.clone())
+                            };
+                            self.switch_namespace(new_namespace);
                         } else if command == "logs" {
                             self.open_log_view(&value);
                         } else if command == "pod-logs" {
@@ -1719,15 +1727,32 @@ impl App {
     }
 
     /// `:ns [name|all]` — switch the watched namespace, restarting watchers.
+    ///
+    /// Without an argument, opens the searchable namespace picker submenu;
+    /// `:ns <name>` (or `:ns all` / `:ns -A`) switches directly.
     fn cmd_switch_namespace(&mut self, cmd: &str) {
         let ns = commands::extract_command_arg(cmd, "namespace")
             .or_else(|| commands::extract_command_arg(cmd, "ns"));
-        let new_namespace = match ns.as_deref() {
-            Some("all") | Some("-A") => None,
-            Some(name) => Some(name.to_string()),
-            None => return, // Showing the current namespace: nothing to do.
-        };
+        match ns.as_deref() {
+            Some("all") | Some("-A") => self.switch_namespace(None),
+            Some(name) => self.switch_namespace(Some(name.to_string())),
+            None => {
+                // No argument: open the searchable picker (same reusable submenu
+                // as :ctx / :skin) instead of listing options in the bars.
+                let options = self.namespace_picker_options();
+                match commands::namespace_submenu(&options, &self.namespace) {
+                    Some(submenu) => self.view_state.submenu_state = Some(submenu),
+                    None => {
+                        self.set_status_message(("No namespaces discovered yet".to_string(), true))
+                    }
+                }
+            }
+        }
+    }
 
+    /// Switch the watched namespace, restarting watchers. `None` watches all
+    /// namespaces. Shared by `:ns <name>` and the namespace picker submenu.
+    fn switch_namespace(&mut self, new_namespace: Option<String>) {
         if self.namespace != new_namespace {
             self.namespace = new_namespace.clone();
 
@@ -2852,6 +2877,50 @@ mod tests {
             View::WorkloadDetail,
             "Enter shows the detail; it must not jump into logs"
         );
+    }
+
+    #[test]
+    fn ns_command_without_arg_opens_picker_and_selects() {
+        let mut app = create_test_app(false);
+        // Default hotkeys (no config, no discovery) are ["all", "flux-system"].
+        app.ui_state.command_buffer = "ns".to_string();
+        app.execute_command();
+
+        let submenu = app
+            .view_state
+            .submenu_state
+            .as_ref()
+            .expect(":ns with no argument opens the namespace picker");
+        assert_eq!(submenu.command, "ns");
+        assert_eq!(submenu.items[0].value, "all");
+        assert!(
+            submenu.items.iter().any(|i| i.value == "flux-system"),
+            "picker offers the discovered/hotkey namespaces"
+        );
+
+        // Selecting a namespace switches to it and closes the submenu.
+        app.handle_key(make_key(KeyCode::Char('j'))); // -> flux-system
+        app.handle_key(make_key(KeyCode::Enter));
+        assert!(app.view_state.submenu_state.is_none());
+        assert_eq!(app.namespace, Some("flux-system".to_string()));
+    }
+
+    #[test]
+    fn ns_command_with_arg_switches_directly_without_picker() {
+        let mut app = create_test_app(false);
+        app.ui_state.command_buffer = "ns kube-system".to_string();
+        app.execute_command();
+
+        assert!(
+            app.view_state.submenu_state.is_none(),
+            ":ns <name> switches directly, no picker"
+        );
+        assert_eq!(app.namespace, Some("kube-system".to_string()));
+
+        // `:ns all` returns to the cluster-wide scope.
+        app.ui_state.command_buffer = "ns all".to_string();
+        app.execute_command();
+        assert_eq!(app.namespace, None);
     }
 
     #[test]
