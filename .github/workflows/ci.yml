@@ -55,10 +55,21 @@ jobs:
           fi
 
       - name: Run cargo-audit (CVE scan)
-        run: cargo audit --ignore RUSTSEC-2024-0436
+        run: cargo audit
 
       - name: Run tests
         run: cargo test --lib --tests
+
+  deny:
+    name: cargo-deny (licenses, advisories, bans, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories bans licenses sources
 
   msrv:
     # Guards the rust-version declared in Cargo.toml: the crate must keep

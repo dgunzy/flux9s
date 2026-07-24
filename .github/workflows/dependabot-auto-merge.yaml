@@ -1,0 +1,72 @@
+# Auto-merge Dependabot PRs once all required status checks pass.
+#
+#   - patch / minor updates -> enable auto-merge (squash). GitHub merges once
+#                              every required check on `main` is green.
+#   - major updates         -> left OPEN with a comment, for manual review.
+#
+# Fail-safe: this workflow only ever *enables* auto-merge; GitHub's branch
+# protection is what actually gates the merge on CI / cargo-deny / CodeQL. If
+# anything here errors, the PR is simply left open.
+#
+# One-time repo settings this depends on (not code — see ROADMAP.md):
+#   1. Settings > General > "Allow auto-merge" .......................... ENABLED
+#   2. Branch protection on `main` with required status checks.
+#   3. Settings > Actions > General > Workflow permissions:
+#      "Allow GitHub Actions to create and approve pull requests" ....... ENABLED
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Elevated so the auto-injected GITHUB_TOKEN can enable auto-merge / comment.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    name: Enable auto-merge
+    runs-on: ubuntu-latest
+    # Gate on the PR author (stays 'dependabot[bot]' for the PR's life), not
+    # github.actor (flips to a human on any push/merge to the branch).
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Satisfy the branch-protection "1 approving review" gate for bot PRs. The
+      # Actions token (github-actions[bot]) is a different identity from the PR
+      # author (dependabot[bot]), so this approval is valid. Requires the repo
+      # setting "Allow GitHub Actions to create and approve pull requests".
+      # This is NOT a merge — every required status check (CI, cargo-deny,
+      # CodeQL) still has to pass before GitHub actually merges.
+      - name: Approve patch/minor updates
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for patch/minor updates
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment on major updates (leave open for review)
+        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr comment "$PR_URL" --body \
+            "🚧 Major version bump for \`${{ steps.meta.outputs.dependency-names }}\` — left open for manual review (auto-merge only applies to patch/minor)."
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

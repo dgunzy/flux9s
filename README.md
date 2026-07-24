@@ -3,6 +3,7 @@
 A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flux GitOps resources in real-time.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/dgunzy/flux9s/ci.yml?branch=main&logo=github&label=CI)](https://github.com/dgunzy/flux9s/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/dgunzy/flux9s/badge)](https://scorecard.dev/viewer/?uri=github.com/dgunzy/flux9s)
 [![Crates.io](https://img.shields.io/crates/v/flux9s?logo=rust&color=blue)](https://crates.io/crates/flux9s)
 [![Downloads](https://img.shields.io/crates/d/flux9s?logo=rust&label=downloads)](https://crates.io/crates/flux9s)
 [![License](https://img.shields.io/github/license/dgunzy/flux9s?color=green)](LICENSE)

@@ -1,0 +1,50 @@
+# cargo-deny configuration — supply-chain policy for flux9s.
+# Supersedes bare `cargo audit`: advisories + licenses + banned/duplicate
+# crates + source allow-listing. Run locally with `cargo deny check`.
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+# No ignores currently: the graph is clean (the former RUSTSEC-2024-0436 `paste`
+# ignore is gone now that `paste` dropped out of the dependency tree). Add IDs
+# here — with a comment and a revisit note — only when unavoidable.
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Every dependency license in the current graph is OSI-permissive. Keep this
+# list tight: a new dependency under an unlisted license fails CI on purpose,
+# which is the signal to review it before it ships.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
+
+[bans]
+# Duplicate versions bloat the binary; warn rather than fail (the kube/k8s graph
+# legitimately pulls a few). Wildcard version requirements are a real smell.
+multiple-versions = "warn"
+wildcards = "deny"
+# Allow wildcards on path/git deps within the workspace (there are none today).
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
