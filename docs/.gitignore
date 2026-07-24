@@ -22,4 +22,4 @@ metadata.json
 # Node.js dependencies (for PostCSS)
 node_modules/
 # Note: package.json and package-lock.json should be committed for reproducible builds
-# Only node_modules should be ignored
+# Only node_modules should be ignored_vendor/

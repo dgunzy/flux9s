@@ -19,10 +19,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-# Elevated so the auto-injected GITHUB_TOKEN can enable auto-merge / comment.
+# Least-privilege by default; the job elevates only what it needs (Scorecard
+# Token-Permissions: no top-level write).
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: dependabot-automerge-${{ github.event.pull_request.number }}
@@ -35,6 +35,11 @@ jobs:
     # Gate on the PR author (stays 'dependabot[bot]' for the PR's life), not
     # github.actor (flips to a human on any push/merge to the branch).
     if: github.event.pull_request.user.login == 'dependabot[bot]'
+    # Elevated here (not top-level) so the GITHUB_TOKEN can approve, enable
+    # auto-merge, and comment on the Dependabot PR.
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Fetch Dependabot metadata
         id: meta

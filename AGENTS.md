@@ -200,6 +200,27 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
 - Clippy warnings are treated as errors
 - Generated code in `src/models/_generated/` has clippy suppressed
 
+## Supply chain & dependency pinning
+
+- **All GitHub Actions are SHA-pinned** with a trailing `# version` comment
+  (OpenSSF Scorecard *Pinned-Dependencies*). When adding an action, pin the full
+  commit SHA — never a moving `@v4`/`@main` tag. Resolve it with:
+  `gh api repos/<owner>/<repo>/git/refs/tags/<tag> --jq '.object.sha'`.
+- **Dependabot moves the pins for us**: `github-actions` monthly, `cargo` weekly
+  (`.github/dependabot.yml`). Patch/minor updates auto-merge once CI + cargo-deny
+  + CodeQL pass (`dependabot-auto-merge.yaml`); majors are left open for review.
+- **Branch-ref pins are the exception Dependabot can't track.** Actions that
+  publish no releases and are pinned to a default-branch SHA — currently
+  `dtolnay/rust-toolchain@<sha> # master` (the `toolchain:` input selects the Rust
+  version) — must be **re-pinned by hand about every month or two**:
+  ```bash
+  sha=$(gh api repos/dtolnay/rust-toolchain/commits/master --jq '.sha')
+  # then bump every dtolnay/rust-toolchain@<old> to @$sha across .github/workflows/
+  ```
+  Open a PR so CI validates the bump before it lands.
+- **Rust deps**: `cargo audit` + `cargo deny` gate CI; keep `deny.toml`'s license
+  allow-list tight (a new license fails CI on purpose — review before allowing).
+
 ## Documentation
 
 - Public API should have doc comments
