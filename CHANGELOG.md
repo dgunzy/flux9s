@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-24
+
+# Version 1.0.0 Changelog
+
+## Added
+- Edit option to modify resources
+- Resource discovery for extra objects
+- Flux report dashboard
+- Submenu search in workload view
+- New namespace picker (replacing top menu namespace selector)
+
+## Changed
+- Updated Flux CRDs to latest versions
+- Multiple dependency updates: base64, directories, mockall, thiserror, postcss, and cargo dependencies
+
+## Fixed
+- RBAC configuration and security follow-ups
+- Security updates and open source compliance improvements
+- Repository hygiene improvements
+
 ### Added
 - `flux9s --version` / `-V`: the standard version flag now works (previously
   only the `version` subcommand existed — the Homebrew formula's test block
