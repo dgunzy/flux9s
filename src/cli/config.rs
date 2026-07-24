@@ -384,6 +384,7 @@ fn reference_text() -> String {
         "ui.skin - Default skin name (default: default)",
         "ui.skinReadOnly - Skin for readonly mode, overrides ui.skin when readOnly=true",
         "ui.splashless - Skip startup splash (default: false)",
+        "ui.rbacWarnings - Show 'restricted' empty-state when RBAC blocks a kind (default: true)",
         "namespaceHotkeys - Array of namespace names for 0-9 hotkeys (max 10, default: auto-discover)",
         "contextSkins - Map of context name to skin name (default: empty)",
         "cluster - Map of cluster name to cluster-specific settings (default: empty)",

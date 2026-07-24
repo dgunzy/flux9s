@@ -40,6 +40,7 @@ flux9s config path
 | `ui.skin` | string | `default` | Theme/skin name |
 | `ui.skinReadOnly` | string | *(none)* | Skin override when `readOnly=true` |
 | `ui.splashless` | bool | `false` | Skip the startup splash screen |
+| `ui.rbacWarnings` | bool | `true` | Show a "restricted" empty-state when RBAC (HTTP 403) blocks a Flux kind; set `false` to keep those views silently empty |
 | `namespaceHotkeys` | string[] | *(auto-discover)* | Namespaces assigned to number keys 0–9 |
 | `contextSkins` | map | *(empty)* | Per-context skin overrides |
 | `favorites` | string[] | *(empty)* | Persisted favorite resource keys |

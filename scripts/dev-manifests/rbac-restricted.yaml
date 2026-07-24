@@ -1,0 +1,56 @@
+# Deliberately-restricted RBAC for exercising flux9s's "restricted" empty-state (#210).
+#
+# The ServiceAccount can list Kustomizations + Sources cluster-wide, plus the
+# controller pods/deployments/events flux9s needs — but NOT HelmReleases,
+# Image* kinds, Notification kinds, or Flux Operator kinds. Because the denial
+# is cluster-wide, opening those views in flux9s returns HTTP 403 in ANY
+# namespace scope and surfaces the 🔒 "restricted" message (rather than a
+# silent empty list). A ClusterRole is used (not a namespaced Role) so the demo
+# doesn't depend on which namespace flux9s happens to be watching.
+#
+# Apply + generate a kubeconfig with: scripts/rbac-test.sh
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flux9s-restricted
+  namespace: flux-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flux9s-restricted
+rules:
+  # Allowed Flux kinds.
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["gitrepositories", "ocirepositories", "buckets", "helmrepositories", "helmcharts"]
+    verbs: ["get", "list", "watch"]
+  # Controller status / events flux9s reads, plus namespaces for discovery
+  # (kept allowed so only the Flux CRD kinds below are the RBAC variable).
+  - apiGroups: [""]
+    resources: ["pods", "events", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  # NOTE: intentionally NOT granted, so their watchers 403 and surface the
+  # restricted empty-state:
+  #   helm.toolkit.fluxcd.io         (HelmRelease)
+  #   image.toolkit.fluxcd.io        (ImagePolicy, ImageRepository, ImageUpdateAutomation)
+  #   notification.toolkit.fluxcd.io (Alert, Provider, Receiver)
+  #   fluxcd.controlplane.io         (FluxInstance, FluxReport, ResourceSet*)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flux9s-restricted
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flux9s-restricted
+subjects:
+  - kind: ServiceAccount
+    name: flux9s-restricted
+    namespace: flux-system

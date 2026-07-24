@@ -90,6 +90,7 @@ impl Config {
                 skin: "default".to_string(),
                 skin_read_only: Some("default".to_string()),
                 splashless: true,
+                rbac_warnings: true,
             },
             namespace_hotkeys: vec!["flux-system".to_string()],
             context_skins: HashMap::from([("my-context".to_string(), "default".to_string())]),
@@ -167,6 +168,11 @@ pub struct UiConfig {
     /// Skip startup splash screen
     #[serde(default = "default_false")]
     pub splashless: bool,
+
+    /// Show the contextual "restricted" empty-state when RBAC (HTTP 403) blocks
+    /// a Flux kind. Default on; set false to keep those views silently empty.
+    #[serde(default = "default_true")]
+    pub rbac_warnings: bool,
 }
 
 // Default value functions
@@ -180,6 +186,10 @@ fn default_namespace() -> String {
 
 fn default_false() -> bool {
     false
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_skin() -> String {
@@ -219,6 +229,7 @@ impl Default for UiConfig {
             skin: default_skin(),
             skin_read_only: None,
             splashless: default_false(),
+            rbac_warnings: default_true(),
         }
     }
 }

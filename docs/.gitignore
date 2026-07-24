@@ -22,4 +22,9 @@ metadata.json
 # Node.js dependencies (for PostCSS)
 node_modules/
 # Note: package.json and package-lock.json should be committed for reproducible builds
-# Only node_modules should be ignored_vendor/
+# Only node_modules should be ignored
+
+# Hugo module vendor dir — fetched at build time via `go mod download` (see
+# docs.yml), so it doesn't need to be committed. Committing it also triggers
+# Dependabot alerts on the vendored theme's dev-deps. go.sum keeps builds reproducible.
+_vendor/

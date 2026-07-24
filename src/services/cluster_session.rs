@@ -328,6 +328,9 @@ impl ClusterSession {
             WatchEvent::WatcherRecovered(name) => {
                 tracing::info!("Watcher recovered: {}", name);
             }
+            WatchEvent::WatcherForbidden(name) => {
+                tracing::warn!("Watcher forbidden by RBAC (stopped): {}", name);
+            }
             WatchEvent::PodApplied(_, _)
             | WatchEvent::PodDeleted(_)
             | WatchEvent::DeploymentApplied(_)

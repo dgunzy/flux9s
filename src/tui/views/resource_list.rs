@@ -43,6 +43,9 @@ pub fn render_resource_list(
     favorites: &HashSet<String>,
     sort_field: SortField,
     sort_reverse: bool,
+    // Contextual RBAC notice shown in place of the default empty-state message
+    // when the list is empty because a kind is restricted (see App::access_notice).
+    access_notice: Option<&str>,
 ) {
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling
@@ -69,12 +72,21 @@ pub fn render_resource_list(
         .collect();
 
     if visible_resources.is_empty() {
+        // An RBAC restriction explains the emptiness precisely; otherwise fall
+        // back to the neutral "waiting" message (a missing CRD stays silent).
+        let (message, instructions) = match access_notice {
+            Some(notice) => (
+                notice,
+                "Grant RBAC access, switch namespace/context, or set ui.rbacWarnings=false to hide this.",
+            ),
+            None => ("No resources found", "Waiting for resources to appear..."),
+        };
         crate::tui::views::helpers::render_empty_state(
             f,
             area,
             &format!("Resources ({})", resources.len()),
-            "No resources found",
-            "Waiting for resources to appear...",
+            message,
+            instructions,
             theme,
         );
         return;

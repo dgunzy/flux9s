@@ -1024,6 +1024,9 @@ pub async fn run_tui_with_async_init(
                         crate::watcher::WatchEvent::WatcherRecovered(name) => {
                             app.watch_recovered(&name);
                         }
+                        crate::watcher::WatchEvent::WatcherForbidden(name) => {
+                            app.watch_forbidden(name);
+                        }
                         crate::watcher::WatchEvent::PodApplied(name, pod_json) => {
                             if let Some(info) = extract_controller_pod_info(&pod_json) {
                                 app.controller_pods.upsert_pod(name, info);

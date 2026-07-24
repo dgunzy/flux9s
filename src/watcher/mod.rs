@@ -86,6 +86,10 @@ pub enum WatchEvent {
     WatcherDegraded(String), // watcher display name
     /// A previously degraded watcher received a successful event again.
     WatcherRecovered(String), // watcher display name
+    /// A resource watcher was stopped because RBAC forbids listing/watching the
+    /// kind (HTTP 403). Distinct from a missing CRD — the kind exists but the
+    /// user can't see it. Drives the contextual "restricted" empty-state.
+    WatcherForbidden(String), // watcher display name (Flux kind)
     /// Controller pod was added or updated
     PodApplied(String, serde_json::Value), // pod_name, pod_json
     /// Controller pod was deleted
@@ -283,10 +287,10 @@ impl ResourceWatcher {
                                 display_name,
                                 e
                             );
-                            let _ = event_tx.send(WatchEvent::Error(format!(
-                                "{} watch forbidden by RBAC: {}",
-                                display_name, e
-                            )));
+                            // Persistent, kind-specific: surfaced as the contextual
+                            // "restricted" empty-state (see #210), not a transient error.
+                            let _ =
+                                event_tx.send(WatchEvent::WatcherForbidden(display_name.clone()));
                             break;
                         }
 
@@ -587,10 +591,10 @@ impl ResourceWatcher {
                                     display_name,
                                     e
                                 );
-                                let _ = event_tx.send(WatchEvent::Error(format!(
-                                    "{} watch forbidden by RBAC: {}",
-                                    display_name, e
-                                )));
+                                // Persistent, kind-specific: drives the contextual
+                                // "restricted" empty-state (see #210).
+                                let _ = event_tx
+                                    .send(WatchEvent::WatcherForbidden(resource_type.clone()));
                                 return;
                             }
 
