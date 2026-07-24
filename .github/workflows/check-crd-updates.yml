@@ -6,21 +6,27 @@ on:
     - cron: '0 9 * * 1'
   workflow_dispatch:
 
+# Least-privilege by default; the job elevates only what it needs.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   check-crd-updates:
     name: Check for Flux CRD Updates
     runs-on: ubuntu-latest
+    # Elevated here (not top-level) to commit regenerated CRDs and open the PR.
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
 
       - name: Install just and kopium
         run: cargo install just kopium

@@ -1,10 +1,14 @@
 version: 2
 updates:
-  # Keep the SHA-pinned actions current (pins never move on their own)
+  # Keep the SHA-pinned actions current (pins never move on their own).
+  # Monthly, not weekly: action releases are infrequent and one batched PR a
+  # month is enough churn. Patch/minor auto-merge once CI is green; see
+  # dependabot-auto-merge.yaml. Branch-ref pins (dtolnay/rust-toolchain@<sha>
+  # # master) aren't tracked here — re-pin those manually (see CLAUDE.md).
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
       actions:
         patterns: ["*"]
