@@ -1,7 +1,7 @@
 [package]
 name = "flux9s"
 
-version = "0.12.0"
+version = "1.0.0"
 edition = "2024"
 # Minimum supported Rust version — enforced by the msrv job in ci.yml.
 # Floor comes from the dependency graph (cookie_store requires 1.88).
