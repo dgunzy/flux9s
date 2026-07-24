@@ -1,0 +1,3 @@
+# Default owner for everything in the repo. Required-review routing once branch
+# protection is enabled on `main`; also an OpenSSF Scorecard Code-Review signal.
+* @dgunzy

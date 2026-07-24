@@ -24,4 +24,30 @@ sends cluster data anywhere else. Areas of particular interest for reports:
 - Credential handling around kubeconfig, exec plugins, and proxies
 - The release pipeline and published artifacts (crates.io, Homebrew, binstall)
 
-Dependency advisories are monitored via `cargo audit` in CI and Dependabot.
+Dependency advisories are monitored via `cargo audit` and `cargo deny` in CI, plus
+Dependabot. The build also runs OpenSSF Scorecard, CodeQL, and gitleaks.
+
+## Verifying releases
+
+Every release ships a `SHA256SUMS` file, a cosign signature over it, and SLSA
+build-provenance attestations for each archive.
+
+Verify the checksums are authentic (cosign keyless):
+
+```bash
+cosign verify-blob \
+  --certificate SHA256SUMS.pem \
+  --signature SHA256SUMS.sig \
+  --certificate-identity-regexp 'https://github.com/dgunzy/flux9s/.+' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS
+sha256sum -c SHA256SUMS
+```
+
+Verify build provenance for a downloaded archive:
+
+```bash
+gh attestation verify flux9s-linux-x86_64-musl.tar.gz --repo dgunzy/flux9s
+```
+
+A CycloneDX SBOM (`*.cdx.json`) is attached to each release.
