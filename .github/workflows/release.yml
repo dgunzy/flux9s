@@ -211,6 +211,9 @@ jobs:
     name: Create GitHub Release
     needs: [build-unix, build-windows, publish]
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      tag: ${{ steps.get_version.outputs.tag }}
     permissions:
       contents: write # create the release + upload assets
       id-token: write # cosign keyless signing + provenance (OIDC)
@@ -228,9 +231,16 @@ jobs:
         run: |
           if [ -n "$INPUT_TAG" ]; then
             VERSION="${INPUT_TAG}"
-            VERSION="${VERSION#v}"
           else
-            VERSION="${GITHUB_REF#refs/tags/v}"
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${VERSION#v}"
+          # Fail fast on anything that isn't a clean semver (e.g. a branch ref
+          # like "refs/heads/main" leaking through) so we never publish a
+          # corrupt version to the release or the Homebrew tap.
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::Refusing to release invalid version '$VERSION' (GITHUB_REF=$GITHUB_REF, INPUT_TAG=$INPUT_TAG)"
+            exit 1
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
@@ -304,11 +314,20 @@ jobs:
         with:
           path: artifacts
 
-      - name: Extract version
+      # Reuse the exact version the release job already validated instead of
+      # re-deriving it from GITHUB_REF (which is a branch ref on
+      # workflow_dispatch runs, and previously leaked "refs/heads/main" into
+      # the formula). Single source of truth -> the tap can never diverge.
+      - name: Resolve version
         id: version
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          if [ -z "$VERSION" ]; then
+            echo "::error::release job did not provide a version output"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Calculate checksums
         id: checksums
@@ -362,7 +381,7 @@ jobs:
             end
 
             test do
-              system "#{bin}/flux9s", "--version"
+              system "#{bin}/flux9s", "version"
             end
           end
           EOF
@@ -372,6 +391,15 @@ jobs:
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Idempotent: re-running the same release regenerates identical
+          # content, so there is nothing to commit and the job is a no-op.
+          if git diff --quiet -- flux9s.rb; then
+            echo "Formula already up to date for v${{ steps.version.outputs.version }}; nothing to commit."
+            exit 0
+          fi
           git add flux9s.rb
           git commit -m "Update flux9s to v${{ steps.version.outputs.version }}"
+          # Rebase on any newer tap state so re-runs / concurrent releases
+          # don't fail on a non-fast-forward push.
+          git pull --rebase origin main
           git push
