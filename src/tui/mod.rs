@@ -674,8 +674,11 @@ pub async fn run_tui_with_async_init(
                 app.async_state.edit_editor_launched = true;
 
                 if let Some(full_yaml_json) = app.async_state.edit_full_yaml.take() {
+                    // Present the same trimmed document the YAML view shows, not the
+                    // raw API response (no managedFields, no status, no explicit nulls).
+                    let edit_doc = crate::tui::views::prepare_edit_document(&full_yaml_json);
                     let yaml_str =
-                        serde_yaml::to_string(&full_yaml_json).unwrap_or_else(|_| "{}".to_string());
+                        serde_yaml::to_string(&edit_doc).unwrap_or_else(|_| "{}".to_string());
                     let editor_candidates =
                         crate::editor::editor_candidates(app.config.editor.as_deref());
                     let enable_mouse = app.config.ui.enable_mouse;
