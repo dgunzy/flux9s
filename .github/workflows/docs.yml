@@ -32,13 +32,20 @@ jobs:
       - name: Setup Hugo
         uses: peaceiris/actions-hugo@2752ce1d29631191ea3f27c23495fa06139a5b78 # v3.2.1
         with:
-          hugo-version: 'latest'
+          # Pinned, not 'latest': a breaking Hugo release must not be able to
+          # break the docs build unannounced. Dependabot cannot track an action
+          # input, so bump this by hand alongside the docsy pin in docs/go.mod
+          # (docsy documents the Hugo versions it supports per release).
+          hugo-version: '0.164.0'
           extended: true
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.21'
+          # The Go module lives in docs/, not the repo root — without this the
+          # cache step warns "Dependencies file is not found" and never caches.
+          cache-dependency-path: docs/go.sum
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -49,9 +56,14 @@ jobs:
 
       - name: Install Go dependencies
         working-directory: docs
-        run: |
-          go mod download
-          go mod tidy
+        # No `go mod tidy` here: docsy is a Hugo theme module that no Go code
+        # imports, so tidy drops the require line and Hugo then silently
+        # resolves the theme to the latest release. That is how docsy v0.16.0
+        # (which moved layouts into a nested module) broke this build.
+        # -mod=readonly makes any attempt to change the pin fail loudly instead.
+        env:
+          GOFLAGS: -mod=readonly
+        run: go mod download
 
       - name: Install npm dependencies
         working-directory: docs
@@ -71,6 +83,10 @@ jobs:
 
       - name: Build Hugo site
         working-directory: docs
+        # Hugo resolves the theme module itself, so it too must not be allowed
+        # to move the docsy pin recorded in docs/go.mod.
+        env:
+          GOFLAGS: -mod=readonly
         run: |
           hugo --minify --baseURL "https://flux9s.ca/"
 

@@ -218,6 +218,17 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
   # then bump every dtolnay/rust-toolchain@<old> to @$sha across .github/workflows/
   ```
   Open a PR so CI validates the bump before it lands.
+- **Docs-site toolchain pins are also hand-managed.** Two more things Dependabot
+  cannot track, both in `.github/workflows/docs.yml` / `docs/go.mod`:
+  - `hugo-version: '0.164.0'` — an action *input*, invisible to Dependabot.
+  - `require github.com/google/docsy vX.Y.Z` in `docs/go.mod` — the Hugo theme is
+    referenced only from `docs/config.toml`, so **`go mod tidy` deletes the
+    require line** and Hugo then floats the theme to its latest release. Never
+    run `go mod tidy` in `docs/`; the workflow sets `GOFLAGS: -mod=readonly` so
+    a lost pin fails loudly instead of silently upgrading.
+
+  Bump the two together (docsy documents its supported Hugo versions per
+  release) and let the docs workflow validate it in a PR.
 - **Rust deps**: `cargo audit` + `cargo deny` gate CI; keep `deny.toml`'s license
   allow-list tight (a new license fails CI on purpose — review before allowing).
 
