@@ -71,6 +71,44 @@ pub fn clean_resource_json(obj: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// Recursively drop object entries whose value is `null`.
+///
+/// Explicit nulls are noise in a text view and, in an edit buffer, are read by
+/// Server Side Apply as "delete this field" — neither is what the user means.
+pub fn strip_null_fields(obj: &serde_json::Value) -> serde_json::Value {
+    match obj {
+        serde_json::Value::Object(map) => {
+            let mut cleaned = serde_json::Map::new();
+            for (key, value) in map {
+                if value.is_null() {
+                    continue;
+                }
+                cleaned.insert(key.clone(), strip_null_fields(value));
+            }
+            serde_json::Value::Object(cleaned)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(strip_null_fields).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+/// Build the document handed to the external editor.
+///
+/// The raw API response carries bookkeeping the user cannot usefully edit, so
+/// this mirrors what `kubectl get -o yaml` shows instead: `metadata.managedFields`
+/// and the server-owned `status` are dropped, along with explicit nulls.
+/// `metadata.resourceVersion` is deliberately kept — the SSA apply needs it for
+/// optimistic locking.
+pub fn prepare_edit_document(obj: &serde_json::Value) -> serde_json::Value {
+    let mut doc = strip_null_fields(&clean_resource_json(obj));
+    if let Some(map) = doc.as_object_mut() {
+        map.remove("status");
+    }
+    doc
+}
+
 /// Render an empty state message
 ///
 /// Shows a consistent empty state message across all views.
@@ -162,6 +200,59 @@ mod tests {
         assert_eq!(format_age(Some(Utc::now() - Duration::hours(3))), "3h");
         assert_eq!(format_age(Some(Utc::now() - Duration::days(12))), "12d");
         assert_eq!(format_age(Some(Utc::now() - Duration::days(800))), "2y");
+    }
+
+    #[test]
+    fn test_strip_null_fields_removes_nulls_recursively() {
+        let value = serde_json::json!({
+            "spec": {
+                "path": "./apps",
+                "postBuild": null,
+                "sourceRef": { "kind": "GitRepository", "namespace": null },
+                "dependsOn": [{ "name": "configs", "namespace": null }]
+            }
+        });
+        let cleaned = strip_null_fields(&value);
+        assert_eq!(
+            cleaned,
+            serde_json::json!({
+                "spec": {
+                    "path": "./apps",
+                    "sourceRef": { "kind": "GitRepository" },
+                    "dependsOn": [{ "name": "configs" }]
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn test_prepare_edit_document_drops_managed_fields_status_and_nulls() {
+        let value = serde_json::json!({
+            "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+            "kind": "Kustomization",
+            "metadata": {
+                "name": "apps",
+                "namespace": "flux-system",
+                "resourceVersion": "69913306",
+                "deletionTimestamp": null,
+                "managedFields": [{ "manager": "kustomize-controller" }]
+            },
+            "spec": { "path": "./apps", "prune": true },
+            "status": { "observedGeneration": 7 }
+        });
+
+        let doc = prepare_edit_document(&value);
+        let meta = doc.get("metadata").and_then(|m| m.as_object()).unwrap();
+
+        assert!(doc.get("status").is_none(), "status must be dropped");
+        assert!(meta.get("managedFields").is_none());
+        assert!(meta.get("deletionTimestamp").is_none());
+        // resourceVersion is required for the SSA optimistic-locking check
+        assert_eq!(
+            meta.get("resourceVersion").and_then(|v| v.as_str()),
+            Some("69913306")
+        );
+        assert_eq!(doc.get("spec"), value.get("spec"));
     }
 
     #[test]

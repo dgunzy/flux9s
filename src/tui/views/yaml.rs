@@ -122,8 +122,12 @@ pub fn render_resource_yaml(
         }
     };
 
-    // Clean the JSON object to remove Kubernetes internal fields
-    let cleaned_json = crate::tui::views::helpers::clean_resource_json(&obj_json);
+    // Clean the JSON object to remove Kubernetes internal fields. Nulls are also
+    // dropped — the fallback path serializes typed models, which emit every unset
+    // optional field as `null`.
+    let cleaned_json = crate::tui::views::helpers::strip_null_fields(
+        &crate::tui::views::helpers::clean_resource_json(&obj_json),
+    );
 
     // Convert JSON to YAML using serde_yaml with proper formatting
     // serde_yaml automatically handles indentation with spaces
