@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-30
+
+# Version 1.0.1 Changelog
+
+**Added**
+- Cosign integration for release signing
+
+**Changed**
+- Updated Flux CRDs to latest versions
+- Hardened release workflow security
+
+**Fixed**
+- Null field handling in edit refinement
+
 ## [1.0.0] - 2026-07-24
 
 # Version 1.0.0 Changelog
