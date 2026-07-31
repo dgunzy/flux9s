@@ -6,11 +6,12 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+  # No paths filter on pull_request: "Analyze (rust)" is a required status check
+  # on main, and a workflow skipped by path filtering never reports its checks —
+  # they sit pending forever and the PR can never merge. Docs-only PRs pay ~1min
+  # for a build-mode:none scan. Matches ci.yml, which also filters push only.
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
   schedule:
     - cron: "0 9 * * 1" # Monday 09:00 UTC
   workflow_dispatch:
