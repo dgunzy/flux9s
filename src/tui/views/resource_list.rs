@@ -201,7 +201,9 @@ pub fn render_resource_list(
         (rows, header, constraints)
     } else {
         // Resource-type-specific view: show type-specific fields (plus AGE)
-        let resource_type = selected_resource_type.as_ref().unwrap();
+        // `is_unified` already established this is `Some`; degrade to the generic
+        // column set rather than panicking if that ever stops holding.
+        let resource_type = selected_resource_type.as_deref().unwrap_or_default();
         let mut column_names = get_resource_type_columns(resource_type);
         column_names.push("AGE");
         let header_cells: Vec<String> = column_names

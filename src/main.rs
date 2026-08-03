@@ -3,16 +3,11 @@
 //! This application provides real-time monitoring of Flux resources using
 //! the Kubernetes Watch API and a familiar K9s-style interface.
 
-mod cli;
-mod config;
-mod constants;
-mod editor;
-mod kube;
-mod models;
-mod operations;
-mod trace;
-mod tui;
-mod watcher;
+// Everything lives in the `flux9s` library crate. The binary deliberately
+// declares no modules of its own: re-declaring them here (`mod kube;` etc.)
+// compiled the whole codebase a second time into a parallel module tree that
+// `cargo clippy --lib --tests` and `cargo test --lib --tests` never saw.
+use flux9s::{cli, config, kube, tui};
 
 use anyhow::Result;
 use clap::Parser;
@@ -185,16 +180,16 @@ async fn run_connection_check(
     kubeconfig_path: Option<&std::path::Path>,
     connect_timeout: std::time::Duration,
 ) -> Result<()> {
-    use crate::kube::health::{check_connectivity, detect_cluster_server};
+    use kube::health::{check_connectivity, detect_cluster_server};
 
     let client = match kubeconfig_path {
-        Some(path) => crate::kube::create_client_from_kubeconfig_path(path).await?,
-        None => crate::kube::create_client().await?,
+        Some(path) => kube::create_client_from_kubeconfig_path(path).await?,
+        None => kube::create_client().await?,
     };
 
     let context = match kubeconfig_path {
-        Some(path) => crate::kube::get_context_from_kubeconfig_path(path)?,
-        None => crate::kube::get_context().await?,
+        Some(path) => kube::get_context_from_kubeconfig_path(path)?,
+        None => kube::get_context().await?,
     };
 
     let server_url = detect_cluster_server(kubeconfig_path, Some(&context));

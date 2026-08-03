@@ -168,6 +168,14 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-macos-x86_64.{ archi
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-windows-x86_64.{ archive-format }"
 pkg-fmt = "zip"
 
+# The binary is a thin shim over the library and needs the TUI. Declaring the
+# feature requirement lets `--no-default-features` builds (the headless library
+# mode advertised in lib.rs) skip the bin target instead of failing to compile it.
+[[bin]]
+name = "flux9s"
+path = "src/main.rs"
+required-features = ["tui"]
+
 [[test]]
 name = "crd_compatibility"
 path = "tests/crd_compatibility.rs"
@@ -212,3 +220,27 @@ required-features = ["tui"]
 lto = true
 codegen-units = 1
 strip = true
+
+# Lint configuration lives here rather than in the `cargo clippy` invocation so
+# that CI (.github/workflows/ci.yml), `just clippy`, and editors all see the same
+# rules — the two command lines used to carry duplicate `-A` lists that could drift.
+[lints.rust]
+dead_code = "allow"
+renamed_and_removed_lints = "allow"
+
+[lints.clippy]
+# Pre-existing allowances, moved verbatim from the old `-A` flags.
+too_many_arguments = "allow"
+items_after_test_module = "allow"
+type_complexity = "allow"
+should_implement_trait = "allow"
+collapsible_if = "allow"
+len_zero = "allow"
+assertions_on_constants = "allow"
+
+# Panic safety. Non-test code currently has zero of these; denying them keeps it
+# that way and forces any future exception to be an explicit, justified #[allow].
+# Tests are exempt via clippy.toml (allow-*-in-tests), where unwrap is idiomatic.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

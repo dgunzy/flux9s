@@ -2,36 +2,71 @@
 default:
     @just --list
 
-# CI targets (in order they run in CI)
+# CI targets
+#
+# This file is the single source of truth for what "CI" means: the GitHub
+# Actions workflow installs `just` and runs `just ci-check`, so a check can
+# never exist in one place and not the other. Add a check to `verify` below and
+# both local and CI runs pick it up.
 
 # Check formatting without modifying files
 fmt-check:
     cargo fmt -- --check
 
-# Run clippy linter (with CI flags)
+# Lint levels live in Cargo.toml's [lints] tables, not on this command line, so
+# CI, this recipe, and rust-analyzer agree. --all-targets covers the binary,
+# which is not part of the library target and used to be skipped entirely.
+
+# Run clippy over every target, warnings denied
 clippy:
-    cargo clippy --lib --tests -- -D warnings -A clippy::too_many_arguments -A clippy::items-after-test-module -A clippy::type-complexity -A clippy::should-implement-trait -A renamed_and_removed_lints -A clippy::collapsible-if -A clippy::len-zero -A clippy::assertions-on-constants -A dead-code
+    cargo clippy --all-targets -- -D warnings
 
-# Run library and unit tests
+# `--tests` covers the lib and bin unit tests plus every integration binary, so
+# nothing is enumerated (an explicit list silently omits new test files). `--doc`
+# is separate because no target selector includes doctests — the headless
+# examples in lib.rs and ClusterSession are compiled nowhere else.
+
+# Run all tests, including doctests
 test:
-    cargo test --lib --tests
+    cargo test --tests
+    cargo test --doc
 
-# Run integration tests
+# Proves the headless library mode advertised in lib.rs still builds. The bin
+# target is skipped automatically via its required-features = ["tui"].
+
+# Check the library builds without the tui feature
+check-headless:
+    cargo check --no-default-features --all-targets
+
+# Just the integration binaries — a subset of `just test`, for a faster loop.
 test-integration:
-    cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests --test graph_tests --test snapshot_tests
+    cargo test --test '*'
+
+# Build the clusters first: ./scripts/dev-clusters.sh ci
 
 # Run live-cluster regression tests against the dev kind clusters
-# (build them first: ./scripts/dev-clusters.sh ci)
 test-live:
     cargo test --test live_tests -- --ignored --test-threads=1
 
-# Run cargo-audit to check for CVEs (ignores unmaintained warnings)
-audit:
-    # RUSTSEC-2026-0002 is currently pulled in transitively via ratatui 0.29's lru dependency.
-    cargo audit --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0002
+# No --ignore list: the previous RUSTSEC-2024-0436 / RUSTSEC-2026-0002 entries
+# were stale (paste is no longer in the tree, lru is now 0.18.0) and made this
+# recipe disagree with the bare `cargo audit` CI used to run.
 
-# Run all CI checks in order
-ci: fmt clippy audit test test-integration
+# Scan dependencies for CVEs
+audit:
+    cargo audit
+
+# Both `ci` and `ci-check` delegate here, so a check cannot be added to one and
+# forgotten in the other.
+
+# Every verification step, in CI order
+verify: clippy check-headless audit test
+
+# Format in place, then run every check
+ci: fmt verify
+
+# What GitHub Actions runs: `ci`, but unformatted code fails instead of being rewritten
+ci-check: fmt-check verify
 
 # Build targets
 

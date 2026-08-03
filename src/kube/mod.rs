@@ -170,6 +170,7 @@ fn is_internal_host(host: &str) -> bool {
         }
         // Check if any part of the hostname contains common internal prefixes
         // This handles cases like devprod.example.com, testapi.example.com, etc.
+        let tld = parts.last().copied().unwrap_or_default();
         for part in &parts {
             if part.starts_with("dev")
                 || part.starts_with("test")
@@ -179,7 +180,7 @@ fn is_internal_host(host: &str) -> bool {
                 || part.starts_with("internal")
             {
                 // Only consider it internal if it's not the TLD
-                if part != parts.last().unwrap() {
+                if *part != tld {
                     return true;
                 }
             }

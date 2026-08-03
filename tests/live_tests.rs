@@ -11,6 +11,11 @@
 //! unit tests can't reach: discovery, watch/list/log wire formats, and the
 //! operator's actual condition-message formats.
 //!
+//! `clippy.toml`'s `allow-panic-in-tests` only covers `#[test]` function bodies,
+//! not the shared helpers below, so this test crate opts out explicitly: a
+//! missing dev cluster should fail loudly with setup instructions.
+#![allow(clippy::panic)]
+//!
 //! Discipline: only assert on state `dev-clusters.sh` creates
 //! deterministically. Never assert on public-internet sources (e.g. the
 //! flux2-branches RSIP) or exact timing — eventual state with a bounded poll.
