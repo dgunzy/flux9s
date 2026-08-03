@@ -9,6 +9,12 @@
 //! history) answers through [`crate::models::FluxResourceKind`], which
 //! discovered kinds are deliberately not part of, so privileges stay
 //! deny-by-default.
+//!
+//! `expect()` on the registry lock is deliberate and allowed for this module: a
+//! poisoned `RwLock` means another thread panicked while mutating the registry,
+//! so the discovery state is already untrustworthy. There is nothing to degrade
+//! to — this is the "truly unrecoverable" case.
+#![allow(clippy::expect_used)]
 
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use std::collections::HashMap;

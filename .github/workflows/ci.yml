@@ -43,11 +43,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Check formatting
-        run: cargo fmt -- --check
-
-      - name: Run clippy
-        run: cargo clippy --lib --tests -- -D warnings -A clippy::too_many_arguments -A clippy::items-after-test-module -A clippy::type-complexity -A clippy::should-implement-trait -A renamed_and_removed_lints -A clippy::collapsible-if -A clippy::len-zero -A clippy::assertions-on-constants -A dead-code
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
 
       - name: Install cargo-audit
         run: |
@@ -55,11 +52,12 @@ jobs:
             cargo install cargo-audit --locked
           fi
 
-      - name: Run cargo-audit (CVE scan)
-        run: cargo audit
-
-      - name: Run tests
-        run: cargo test --lib --tests
+      # The justfile is the single source of truth for what CI means. `ci-check`
+      # is `just ci` with fmt-check instead of fmt, so contributors running
+      # `just ci` locally run exactly these checks: clippy, headless build,
+      # cargo-audit, tests, doctests. Add new checks to the `verify` recipe.
+      - name: Run CI checks (just ci-check)
+        run: just ci-check
 
   deny:
     name: cargo-deny (licenses, advisories, bans, sources)

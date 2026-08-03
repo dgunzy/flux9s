@@ -16,13 +16,14 @@ tests/
 ├── resource_registry.rs
 ├── snapshot_tests.rs
 ├── trace_tests.rs
-├── snapshots/
-│   └── *.snap
-└── unit/
-    └── mod.rs
+└── snapshots/
+    └── *.snap
 ```
 
-Most tests are top-level integration-style Rust test binaries, not nested `tests/unit/...` or `tests/integration/...` trees.
+Test binaries here are top-level integration-style tests, not nested `tests/unit/...` or
+`tests/integration/...` trees. Unit tests live inline in the module they test, in a
+`#[cfg(test)] mod tests` block — the standard Rust convention, and the only way to reach
+private items.
 
 ## What Each Test Covers
 
@@ -42,18 +43,22 @@ Most tests are top-level integration-style Rust test binaries, not nested `tests
 Common commands from the repository root:
 
 ```bash
-# Default contributor check
+# Default contributor check — formats, then runs everything CI runs
 just ci
 
-# Library + unit-style tests
+# Every test: lib + bin unit tests, all integration binaries, and doctests
 just test
 
-# Selected integration-style tests used in CI
+# Only the integration binaries (a subset of `just test`), for a faster loop
 just test-integration
 
 # All test binaries directly
-cargo test --lib --tests
+cargo test --tests
 ```
+
+CI runs `just ci-check`, which is `just ci` with `fmt-check` in place of `fmt`, so
+the checks cannot drift apart. Add new checks to the `verify` recipe in the
+justfile rather than to `.github/workflows/ci.yml`.
 
 TUI-specific tests such as `snapshot_tests` and `navigation_tests` are feature-gated in `Cargo.toml` and require the default `tui` feature.
 

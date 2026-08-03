@@ -201,8 +201,9 @@ fn highlight_yaml_line(line: &str, theme: &Theme) -> Line<'static> {
     let mut spans = Vec::new();
     let mut chars = line.chars().peekable();
     let mut current_token = String::new();
-    let mut in_string = false;
-    let mut string_quote = None;
+    // `Some(quote)` while inside a quoted scalar — one piece of state instead of a
+    // bool paired with the quote character, which can't get out of sync.
+    let mut string_quote: Option<char> = None;
     let mut in_comment = false;
     let mut after_colon = false;
 
@@ -214,16 +215,15 @@ fn highlight_yaml_line(line: &str, theme: &Theme) -> Line<'static> {
             continue;
         }
 
-        if in_string {
+        if let Some(quote) = string_quote {
             current_token.push(ch);
-            if ch == string_quote.unwrap() {
+            if ch == quote {
                 // End of string
                 spans.push(Span::styled(
                     current_token.clone(),
                     Style::default().fg(theme.text_value),
                 ));
                 current_token.clear();
-                in_string = false;
                 string_quote = None;
                 after_colon = false;
             }
@@ -277,7 +277,6 @@ fn highlight_yaml_line(line: &str, theme: &Theme) -> Line<'static> {
                     ));
                     current_token.clear();
                 }
-                in_string = true;
                 string_quote = Some(ch);
                 current_token.push(ch);
             }
@@ -313,7 +312,7 @@ fn highlight_yaml_line(line: &str, theme: &Theme) -> Line<'static> {
     if !current_token.is_empty() {
         let color = if in_comment {
             theme.text_secondary
-        } else if in_string {
+        } else if string_quote.is_some() {
             theme.text_value
         } else if after_colon {
             get_value_color(theme)

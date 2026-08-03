@@ -1,0 +1,6 @@
+# `unwrap_used` / `expect_used` / `panic` are denied for non-test code in
+# Cargo.toml's [lints.clippy]. Inside tests they are idiomatic and expected —
+# an unwrap in a test *is* the assertion — so exempt test code here.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

@@ -30,6 +30,17 @@
 //! # }
 //! ```
 
+/// Argument handling for the `flux9s` binary.
+///
+/// Lives in the library rather than the binary so it is compiled, linted, and
+/// unit-tested exactly once. Not part of the stable public API — it exists for
+/// `src/main.rs` and may change without a semver bump.
+///
+/// Gated on `tui` for the same reason the binary is: it reaches into
+/// `config::ThemeLoader`, which is part of the TUI surface.
+#[doc(hidden)]
+#[cfg(feature = "tui")]
+pub mod cli;
 pub mod config;
 pub mod constants;
 pub mod editor;

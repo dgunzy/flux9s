@@ -193,12 +193,53 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
 
 **Reference:** See `ContextSubmenu` in `src/tui/commands.rs` for implementation example
 
+## Crate layout: one module tree
+
+- **`src/lib.rs` owns every module. `src/main.rs` is a thin shim** that does
+  `use flux9s::{cli, config, kube, tui};` and nothing else. Never add `mod <name>;`
+  to `main.rs` — re-declaring library modules there compiles the whole codebase a
+  second time into a parallel tree that clippy and the test runner never see.
+- `cli` is `#[doc(hidden)] #[cfg(feature = "tui")] pub mod` — in the library so it is
+  linted and unit-tested, hidden because it is not stable public API, and gated
+  because it reaches into `config::ThemeLoader`.
+- The `[[bin]]` declares `required-features = ["tui"]`, so
+  `cargo check --no-default-features` skips it and actually verifies the headless
+  library mode advertised in `lib.rs`. `just check-headless` runs this; it is part of
+  `just ci`.
+- Test invocations only reach what they name: `cargo test --lib --tests` runs neither
+  bin unit tests nor doctests. `just test` therefore also runs `cargo test --doc`.
+
 ## CI/CD
 
-- `just ci` runs: `cargo fmt`, `cargo clippy`, `cargo test`
+- **The justfile is the single source of truth for CI.** `.github/workflows/ci.yml`
+  installs `just` and runs one step: `just ci-check`. Never add a check to the
+  workflow directly — add it to the `verify` recipe, and both local and CI runs
+  pick it up. The two entry points differ in exactly one way:
+  - `just ci` = `fmt` + `verify` (formats in place — for local use)
+  - `just ci-check` = `fmt-check` + `verify` (unformatted code fails — for CI)
+
+  `verify` = `clippy`, `check-headless`, `audit`, `test`. The `build`, `msrv`, and
+  `build-windows` jobs stay in the workflow: they are per-target builds, not
+  duplicated verification logic.
+- **Test recipes never enumerate targets.** `just test` is `cargo test --tests`
+  (lib + bin unit tests + every integration binary, so a new test file is picked up
+  automatically) plus `cargo test --doc`, since no target selector covers doctests.
 - All CI checks must pass before merge
 - Clippy warnings are treated as errors
 - Generated code in `src/models/_generated/` has clippy suppressed
+- **Lint levels live in `Cargo.toml`'s `[lints.rust]` / `[lints.clippy]` tables**, not
+  in the `cargo clippy` command line, so CI, `just clippy`, and rust-analyzer all
+  agree. Both invocations are just `cargo clippy --all-targets -- -D warnings`.
+  Add or relax a lint in `Cargo.toml` — never by appending `-A` flags.
+- **Clippy runs with `--all-targets`.** `src/cli/` and `src/main.rs` belong to the
+  binary target only; the old `--lib --tests` invocation never linted them.
+- **`unwrap()`, `expect()`, and `panic!` are denied outside tests** (`unwrap_used`,
+  `expect_used`, `panic`). `clippy.toml` exempts test code, where an unwrap *is*
+  the assertion. Two deliberate exceptions carry a module-level `#![allow]` with a
+  written justification: `src/models/extra_kinds.rs` (a poisoned registry lock is
+  unrecoverable) and `tests/live_tests.rs` (`allow-panic-in-tests` does not cover
+  helpers outside `#[test]` fns). Anything new needs a real justification, not an
+  allow — degrade gracefully instead.
 
 ## Supply chain & dependency pinning
 

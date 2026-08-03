@@ -27,12 +27,25 @@ pub fn init_logging(debug: bool) -> Option<PathBuf> {
             });
 
         // Open the file for writing (it already exists from tempfile)
-        let file = std::fs::OpenOptions::new()
+        let opened = std::fs::OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
-            .open(&temp_file)
-            .expect("Failed to open log file");
+            .open(&temp_file);
+
+        let file = match opened {
+            Ok(file) => file,
+            Err(e) => {
+                // Debug logging is a convenience, not a requirement. An
+                // unwritable temp dir should not abort startup — warn on stderr
+                // (the TUI has not been entered yet) and run without a log file.
+                eprintln!(
+                    "Warning: could not open log file {}: {e}. Continuing without debug logging.",
+                    temp_file.display()
+                );
+                return None;
+            }
+        };
 
         // Enable debug logging with tracing-subscriber
         // Write to file so TUI can use stdout/stderr without interference

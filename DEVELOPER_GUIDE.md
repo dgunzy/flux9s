@@ -316,8 +316,8 @@ flux9s/
 │   │   ├── resource.rs        # Resource definitions
 │   │   ├── state.rs           # State management
 │   │   └── registry.rs        # Resource registry
-│   ├── lib.rs                 # Library entry point
-│   └── main.rs                # Binary entry point
+│   ├── lib.rs                 # Library entry point — owns every module
+│   └── main.rs                # Binary entry point — thin shim over the library
 ├── tests/                      # Test suite
 │   ├── crd_compatibility.rs   # CRD compatibility tests
 │   ├── resource_registry.rs   # Registry tests
