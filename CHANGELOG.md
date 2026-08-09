@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-09
+
+# Version 1.0.2 Changelog
+
+**Added**
+- Anchors on documentation site
+
+**Changed**
+- Binary entry point implementation
+- Updated Flux CRDs to latest versions
+
+**Fixed**
+- Clippy linting issues
+- Test standardization
+
 ## [1.0.1] - 2026-07-30
 
 # Version 1.0.1 Changelog
