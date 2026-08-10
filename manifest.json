@@ -1,13 +1,13 @@
 {
-  "generated_at": "2026-08-03T12:12:46Z",
+  "generated_at": "2026-08-10T10:09:31Z",
   "flux_versions": {
-    "source-controller": "v1.9.3",
+    "source-controller": "v1.9.4",
     "kustomize-controller": "v1.9.4",
     "helm-controller": "v1.6.3",
-    "notification-controller": "v1.9.2",
-    "image-reflector-controller": "v1.2.3",
-    "image-automation-controller": "v1.2.3",
-    "source-watcher": "v2.2.2"
+    "notification-controller": "v1.9.3",
+    "image-reflector-controller": "v1.2.4",
+    "image-automation-controller": "v1.2.4",
+    "source-watcher": "v2.2.3"
   },
   "flux_operator_crds": [
     "flux-operator-resourcesets",
