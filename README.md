@@ -158,12 +158,13 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `:logs [pod]` - Stream a Flux controller pod's logs (submenu without argument)
 - `:skin {skin-name}` - set skin directly
 - `:skin` - open interactive theme selection menu with live preview (17 built-in themes + custom)
+- `:discover` - Toggle discovery of Flux-labeled CRDs for this session (runtime `discoverFluxResources`)
 - `:q` or `:q!` - Quit
 - `:help` - Show help
 
 ### Resource Views
 
-- **Graph View (`g`)** - Visualize resource relationships and dependencies. Shows upstream sources and downstream managed resources. Move the highlighted focus between nodes with `j`/`k` (the view scrolls to keep it visible), press `Enter` to open the focused resource's detail view, and `Esc` to return to the graph. Supported for Kustomization, HelmRelease, ArtifactGenerator, FluxInstance, and ResourceSet.
+- **Graph View (`g`)** - Visualize resource relationships and dependencies. Shows upstream sources and downstream managed resources. Move the highlighted focus between nodes with `j`/`k` (the view scrolls to keep it visible), press `Enter` to open the focused resource's detail view (or, on a workload/resource group node, drill into its members — the resource group breaks down into the kind, namespace, and name of everything it aggregates), and `Esc` to return to the graph. Supported for Kustomization, HelmRelease, ArtifactGenerator, FluxInstance, and ResourceSet.
 - **History View (`h`)** - View reconciliation history for FluxInstance, ResourceSet, Kustomization, and HelmRelease resources.
 - **Events View (`:events`)** - Live Kubernetes events feed for the current namespace (or cluster-wide with `:ns all`), newest first with Warnings highlighted. `Enter` jumps to the involved resource; the describe view (`d`) also shows a per-resource Events section.
 - **Favorites (`f`)** - Mark resources as favorites for quick access. Use `:favorites` command to view all favorites.

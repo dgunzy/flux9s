@@ -16,6 +16,30 @@ pub struct InventoryEntry {
     pub api_version: String,
 }
 
+impl InventoryEntry {
+    /// Encode for a ResourceGroup node description line (#245). Mirrors
+    /// [`crate::kube::workloads::WorkloadRef::to_graph_line`]: this impl is the
+    /// single source of truth for the format the graph renderer and the
+    /// inventory list view decode.
+    pub fn to_graph_line(&self) -> String {
+        format!(
+            "{}|{}|{}|{}",
+            self.kind, self.namespace, self.name, self.api_version
+        )
+    }
+
+    /// Decode a ResourceGroup node description line.
+    pub fn parse_graph_line(line: &str) -> Option<Self> {
+        let mut parts = line.splitn(4, '|');
+        Some(Self {
+            kind: parts.next()?.to_string(),
+            namespace: parts.next()?.to_string(),
+            name: parts.next()?.to_string(),
+            api_version: parts.next().unwrap_or("v1").to_string(),
+        })
+    }
+}
+
 /// Grouped inventory for graph visualization
 #[derive(Debug, Clone, Default)]
 pub struct InventoryGroups {
@@ -23,8 +47,37 @@ pub struct InventoryGroups {
     pub flux: Vec<InventoryEntry>,
     /// Workload resources (Deployment, StatefulSet, DaemonSet)
     pub workloads: Vec<InventoryEntry>,
-    /// Other resources grouped by kind with counts
-    pub resources: HashMap<String, usize>,
+    /// Everything else. Kept as individual entries (not just per-kind counts)
+    /// so the graph's Resources node can be drilled into for the namespace and
+    /// name of each item; the node itself still displays per-kind counts via
+    /// [`kind_counts`].
+    pub resources: Vec<InventoryEntry>,
+}
+
+/// Per-kind counts of `entries`, in alphabetical kind order. Drives the
+/// "Kind: count" summary lines a ResourceGroup node displays (and, through
+/// them, its rendered height).
+pub fn kind_counts(entries: &[InventoryEntry]) -> Vec<(String, usize)> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for entry in entries {
+        *counts.entry(entry.kind.as_str()).or_insert(0) += 1;
+    }
+    let mut counts: Vec<(String, usize)> = counts
+        .into_iter()
+        .map(|(kind, count)| (kind.to_string(), count))
+        .collect();
+    counts.sort();
+    counts
+}
+
+/// Per-kind counts for an encoded ResourceGroup node description (one
+/// [`InventoryEntry::to_graph_line`] per line). Unparseable lines are skipped.
+pub fn kind_counts_from_description(description: &str) -> Vec<(String, usize)> {
+    let entries: Vec<InventoryEntry> = description
+        .lines()
+        .filter_map(InventoryEntry::parse_graph_line)
+        .collect();
+    kind_counts(&entries)
 }
 
 /// Workload kinds that get special treatment in the graph
@@ -207,11 +260,17 @@ pub fn group_inventory(entries: Vec<InventoryEntry>) -> InventoryGroups {
         else if WORKLOAD_KINDS.contains(&entry.kind.as_str()) {
             groups.workloads.push(entry);
         }
-        // All other resources are grouped by kind with counts
+        // Everything else keeps its identity; the graph aggregates by kind
+        // for display only.
         else {
-            *groups.resources.entry(entry.kind.clone()).or_insert(0) += 1;
+            groups.resources.push(entry);
         }
     }
+
+    // Stable, readable order for both the node summary and the drill-down list.
+    groups
+        .resources
+        .sort_by(|a, b| (&a.kind, &a.namespace, &a.name).cmp(&(&b.kind, &b.namespace, &b.name)));
 
     groups
 }
@@ -318,7 +377,57 @@ mod tests {
         let groups = group_inventory(entries);
         assert_eq!(groups.flux.len(), 1);
         assert_eq!(groups.flux[0].kind, "Kustomization");
-        assert_eq!(groups.resources.get("ConfigMap"), Some(&1));
+        assert_eq!(
+            kind_counts(&groups.resources),
+            vec![("ConfigMap".into(), 1)]
+        );
+        // The entry keeps its namespace/name for the drill-down view.
+        assert_eq!(groups.resources[0].namespace, "default");
+        assert_eq!(groups.resources[0].name, "config");
+    }
+
+    #[test]
+    fn graph_line_round_trips() {
+        let entry = InventoryEntry {
+            kind: "Service".to_string(),
+            name: "cabot-book-service".to_string(),
+            namespace: "cabot-book".to_string(),
+            api_version: "v1".to_string(),
+        };
+        let line = entry.to_graph_line();
+        assert_eq!(line, "Service|cabot-book|cabot-book-service|v1");
+        assert_eq!(InventoryEntry::parse_graph_line(&line), Some(entry));
+
+        // Cluster-scoped entries have an empty namespace field.
+        let cluster = InventoryEntry {
+            kind: "Namespace".to_string(),
+            name: "demo".to_string(),
+            namespace: String::new(),
+            api_version: "v1".to_string(),
+        };
+        assert_eq!(
+            InventoryEntry::parse_graph_line(&cluster.to_graph_line()),
+            Some(cluster)
+        );
+
+        // Garbage lines are skipped rather than panicking.
+        assert_eq!(InventoryEntry::parse_graph_line("nonsense"), None);
+    }
+
+    #[test]
+    fn kind_counts_aggregate_alphabetically() {
+        let description = [
+            "Service|ns-b|svc-2|v1",
+            "ConfigMap|ns-a|cm-1|v1",
+            "Service|ns-a|svc-1|v1",
+            "not a line",
+        ]
+        .join("\n");
+
+        assert_eq!(
+            kind_counts_from_description(&description),
+            vec![("ConfigMap".to_string(), 1), ("Service".to_string(), 2)]
+        );
     }
 
     #[test]
@@ -406,10 +515,19 @@ mod tests {
         // The Deployment gets workload treatment (status fetch + group node)
         assert_eq!(groups.workloads.len(), 1);
         assert_eq!(groups.workloads[0].name, "staged-app");
-        // Everything else aggregates by kind — including arbitrary/CRD kinds
-        assert_eq!(groups.resources.get("Namespace"), Some(&1));
-        assert_eq!(groups.resources.get("CustomResourceDefinition"), Some(&1));
-        assert_eq!(groups.resources.get("ConfigMap"), Some(&1));
-        assert_eq!(groups.resources.get("Job"), Some(&1));
+        // Everything else aggregates by kind for display — including
+        // arbitrary/CRD kinds — while keeping the individual entries.
+        assert_eq!(
+            kind_counts(&groups.resources),
+            vec![
+                ("ConfigMap".to_string(), 1),
+                ("CustomResourceDefinition".to_string(), 1),
+                ("Job".to_string(), 1),
+                ("Namespace".to_string(), 1),
+            ]
+        );
+        assert!(groups.resources.iter().any(|e| e.kind == "Job"
+            && e.namespace == "flux-resources"
+            && e.name == "staged-db-migration"));
     }
 }

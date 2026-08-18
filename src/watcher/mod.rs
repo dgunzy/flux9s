@@ -145,8 +145,13 @@ pub struct ResourceWatcher {
     /// resource in a cluster and shouldn't be paid for while unused.
     kube_events_handle: Option<JoinHandle<()>>,
     /// Opt-in CRD discovery (#197). Off by default: when false, neither the
-    /// CRD watcher nor any dynamic kind watcher ever starts.
+    /// CRD watcher nor any dynamic kind watcher ever starts. Toggled at
+    /// runtime by `:discover` via [`Self::set_discovery_enabled`].
     discovery_enabled: bool,
+    /// The CRD discovery watcher has its own handle (rather than living in
+    /// `handles`) so `:discover` can arm and disarm it mid-session without
+    /// touching the resource watchers.
+    crd_discovery_handle: Option<JoinHandle<()>>,
     /// Dynamic watchers for discovered kinds, keyed by kind name so a
     /// deleted CRD can stop exactly its own watcher.
     extra_handles: std::collections::HashMap<String, JoinHandle<()>>,
@@ -173,6 +178,7 @@ impl ResourceWatcher {
                 handles: Vec::new(),
                 kube_events_handle: None,
                 discovery_enabled,
+                crd_discovery_handle: None,
                 extra_handles: std::collections::HashMap::new(),
             },
             rx,
@@ -951,7 +957,43 @@ impl ResourceWatcher {
             }
         });
 
-        self.handles.push(handle);
+        self.crd_discovery_handle = Some(handle);
+        Ok(())
+    }
+
+    /// Whether the CRD discovery watcher is currently armed.
+    pub fn is_discovery_enabled(&self) -> bool {
+        self.discovery_enabled
+    }
+
+    /// Arm or disarm CRD discovery mid-session (#245), the runtime half of the
+    /// `discoverFluxResources` setting.
+    ///
+    /// Enabling starts the CRD discovery watcher, which re-emits
+    /// `ExtraKindDiscovered` for every already-labeled CRD, so the kinds and
+    /// their `:` commands come back on their own. Disabling stops that watcher
+    /// plus every dynamic kind watcher and clears the registry, so the aliases
+    /// and help entry disappear with it. A no-op when already in the requested
+    /// state.
+    pub fn set_discovery_enabled(&mut self, enabled: bool) -> Result<()> {
+        if self.discovery_enabled == enabled {
+            return Ok(());
+        }
+        self.discovery_enabled = enabled;
+
+        if enabled {
+            self.watch_crd_discovery()?;
+        } else {
+            if let Some(handle) = self.crd_discovery_handle.take() {
+                handle.abort();
+            }
+            for (_, handle) in self.extra_handles.drain() {
+                handle.abort();
+            }
+            // Same reasoning as in `stop()`: registered kinds must not outlive
+            // the watcher that discovered them.
+            crate::models::extra_kinds::global().clear();
+        }
         Ok(())
     }
 
@@ -1071,6 +1113,9 @@ impl ResourceWatcher {
             handle.abort();
         }
         self.handles.clear();
+        if let Some(handle) = self.crd_discovery_handle.take() {
+            handle.abort();
+        }
         for (_, handle) in self.extra_handles.drain() {
             handle.abort();
         }

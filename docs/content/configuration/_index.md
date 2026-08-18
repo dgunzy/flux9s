@@ -163,6 +163,13 @@ Guard rails:
 - When the flag is off (the default), no CRD watch runs and no extra API
   calls are made
 
+Use the `:discover` command to arm or disarm discovery mid-session without a
+restart (the sibling of `:readonly`). The toggle applies to the current
+session only — including across a context switch — and never writes the
+config file; set `discoverFluxResources` above to change the default.
+Disabling stops the CRD watch, deregisters the discovered kinds along with
+their `:` commands, and removes their resources from the list.
+
 ### Kubernetes API Connection Timeout
 
 At startup, flux9s probes the Kubernetes API server before starting watchers. If the kubeconfig, context, credentials, network, or API server is not working, flux9s shows a connection error screen instead of hanging indefinitely.

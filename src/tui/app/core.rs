@@ -664,6 +664,7 @@ impl App {
             // don't point at a single watched Flux resource.
             View::Logs
             | View::WorkloadList
+            | View::InventoryList
             | View::WorkloadDetail
             | View::Pulse
             | View::ResourceEdit

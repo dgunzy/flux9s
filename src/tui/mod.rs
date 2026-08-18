@@ -1052,6 +1052,11 @@ pub async fn run_tui_with_async_init(
                         crate::watcher::WatchEvent::KubeEventDeleted(uid) => {
                             app.kube_events.remove(&uid);
                         }
+                        // Discovery events already queued when `:discover` turned
+                        // discovery off (#245) must not resurrect the kinds.
+                        crate::watcher::WatchEvent::ExtraKindDiscovered(_)
+                        | crate::watcher::WatchEvent::ExtraKindRemoved(_)
+                            if !app.config.discover_flux_resources => {}
                         crate::watcher::WatchEvent::ExtraKindDiscovered(extra) => {
                             // Register (idempotent) and (re)start the dynamic
                             // watcher — a no-op when it is already running,

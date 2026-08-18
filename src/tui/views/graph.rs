@@ -623,15 +623,17 @@ fn render_node_text(
             }
         }
     } else if matches!(node.node_type, NodeType::ResourceGroup) {
-        // For resource group nodes, show each resource kind on its own line
+        // For resource group nodes, show each resource kind on its own line.
+        // The description carries one encoded InventoryEntry per line; the
+        // node summarises them as per-kind counts (Enter shows the detail).
         if let Some(ref desc) = node.description {
-            // Description format: "Kind1: count1, Kind2: count2, ..."
             let max_width = (node_area.width.saturating_sub(2)) as usize;
-            for resource_item in desc.split(", ") {
+            for (kind, count) in crate::kube::inventory::kind_counts_from_description(desc) {
+                let resource_item = format!("{}: {}", kind, count);
                 let item_display: String = if resource_item.len() > max_width {
                     format!("{}...", &resource_item[..max_width.saturating_sub(3)])
                 } else {
-                    resource_item.to_string()
+                    resource_item
                 };
                 content.push(Line::from(vec![Span::styled(
                     item_display,

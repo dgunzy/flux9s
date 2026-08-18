@@ -107,6 +107,8 @@ Type these commands in command mode (press `:`):
 | `:skin`            | Open interactive theme selection menu    |
 | `:readonly`        | Toggle readonly mode                     |
 | `:read-only`       | Alias for `:readonly`                    |
+| `:discover`        | Toggle CRD discovery for this session    |
+| `:discovery`       | Alias for `:discover`                    |
 | `:help`            | Show/hide help                           |
 | `:trace <res>`     | Trace ownership chain for a resource     |
 | `:q` or `:q!`      | Quit application                         |
@@ -130,6 +132,13 @@ With [`discoverFluxResources`](../configuration/#discovering-flux-adjacent-resou
 enabled, CRDs labeled `app.kubernetes.io/part-of=flux` (the Flux Operator's
 convention) also get commands here — the kind name, plural, and `kubectl`
 short names all work, and the kinds appear in the unified list (view-only).
+
+Use `:discover` to turn that discovery on or off without restarting flux9s. It
+is the runtime sibling of `:readonly`: it applies to the current session only
+(including after a context switch) and does not write the config file — use
+`flux9s config set discoverFluxResources true` to make it the default. Turning
+discovery off deregisters the discovered kinds, drops their `:` commands, and
+removes their resources from the list.
 
 ## Interactive Submenus
 
@@ -237,8 +246,9 @@ The graph view displays:
 **Navigating the graph:**
 
 - `j` / `k` (or `↓` / `↑`) - Move the highlighted focus between nodes; the view scrolls to keep the focused node visible.
-- `Enter` - Open the focused node's resource in the detail view. Aggregate nodes (workload/resource groups) and external upstream URLs aren't directly openable.
+- `Enter` - Open the focused node's resource in the detail view. External upstream URLs aren't directly openable; aggregate nodes drill into their members (see below).
 - `y` / `d` - View the focused node's YAML or describe output directly, including managed workloads (Deployments, Services, etc.).
+- `Enter` on a **resource group** - Drill into the inventory breakdown: a table of the kind, namespace, and name of every resource the group aggregates (cluster-scoped entries show `<cluster>` as their namespace), titled with the per-kind counts. It is a read-only breakdown — these resources aren't watched by flux9s — and `Esc` returns to the graph.
 - `Enter` on a **workload group** - Drill into the workload list: `Enter` on a workload opens its detail (rollout status, containers and images, pods with restarts, events), and `l` streams a pod's logs. `Esc` walks back up the chain.
 - `Esc` / `Backspace` - Return to the graph (when you opened a view from it), then back to the resource list.
 

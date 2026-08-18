@@ -118,7 +118,10 @@ fn test_calculate_layout() {
         node_type: NodeType::ResourceGroup,
         ready: None,
         position: None,
-        description: Some("ConfigMap: 1, Secret: 2".to_string()),
+        description: Some(
+            "ConfigMap|default|cm-1|v1\nSecret|default|sec-1|v1\nSecret|default|sec-2|v1"
+                .to_string(),
+        ),
     };
     graph.add_node(resource_group);
 
@@ -203,7 +206,12 @@ fn test_resource_group_height_calculation() {
         node_type: NodeType::ResourceGroup,
         ready: None,
         position: None,
-        description: Some("ConfigMap: 1, Secret: 2, Service: 4".to_string()),
+        description: Some(
+            "ConfigMap|test|cm-1|v1\nSecret|test|sec-1|v1\nSecret|test|sec-2|v1\n\
+             Service|test|svc-1|v1\nService|test|svc-2|v1\nService|test|svc-3|v1\n\
+             Service|test|svc-4|v1"
+                .to_string(),
+        ),
     };
     graph.add_node(resource_group);
 
@@ -219,11 +227,11 @@ fn test_resource_group_height_calculation() {
     // Verify it has a position
     assert!(rg_node.position.is_some());
 
-    // Height should account for 3 resource types (one per line)
-    // Base: name (1) + separator (1) + borders (2) = 4
-    // Content: 3 lines
-    // Total should be at least 7
-    assert!(height >= 4);
+    // Height accounts for the 3 distinct kinds the 7 entries collapse into
+    // (one "Kind: count" line each), plus 4 rows of chrome:
+    // name (1) + separator (1) + borders (2).
+    assert_eq!(rg_node.render_height(), 7);
+    assert!(height >= rg_node.render_height());
 }
 
 #[test]
@@ -265,7 +273,7 @@ fn test_side_by_side_layout() {
         node_type: NodeType::ResourceGroup,
         ready: None,
         position: None,
-        description: Some("ConfigMap: 1, Secret: 1".to_string()),
+        description: Some("ConfigMap|default|cm-1|v1\nSecret|default|sec-1|v1".to_string()),
     };
     graph.add_node(rg);
 
