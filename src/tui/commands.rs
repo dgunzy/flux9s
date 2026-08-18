@@ -46,6 +46,10 @@ pub const APP_COMMANDS: &[Command] = &[
         takes_args: false,
     },
     Command {
+        name: "discover",
+        takes_args: false,
+    },
+    Command {
         name: "help",
         takes_args: false,
     },
@@ -187,6 +191,13 @@ pub fn is_logs_command(cmd: &str) -> bool {
 pub fn is_readonly_command(cmd: &str) -> bool {
     let cmd_lower = cmd.to_lowercase();
     cmd_lower == "readonly" || cmd_lower == "read-only"
+}
+
+/// Check if command toggles CRD discovery (#245), the runtime half of the
+/// `discoverFluxResources` setting. Handles "discover" and "discovery".
+pub fn is_discover_command(cmd: &str) -> bool {
+    let cmd_lower = cmd.to_lowercase();
+    cmd_lower == "discover" || cmd_lower == "discovery"
 }
 
 /// Check if command is help (handles "help", "h", "?")
@@ -615,6 +626,17 @@ mod tests {
         assert!(is_all_command("ALL"));
         assert!(is_all_command("CLEAR"));
         assert!(!is_all_command("ks"));
+    }
+
+    #[test]
+    fn test_discover_command_matches_and_autocompletes() {
+        assert!(is_discover_command("discover"));
+        assert!(is_discover_command("DISCOVERY"));
+        assert!(!is_discover_command("discoverfluxresources"));
+        assert!(!is_discover_command("ks"));
+
+        // Discoverable from autocomplete like the other app commands
+        assert!(find_matching_commands("disc").contains(&"discover".to_string()));
     }
 
     #[test]

@@ -431,18 +431,17 @@ async fn discover_inventory_resources(
 
         // Add a single resource group node (aggregated by kind with counts)
         if !groups.resources.is_empty() {
-            let total_count: usize = groups.resources.values().sum();
+            let total_count = groups.resources.len();
             let resource_group_id = format!("resourcegroup:{}", namespace);
 
             if !graph.node_index.contains_key(&resource_group_id) {
-                // Create a description with all resource kinds and counts
-                // Format: "Kind1: count1, Kind2: count2, ..."
-                let mut resource_list: Vec<String> = groups
+                // One encoded InventoryEntry per line: the node itself renders
+                // per-kind counts, and Enter drills into the full breakdown.
+                let resource_list: Vec<String> = groups
                     .resources
                     .iter()
-                    .map(|(kind, count)| format!("{}: {}", kind, count))
+                    .map(crate::kube::inventory::InventoryEntry::to_graph_line)
                     .collect();
-                resource_list.sort(); // Alphabetical order like Web UI
 
                 let resource_group_node = GraphNode {
                     id: resource_group_id.clone(),
@@ -452,7 +451,7 @@ async fn discover_inventory_resources(
                     node_type: NodeType::ResourceGroup,
                     ready: None,
                     position: None,
-                    description: Some(resource_list.join(", ")),
+                    description: Some(resource_list.join("\n")),
                 };
                 graph.add_node(resource_group_node);
                 graph.add_edge(GraphEdge {
@@ -643,18 +642,17 @@ async fn discover_helmrelease_resources(
 
     // Add a single resource group node (aggregated by kind with counts)
     if !groups.resources.is_empty() {
-        let total_count: usize = groups.resources.values().sum();
+        let total_count = groups.resources.len();
         let resource_group_id = format!("resourcegroup:{}", namespace);
 
         if !graph.node_index.contains_key(&resource_group_id) {
-            // Create a description with all resource kinds and counts
-            // Format: "Kind1: count1, Kind2: count2, ..."
-            let mut resource_list: Vec<String> = groups
+            // One encoded InventoryEntry per line: the node itself renders
+            // per-kind counts, and Enter drills into the full breakdown.
+            let resource_list: Vec<String> = groups
                 .resources
                 .iter()
-                .map(|(kind, count)| format!("{}: {}", kind, count))
+                .map(crate::kube::inventory::InventoryEntry::to_graph_line)
                 .collect();
-            resource_list.sort(); // Alphabetical order like Web UI
 
             let resource_group_node = GraphNode {
                 id: resource_group_id.clone(),
@@ -664,7 +662,7 @@ async fn discover_helmrelease_resources(
                 node_type: NodeType::ResourceGroup,
                 ready: None,
                 position: None,
-                description: Some(resource_list.join(", ")),
+                description: Some(resource_list.join("\n")),
             };
             graph.add_node(resource_group_node);
             graph.add_edge(GraphEdge {

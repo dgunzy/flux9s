@@ -133,6 +133,7 @@ Terminal user interface built with ratatui.
   - `graph.rs` - Graph visualization view
   - `history.rs` - Reconciliation history view
   - `events.rs` - Live Kubernetes events feed (`:events`)
+  - `inventory.rs` - Inventory breakdown for a graph resource group (kind/namespace/name)
   - `confirmation.rs` - Confirmation dialogs
   - `help.rs` - Help screen
   - `splash.rs` - Splash screen

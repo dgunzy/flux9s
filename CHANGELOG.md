@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+**Added**
+- `:discover` command to toggle discovery of Flux-labeled CRDs at runtime, without a restart (#245)
+- Graph resource group nodes drill into an inventory breakdown on `Enter`, listing the kind, namespace, and name of every resource they aggregate
+
 ## [1.0.2] - 2026-08-09
 
 # Version 1.0.2 Changelog

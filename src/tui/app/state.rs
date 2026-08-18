@@ -31,6 +31,10 @@ pub enum View {
     /// One workload's rollout status, containers, pods, and events (#194).
     /// Back returns to the workload list.
     WorkloadDetail,
+    /// Members of a graph ResourceGroup node: the kind, namespace, and name of
+    /// every non-workload resource the traced object owns. Back returns to the
+    /// graph.
+    InventoryList,
     /// Cluster pulse dashboard (#195): per-kind health counts, recent
     /// failures, and FluxReport distribution info. Opened with `:pulse`.
     Pulse,
@@ -227,6 +231,9 @@ pub struct ViewState {
     /// Workload rows shown by the WorkloadList view, decoded from the graph
     /// WorkloadGroup node that was opened.
     pub workload_rows: Vec<crate::kube::workloads::WorkloadRef>,
+    /// Inventory rows shown by the InventoryList view, decoded from the graph
+    /// ResourceGroup node that was opened.
+    pub inventory_rows: Vec<crate::kube::inventory::InventoryEntry>,
     /// Scroll offset for graph view
     pub graph_scroll_offset: usize,
     /// Index (into the graph's node list) of the currently focused graph node.
@@ -271,6 +278,7 @@ impl Default for ViewState {
             pulse_scroll_offset: 0,
             logs_back_view: None,
             workload_rows: Vec::new(),
+            inventory_rows: Vec::new(),
             graph_scroll_offset: 0,
             graph_focus_index: None,
             previous_list_view: View::ResourceList,

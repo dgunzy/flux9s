@@ -502,6 +502,16 @@ impl App {
                         &self.theme,
                     );
                 }
+                View::InventoryList => {
+                    views::render_inventory_list(
+                        f,
+                        area,
+                        &self.view_state.inventory_rows,
+                        self.view_state.selected_index,
+                        &mut self.view_state.scroll_offset,
+                        &self.theme,
+                    );
+                }
                 View::WorkloadDetail => {
                     views::render_workload_detail(
                         f,

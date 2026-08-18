@@ -29,6 +29,7 @@ const COMMAND_TABLE: &[(fn(&str) -> bool, CommandHandler)] = &[
     (commands::is_pulse_command, App::cmd_show_pulse),
     (commands::is_logs_command, App::cmd_show_logs),
     (commands::is_all_command, App::cmd_show_all),
+    (commands::is_discover_command, App::cmd_toggle_discover),
 ];
 
 impl App {
@@ -52,6 +53,8 @@ impl App {
                 self.filtered_kube_events().len().saturating_sub(1)
             } else if view == View::WorkloadList {
                 self.view_state.workload_rows.len().saturating_sub(1)
+            } else if view == View::InventoryList {
+                self.view_state.inventory_rows.len().saturating_sub(1)
             } else {
                 self.get_filtered_resources().len().saturating_sub(1)
             };
@@ -684,7 +687,9 @@ impl App {
                         .logs_back_view
                         .take()
                         .unwrap_or(self.view_state.previous_list_view);
-                } else if self.view_state.current_view == View::WorkloadList {
+                } else if self.view_state.current_view == View::WorkloadList
+                    || self.view_state.current_view == View::InventoryList
+                {
                     self.view_state.current_view = View::ResourceGraph;
                 } else if self.view_state.current_view == View::WorkloadDetail {
                     self.async_state.workload.clear();
@@ -1073,6 +1078,25 @@ impl App {
                     self.view_state.scroll_offset = 0;
                     self.view_state.current_view = View::WorkloadList;
                 }
+                // The resource group drills into the inventory breakdown
+                // (#245): its description carries one encoded InventoryEntry
+                // per line.
+                Some((crate::trace::NodeType::ResourceGroup, description)) => {
+                    let rows: Vec<_> = description
+                        .as_deref()
+                        .unwrap_or_default()
+                        .lines()
+                        .filter_map(crate::kube::inventory::InventoryEntry::parse_graph_line)
+                        .collect();
+                    if rows.is_empty() {
+                        self.set_status_message(("No resources in this group".to_string(), false));
+                        return;
+                    }
+                    self.view_state.inventory_rows = rows;
+                    self.view_state.selected_index = 0;
+                    self.view_state.scroll_offset = 0;
+                    self.view_state.current_view = View::InventoryList;
+                }
                 Some(_) => {
                     self.set_status_message((
                         "Aggregate node — select an individual Flux resource to open it"
@@ -1179,8 +1203,8 @@ impl App {
                     .unwrap_or(self.view_state.previous_list_view);
                 None
             }
-            View::WorkloadList => {
-                // Entered from a graph workload group — return to the graph.
+            View::WorkloadList | View::InventoryList => {
+                // Entered from a graph inventory group — return to the graph.
                 self.view_state.current_view = View::ResourceGraph;
                 None
             }
@@ -1589,6 +1613,59 @@ impl App {
         let context_name = self.context.clone();
         self.reload_skin_for_readonly_mode(Some(&context_name));
         self.set_status_message((format!("Readonly mode {}", status), false));
+    }
+
+    /// `:discover` — arm or disarm CRD discovery for this session (#245).
+    ///
+    /// The sibling of `:readonly`: it flips `discoverFluxResources` in the
+    /// in-memory config (so a later context switch builds its watcher with the
+    /// same setting) without writing the config file. Enabling starts the CRD
+    /// discovery watcher, which re-reports every labeled CRD. Disabling stops
+    /// it, drops the discovered kinds' `:` commands, and purges their resources
+    /// from the list.
+    fn cmd_toggle_discover(&mut self, _cmd: &str) {
+        let enable = !self.config.discover_flux_resources;
+
+        // Captured before the registry is cleared — needed to purge the
+        // discovered resources out of the list state.
+        let discovered = crate::models::extra_kinds::global().kind_names();
+
+        if let Some(watcher) = self.watcher.as_mut()
+            && let Err(e) = watcher.set_discovery_enabled(enable)
+        {
+            self.set_status_message((format!("Failed to start CRD discovery: {}", e), true));
+            return;
+        }
+        self.config.discover_flux_resources = enable;
+
+        if !enable {
+            // Also covers the no-watcher case, where nothing else clears it.
+            crate::models::extra_kinds::global().clear();
+            for kind in &discovered {
+                self.purge_kind(kind);
+            }
+            // A discovered kind can't stay selected once it's gone.
+            if self
+                .view_state
+                .selected_resource_type
+                .as_ref()
+                .is_some_and(|selected| discovered.contains(selected))
+            {
+                self.view_state.selected_resource_type = None;
+                self.reset_list_position();
+            }
+            self.notify_resource_types_changed();
+        }
+
+        let status = if enable {
+            "CRD discovery enabled (session only) - watching for Flux-labeled CRDs".to_string()
+        } else {
+            format!(
+                "CRD discovery disabled (session only) - removed {} discovered kind(s)",
+                discovered.len()
+            )
+        };
+        self.set_status_message((status, false));
     }
 
     /// Open the interactive submenu for `cmd` if it has one (contexts, skins, …),
@@ -2735,6 +2812,107 @@ mod tests {
         assert_eq!(app.view_state.current_view, View::ResourceGraph);
     }
 
+    /// Build an app on a graph whose resource group carries three encoded
+    /// inventory entries (the #245 drill-down entry point).
+    fn app_on_graph_with_resource_group() -> App {
+        use crate::kube::inventory::InventoryEntry;
+        use crate::trace::{NodeType, ResourceGraph};
+
+        let mut app = create_test_app(false);
+        add_resource(&mut app);
+
+        let lines = [
+            InventoryEntry {
+                kind: "ConfigMap".to_string(),
+                name: "podinfo-config".to_string(),
+                namespace: "flux-system".to_string(),
+                api_version: "v1".to_string(),
+            },
+            InventoryEntry {
+                kind: "Namespace".to_string(),
+                name: "podinfo".to_string(),
+                namespace: String::new(),
+                api_version: "v1".to_string(),
+            },
+            InventoryEntry {
+                kind: "Service".to_string(),
+                name: "podinfo".to_string(),
+                namespace: "flux-system".to_string(),
+                api_version: "v1".to_string(),
+            },
+        ]
+        .iter()
+        .map(InventoryEntry::to_graph_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        let mut graph = ResourceGraph::new();
+        graph.add_node(graph_node(
+            "Kustomization",
+            "my-kustomization",
+            NodeType::Object,
+        ));
+        let mut group = graph_node("Resources", "Resources (3)", NodeType::ResourceGroup);
+        group.description = Some(lines);
+        graph.add_node(group);
+        app.set_graph_result(graph);
+        app.view_state.current_view = View::ResourceGraph;
+        app.view_state.graph_focus_index = Some(1);
+        app
+    }
+
+    #[test]
+    fn resource_group_enter_opens_inventory_list() {
+        let mut app = app_on_graph_with_resource_group();
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::InventoryList);
+        assert_eq!(app.view_state.inventory_rows.len(), 3);
+        // Each row carries the namespace and name the summary node hides.
+        assert_eq!(app.view_state.inventory_rows[0].kind, "ConfigMap");
+        assert_eq!(app.view_state.inventory_rows[0].namespace, "flux-system");
+        assert_eq!(app.view_state.inventory_rows[0].name, "podinfo-config");
+        // Cluster-scoped entries keep their empty namespace.
+        assert_eq!(app.view_state.inventory_rows[1].namespace, "");
+        assert_eq!(app.view_state.selected_index, 0);
+
+        // j/k move the selection within the breakdown
+        app.handle_key(make_key(KeyCode::Char('j')));
+        assert_eq!(app.view_state.selected_index, 1);
+
+        // Back returns to the graph
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceGraph);
+    }
+
+    #[test]
+    fn resource_group_without_rows_shows_hint() {
+        use crate::trace::{NodeType, ResourceGraph};
+
+        let mut app = create_test_app(false);
+        let mut graph = ResourceGraph::new();
+        graph.add_node(graph_node(
+            "Kustomization",
+            "my-kustomization",
+            NodeType::Object,
+        ));
+        // An undescribed resource group has nothing to drill into.
+        graph.add_node(graph_node(
+            "Resources",
+            "Resources (0)",
+            NodeType::ResourceGroup,
+        ));
+        app.set_graph_result(graph);
+        app.view_state.current_view = View::ResourceGraph;
+        app.view_state.graph_focus_index = Some(1);
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::ResourceGraph);
+        assert!(app.ui_state.status_message.is_some());
+    }
+
     #[test]
     fn workload_group_without_rows_shows_hint() {
         let mut app = app_on_graph();
@@ -3074,6 +3252,79 @@ mod tests {
         assert_eq!(app.view_state.current_view, View::ResourceList);
     }
 
+    /// The discovered-kind registry is process-global, and `:discover` off
+    /// clears it wholesale, so the tests that register kinds must not run
+    /// concurrently with each other.
+    static REGISTRY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_registry() -> std::sync::MutexGuard<'static, ()> {
+        REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// #245: `:discover` flips the setting for the session and, when turning
+    /// discovery off, takes the discovered kinds and their resources with it.
+    #[test]
+    fn discover_command_toggles_discovery_and_purges_kinds() {
+        use crate::models::extra_kinds::{ExtraKind, global};
+
+        let _guard = lock_registry();
+        let mut app = create_test_app(false);
+        assert!(!app.config.discover_flux_resources);
+
+        app.ui_state.command_buffer = "discover".to_string();
+        app.execute_command();
+        assert!(
+            app.config.discover_flux_resources,
+            "first :discover enables"
+        );
+
+        // A kind the discovery watcher would have registered, plus one of its
+        // resources in the list state and the type filter pointing at it.
+        global().insert(ExtraKind {
+            kind: "DiscoverToggleTest".to_string(),
+            group: "example.com".to_string(),
+            version: "v1".to_string(),
+            plural: "discovertoggletests".to_string(),
+            short_names: vec![],
+        });
+        let key = resource_key("default", "widget", "DiscoverToggleTest");
+        app.state.upsert(
+            key.clone(),
+            ResourceInfo {
+                name: "widget".to_string(),
+                namespace: "default".to_string(),
+                resource_type: "DiscoverToggleTest".to_string(),
+                age: None,
+                suspended: None,
+                ready: Some(true),
+                message: None,
+                revision: None,
+                labels: HashMap::new(),
+                annotations: HashMap::new(),
+                last_reconciled: None,
+                reconciliation_history: vec![],
+            },
+        );
+        app.view_state.selected_resource_type = Some("DiscoverToggleTest".to_string());
+
+        app.ui_state.command_buffer = "discovery".to_string();
+        app.execute_command();
+
+        assert!(
+            !app.config.discover_flux_resources,
+            "second :discover disables"
+        );
+        assert!(global().is_empty(), "discovered kinds are deregistered");
+        assert!(
+            app.state.get(&key).is_none(),
+            "discovered resources are purged from the list"
+        );
+        assert_eq!(
+            app.view_state.selected_resource_type, None,
+            "a filter on a gone kind is cleared"
+        );
+    }
+
     /// #197: without discovery, unknown kinds stay unknown (zero impact);
     /// once a kind is registered, its CRD-derived aliases resolve like
     /// built-in resource commands. Uses a unique kind name because the
@@ -3082,6 +3333,7 @@ mod tests {
     fn discovered_kind_commands_resolve_only_when_registered() {
         use crate::models::extra_kinds::{ExtraKind, global};
 
+        let _guard = lock_registry();
         let mut app = create_test_app(false);
 
         // Zero impact: unregistered kind is an unknown command

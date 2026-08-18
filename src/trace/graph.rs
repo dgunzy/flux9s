@@ -41,11 +41,20 @@ pub struct GraphNode {
 impl GraphNode {
     /// Width of the widest line of content this node will render, in columns.
     fn content_width(&self) -> u16 {
-        let desc = self
-            .description
-            .as_ref()
-            .map(|d| d.len() as u16)
-            .unwrap_or(0);
+        // Multi-line descriptions render one line at a time, so the widest
+        // single line — not the whole string — is what has to fit.
+        let desc = match (&self.description, self.node_type) {
+            // A resource group displays per-kind counts, not its encoded entries.
+            (Some(desc), NodeType::ResourceGroup) => {
+                crate::kube::inventory::kind_counts_from_description(desc)
+                    .iter()
+                    .map(|(kind, count)| format!("{}: {}", kind, count).len() as u16)
+                    .max()
+                    .unwrap_or(0)
+            }
+            (Some(desc), _) => desc.lines().map(|l| l.len() as u16).max().unwrap_or(0),
+            (None, _) => 0,
+        };
         (self.name.len() as u16)
             .max(self.kind.len() as u16)
             .max(desc)
@@ -99,8 +108,10 @@ impl GraphNode {
             }
             NodeType::ResourceGroup => {
                 if let Some(desc) = &self.description {
-                    // One line per resource kind ("Kind: count", joined by ", ").
-                    height += (desc.matches(", ").count() + 1) as u16;
+                    // The description carries one encoded entry per line; the
+                    // node displays one "Kind: count" line per distinct kind.
+                    height +=
+                        crate::kube::inventory::kind_counts_from_description(desc).len() as u16;
                 }
             }
             _ => {
@@ -403,10 +414,16 @@ mod tests {
             node_with(NodeType::Source, Some("https://x"), Some(true)).render_height(),
             7
         );
-        // Resource group: 4 chrome + one row per kind ("A: 1, B: 2, C: 3" => 3).
+        // Resource group: 4 chrome + one row per *distinct kind* in the encoded
+        // entries (two Services collapse into a single "Service: 2" row).
         assert_eq!(
-            node_with(NodeType::ResourceGroup, Some("A: 1, B: 2, C: 3"), None).render_height(),
-            7
+            node_with(
+                NodeType::ResourceGroup,
+                Some("ConfigMap|ns|cm|v1\nService|ns|svc-a|v1\nService|ns|svc-b|v1"),
+                None
+            )
+            .render_height(),
+            6
         );
         // Workload group, single workload (no namespace row): 4 + 3.
         assert_eq!(
@@ -441,6 +458,19 @@ mod tests {
 
         // A narrow viewport wins over the content-based width.
         assert_eq!(long.render_width(20), 20 - NODE_HORIZONTAL_CHROME);
+
+        // Multi-line descriptions are sized by their widest rendered line, not
+        // by the whole encoded string: a resource group is sized by its
+        // "Kind: count" summary, so a long entry list still renders compactly.
+        let group = node_with(
+            NodeType::ResourceGroup,
+            Some(
+                "ConfigMap|a-very-long-namespace-name|a-very-long-resource-name|v1\n\
+                 ConfigMap|a-very-long-namespace-name|another-long-resource-name|v1",
+            ),
+            None,
+        );
+        assert_eq!(group.render_width(100), MIN_NODE_WIDTH);
     }
 
     #[test]
