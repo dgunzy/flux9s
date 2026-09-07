@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-09-07
+
+# Version 1.0.4 Changelog
+
+**Changed**
+- Updated Flux CRDs to latest versions
+- Bumped browserslist from 4.28.1 to 4.28.8
+- Bumped flate2 from 1.1.9 to 1.1.10
+- Bumped csscolorparser from 0.8.3 to 0.8.4
+- Bumped futures from 0.3.33 to 0.3.34
+- Updated GitHub Actions dependencies (7 updates)
+
 ## [1.0.3] - 2026-08-18
 
 # Version 1.0.3 Changelog
