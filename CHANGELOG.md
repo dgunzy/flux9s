@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-09-17
+
+# Version 1.0.5
+
+## Fixed
+
+- Namespace default bug (#258)
+
 ## [1.0.4] - 2026-09-07
 
 # Version 1.0.4 Changelog
