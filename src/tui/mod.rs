@@ -229,14 +229,8 @@ pub async fn run_tui_with_async_init(
         };
 
         // Use config.default_namespace if set, otherwise fall back to environment/default
-        let default_namespace = if config.default_namespace.is_empty()
-            || config.default_namespace == "all"
-            || config.default_namespace == "-A"
-        {
-            crate::kube::get_default_namespace().await
-        } else {
-            Some(config.default_namespace.clone())
-        };
+        let default_namespace =
+            crate::kube::resolve_configured_namespace(&config.default_namespace).await;
 
         if debug {
             tracing::info!("Connected to Kubernetes cluster: {}", context);
@@ -798,14 +792,10 @@ pub async fn run_tui_with_async_init(
                             Ok(_) => {
                                 // Determine the default namespace for the new context
                                 let new_default_namespace =
-                                    if app.config.default_namespace.is_empty()
-                                        || app.config.default_namespace == "all"
-                                        || app.config.default_namespace == "-A"
-                                    {
-                                        crate::kube::get_default_namespace().await
-                                    } else {
-                                        Some(app.config.default_namespace.clone())
-                                    };
+                                    crate::kube::resolve_configured_namespace(
+                                        &app.config.default_namespace,
+                                    )
+                                    .await;
 
                                 // Create new watcher with new client and resolved namespace
                                 let (mut new_watcher, new_event_rx) =

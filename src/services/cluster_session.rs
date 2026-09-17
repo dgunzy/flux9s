@@ -114,14 +114,7 @@ impl ClusterSession {
         .map_err(|e| anyhow::anyhow!("{}", e))
         .context("Failed to connect to the Kubernetes API server")?;
 
-        let namespace = if config.default_namespace.is_empty()
-            || config.default_namespace == "all"
-            || config.default_namespace == "-A"
-        {
-            crate::kube::get_default_namespace().await
-        } else {
-            Some(config.default_namespace.clone())
-        };
+        let namespace = crate::kube::resolve_configured_namespace(&config.default_namespace).await;
 
         let state = ResourceState::new();
         let (mut watcher, event_rx) = ResourceWatcher::new(
@@ -168,14 +161,7 @@ impl ClusterSession {
         .map_err(|e| anyhow::anyhow!("{}", e))
         .context("Failed to connect to the Kubernetes API server")?;
 
-        let namespace = if config.default_namespace.is_empty()
-            || config.default_namespace == "all"
-            || config.default_namespace == "-A"
-        {
-            crate::kube::get_default_namespace().await
-        } else {
-            Some(config.default_namespace.clone())
-        };
+        let namespace = crate::kube::resolve_configured_namespace(&config.default_namespace).await;
 
         let state = ResourceState::new();
         let (mut watcher, event_rx) = ResourceWatcher::new(

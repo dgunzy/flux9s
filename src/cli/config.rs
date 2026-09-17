@@ -372,7 +372,7 @@ fn reference_text() -> String {
     let mut s = String::from("\n# Configuration Reference:\n");
     for line in [
         "readOnly - Disable modification operations (default: true)",
-        "defaultNamespace - Starting namespace (default: flux-system)",
+        "defaultNamespace - Starting namespace, or \"all\"/\"-A\" for all namespaces (default: flux-system)",
         "defaultControllerNamespace - Flux controller namespace (default: flux-system)",
         "discoverFluxResources - Discover CRDs labeled app.kubernetes.io/part-of=flux as view-only kinds (default: false)",
         "defaultResourceFilter - Resource type filter at startup, e.g. \"Kustomization\" (default: none, shows all)",
