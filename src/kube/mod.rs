@@ -480,6 +480,24 @@ pub async fn get_default_namespace() -> Option<String> {
     Some("flux-system".to_string())
 }
 
+/// Resolve a `config.default_namespace` value into the watcher's namespace scope.
+///
+/// An empty value means "unset", so it defers to [`get_default_namespace`] (the
+/// `NAMESPACE` env var, or the `flux-system` default). `"all"`/`"-A"` is an explicit
+/// request to watch every namespace and must resolve to `None` directly — routing it
+/// through `get_default_namespace` would silently discard it in favor of
+/// `flux-system` whenever `NAMESPACE` isn't set, which is what caused
+/// `defaultNamespace: all` to be ignored (see issue #257).
+pub async fn resolve_configured_namespace(configured: &str) -> Option<String> {
+    if configured.is_empty() {
+        get_default_namespace().await
+    } else if configured == "all" || configured == "-A" {
+        None
+    } else {
+        Some(configured.to_string())
+    }
+}
+
 /// Discover namespaces that contain Flux resources
 ///
 /// Returns a list of namespaces sorted by the number of Flux resources they contain.
@@ -579,6 +597,29 @@ mod tests {
             result.is_ok(),
             "http proxy-url must be supported (kube/http-proxy feature): {:?}",
             result.err()
+        );
+    }
+
+    /// Regression test for #257: `defaultNamespace: all` (and `-A`) must resolve
+    /// directly to `None` (watch all namespaces) rather than falling through to
+    /// `get_default_namespace()`, which ignores the config value and returns
+    /// `flux-system` whenever the `NAMESPACE` env var isn't set — the bug that
+    /// made the "all namespaces" view bounce back to `flux-system` on startup.
+    #[tokio::test]
+    async fn test_resolve_configured_namespace_all_means_watch_everything() {
+        assert_eq!(resolve_configured_namespace("all").await, None);
+        assert_eq!(resolve_configured_namespace("-A").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_configured_namespace_explicit_value_is_used_verbatim() {
+        assert_eq!(
+            resolve_configured_namespace("my-ns").await,
+            Some("my-ns".to_string())
+        );
+        assert_eq!(
+            resolve_configured_namespace("flux-system").await,
+            Some("flux-system".to_string())
         );
     }
 
