@@ -378,13 +378,7 @@ pub async fn run_tui_with_async_init(
                         let client = client.clone();
                         tokio::spawn(async move {
                             tracing::debug!("Fetching YAML for {}", rk);
-                            let result = fetch_resource_yaml(
-                                &client,
-                                &rk.resource_type,
-                                &rk.namespace,
-                                &rk.name,
-                            )
-                            .await;
+                            let result = crate::kube::objects::fetch_object(&client, &rk).await;
                             if let Err(ref e) = result {
                                 tracing::warn!("Failed to fetch YAML for {}: {}", rk, e);
                             }
@@ -396,17 +390,26 @@ pub async fn run_tui_with_async_init(
                         let client = client.clone();
                         tokio::spawn(async move {
                             tracing::debug!("Fetching describe data for {}", rk);
-                            let result = crate::kube::fetch::fetch_describe_data(
-                                &client,
-                                &rk.resource_type,
-                                &rk.namespace,
-                                &rk.name,
-                            )
-                            .await;
+                            let result =
+                                crate::kube::fetch::fetch_object_describe_data(&client, &rk).await;
                             if let Err(ref e) = result {
                                 tracing::warn!("Failed to fetch describe data for {}: {}", rk, e);
                             }
                             let _ = tx.send(result);
+                        });
+                    }
+
+                    if let Some((entries, tx)) = app.async_state.inventory_status.dispatch() {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            tracing::debug!(
+                                "Fetching status for {} inventory objects",
+                                entries.len()
+                            );
+                            let statuses =
+                                crate::kube::objects::fetch_object_statuses(&client, &entries)
+                                    .await;
+                            let _ = tx.send(Ok(statuses));
                         });
                     }
 
@@ -558,6 +561,16 @@ pub async fn run_tui_with_async_init(
                             format!("Failed to fetch description: {}", e),
                             true,
                         ));
+                    }
+                }
+            }
+
+            if let Some(result) = app.async_state.inventory_status.try_recv() {
+                match result {
+                    Ok(statuses) => app.async_state.inventory_status.set_result(statuses),
+                    Err(e) => {
+                        app.async_state.inventory_status.set_error();
+                        tracing::warn!("Inventory status lookup failed: {}", e);
                     }
                 }
             }

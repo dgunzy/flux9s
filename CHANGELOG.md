@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Inventory drill-down shows live health (STATUS + MESSAGE) for every managed object, using kstatus rules (#262)
+- `Enter`/`d` and `y` on an inventory row open the describe and YAML views for any native Kubernetes object, resolved through API discovery; Secret values are redacted (#262)
+- `Enter` on an event whose object flux9s doesn't watch opens its describe view instead of a status message (#262)
+
+### Fixed
+
+- Inventory entries now carry the full `apiVersion` (`apps/v1`, not `v1`) and decode `:` in names (e.g. `system:` ClusterRoles); the id parser previously dropped the API group (#262)
+
 ## [1.0.5] - 2026-09-17
 
 # Version 1.0.5

@@ -81,6 +81,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         ("<Ctrl+b>/<PgUp>", "Page up"),
         ("<Enter>", "Open details / graph node / group"),
         ("<l>", "Pod logs (workload detail)"),
+        ("<Enter>/<y>", "Describe/YAML (inventory)"),
         ("<N>/<A>/<T>/<S>", "Sort name/age/type/status"),
         ("</>", "Search in YAML/describe/trace/logs"),
         ("<n>/<N>", "Next/prev search match"),

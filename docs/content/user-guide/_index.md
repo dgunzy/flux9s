@@ -248,7 +248,7 @@ The graph view displays:
 - `j` / `k` (or `↓` / `↑`) - Move the highlighted focus between nodes; the view scrolls to keep the focused node visible.
 - `Enter` - Open the focused node's resource in the detail view. External upstream URLs aren't directly openable; aggregate nodes drill into their members (see below).
 - `y` / `d` - View the focused node's YAML or describe output directly, including managed workloads (Deployments, Services, etc.).
-- `Enter` on a **resource group** - Drill into the inventory breakdown: a table of the kind, namespace, and name of every resource the group aggregates (cluster-scoped entries show `<cluster>` as their namespace), titled with the per-kind counts. It is a read-only breakdown — these resources aren't watched by flux9s — and `Esc` returns to the graph.
+- `Enter` on a **resource group** - Drill into the inventory breakdown: a table of the kind, namespace, name, and live health of every resource the group aggregates (cluster-scoped entries show `<cluster>` as their namespace), titled with the per-kind counts. STATUS follows the kstatus rules Flux health checks use (`Current`, `InProgress`, `Failed`, `Terminating`, plus `NotFound`/`Forbidden` when the object can't be read), and MESSAGE explains anything short of `Current`. `Enter` or `d` describes the selected object (with its events), `y` shows its YAML — Secret values are always shown as `<redacted>` — and `Esc` walks back to the inventory, then the graph. These objects aren't watched, so statuses are fetched once when the breakdown opens; reopen it to refresh.
 - `Enter` on a **workload group** - Drill into the workload list: `Enter` on a workload opens its detail (rollout status, containers and images, pods with restarts, events), and `l` streams a pod's logs. `Esc` walks back up the chain.
 - `Esc` / `Backspace` - Return to the graph (when you opened a view from it), then back to the resource list.
 
@@ -293,7 +293,8 @@ resource list's MESSAGE column truncates.
 - Events are streamed in real time, newest first, with Warnings highlighted
 - `/` filters by type, reason, object, namespace, source, or message text
 - `Enter` on an event jumps to the involved resource's detail view when it is
-  a Flux resource flux9s watches; `Esc` returns to the events feed
+  a Flux resource flux9s watches, and opens its describe view otherwise (any
+  kind, resolved through API discovery); `Esc` returns to the events feed
 - Resource keys act on the selected event's involved object directly: `y`
   (YAML) and `d` (describe) work even for non-Flux objects like Pods and
   Deployments, while `t`/`g`/`h` and operations (`s`/`r`/`R`) work when the

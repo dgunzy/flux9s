@@ -80,6 +80,7 @@ impl App {
                 selected_resource_key: None,
                 favorites: config.favorites.iter().cloned().collect(),
                 favorites_pending_save: false,
+                native_object: None,
             },
             ui_state: UIState::new(show_splash),
             async_state: AsyncOperationState::default(),
@@ -651,6 +652,13 @@ impl App {
                 ))
             }
             View::ResourceGraph => self.focused_graph_node_target(),
+            // A native object (#262) isn't a watched Flux resource: operations,
+            // trace, graph, and history don't apply to it.
+            View::ResourceYAML | View::ResourceDescribe
+                if self.selection_state.native_object.is_some() =>
+            {
+                None
+            }
             View::ResourceDetail
             | View::ResourceDescribe
             | View::ResourceYAML

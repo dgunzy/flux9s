@@ -5,6 +5,7 @@
 
 use super::core::App;
 use super::state::{HealthFilter, PendingOperation, View};
+use crate::kube::objects::ObjectRef;
 use crate::tui::commands;
 use crate::watcher::ResourceKey;
 use crossterm::event::KeyEvent;
@@ -416,23 +417,8 @@ impl App {
                 };
                 self.toggle_sort(field);
             }
-            crossterm::event::KeyCode::Char('y') => {
-                // View YAML - trigger async fetch
-                if let Some(key) = self.prepare_selected_resource_key_for_nested_view() {
-                    self.async_state.yaml.request(key);
-                    self.view_state.yaml_scroll_offset = 0;
-                    self.view_state.text_search.clear();
-                    self.view_state.current_view = View::ResourceYAML;
-                }
-            }
-            crossterm::event::KeyCode::Char('d') => {
-                if let Some(key) = self.prepare_selected_resource_key_for_nested_view() {
-                    self.async_state.describe.request(key);
-                    self.view_state.describe_scroll_offset = 0;
-                    self.view_state.text_search.clear();
-                    self.view_state.current_view = View::ResourceDescribe;
-                }
-            }
+            crossterm::event::KeyCode::Char('y') => self.open_yaml_view(),
+            crossterm::event::KeyCode::Char('d') => self.open_describe_view(),
             crossterm::event::KeyCode::Char('e') => {
                 if self.config.read_only {
                     self.set_status_message((
@@ -448,7 +434,7 @@ impl App {
                         resource.namespace.clone(),
                         resource.name.clone(),
                     );
-                    self.async_state.yaml.request(rk.clone());
+                    self.async_state.yaml.request(rk.clone().into());
                     self.async_state.edit_pending = Some(rk);
                     self.async_state.edit_full_yaml = None;
                     self.async_state.edit_editor_launched = false;
@@ -463,6 +449,12 @@ impl App {
             {
                 // Drill into the focused graph node's resource.
                 self.navigate_to_focused_graph_node();
+            }
+            crossterm::event::KeyCode::Enter
+                if self.view_state.current_view == View::InventoryList =>
+            {
+                // Inventory objects aren't watched: open their describe view.
+                self.open_describe_view();
             }
             crossterm::event::KeyCode::Enter if self.view_state.current_view == View::EventList => {
                 // Jump to the event's involved resource when flux9s watches it.
@@ -1092,6 +1084,7 @@ impl App {
                         self.set_status_message(("No resources in this group".to_string(), false));
                         return;
                     }
+                    self.async_state.inventory_status.request(rows.clone());
                     self.view_state.inventory_rows = rows;
                     self.view_state.selected_index = 0;
                     self.view_state.scroll_offset = 0;
@@ -1162,6 +1155,7 @@ impl App {
                 // If we drilled into this detail view from the graph, return to
                 // the graph; otherwise go back to the previous list view
                 // (favourites if we came from there, else the main resource list).
+                self.selection_state.native_object = None;
                 if let Some(back) = self.detail_graph_back() {
                     self.view_state.current_view = back;
                 } else {
@@ -1205,6 +1199,7 @@ impl App {
             }
             View::WorkloadList | View::InventoryList => {
                 // Entered from a graph inventory group — return to the graph.
+                self.async_state.inventory_status.clear();
                 self.view_state.current_view = View::ResourceGraph;
                 None
             }
@@ -1263,6 +1258,11 @@ impl App {
             &event.involved_kind,
         );
         if self.state.get(&key).is_none() {
+            // Not watched but resolvable (a native object, #262): describe it.
+            if !event.involved_api_version.is_empty() {
+                self.open_describe_view();
+                return;
+            }
             // Not in the watch state: outside the namespace scope, a non-Flux
             // kind, or its watcher isn't running. Name the namespace so a
             // scope mismatch is visible, and point at the keys that still work.
@@ -1320,6 +1320,85 @@ impl App {
                 );
             }
         }
+    }
+
+    /// Open the YAML view for the current view's target (Flux or native).
+    fn open_yaml_view(&mut self) {
+        if let Some(target) = self.prepare_nested_view_target() {
+            self.async_state.yaml.request(target);
+            self.view_state.yaml_scroll_offset = 0;
+            self.view_state.text_search.clear();
+            self.view_state.current_view = View::ResourceYAML;
+        }
+    }
+
+    /// Open the describe view for the current view's target (Flux or native).
+    fn open_describe_view(&mut self) {
+        if let Some(target) = self.prepare_nested_view_target() {
+            self.async_state.describe.request(target);
+            self.view_state.describe_scroll_offset = 0;
+            self.view_state.text_search.clear();
+            self.view_state.current_view = View::ResourceDescribe;
+        }
+    }
+
+    /// The native (non-watched) object the current view points at, if any:
+    /// the selected inventory row, an event's unwatched involved object, or
+    /// the native object already on screen when toggling YAML ↔ describe.
+    fn native_view_target(&self) -> Option<ObjectRef> {
+        match self.view_state.current_view {
+            View::InventoryList => self
+                .view_state
+                .inventory_rows
+                .get(self.view_state.selected_index)
+                .map(ObjectRef::from),
+            View::EventList => {
+                let events = self.filtered_kube_events();
+                let event = events.get(self.view_state.selected_index)?;
+                let key = crate::watcher::resource_key(
+                    &event.involved_namespace,
+                    &event.involved_name,
+                    &event.involved_kind,
+                );
+                if self.state.get(&key).is_some() || event.involved_api_version.is_empty() {
+                    return None;
+                }
+                Some(ObjectRef::native(
+                    event.involved_api_version.clone(),
+                    event.involved_kind.clone(),
+                    event.involved_namespace.clone(),
+                    event.involved_name.clone(),
+                ))
+            }
+            View::ResourceYAML | View::ResourceDescribe => {
+                self.selection_state.native_object.clone()
+            }
+            _ => None,
+        }
+    }
+
+    /// Resolve and select the object a YAML/describe view should open,
+    /// recording where Back should return to. Native objects are tracked in
+    /// `native_object`; Flux resources clear it.
+    fn prepare_nested_view_target(&mut self) -> Option<ObjectRef> {
+        let Some(native) = self.native_view_target() else {
+            let rk = self.prepare_selected_resource_key_for_nested_view()?;
+            self.selection_state.native_object = None;
+            return Some(rk.into());
+        };
+        match self.view_state.current_view {
+            View::InventoryList => {
+                self.view_state.detail_back_view = Some(View::InventoryList);
+            }
+            View::EventList => {
+                self.view_state.previous_list_view = View::EventList;
+                self.view_state.detail_back_view = None;
+            }
+            _ => {}
+        }
+        self.selection_state.selected_resource_key = Some(native.to_resource_key().to_key_string());
+        self.selection_state.native_object = Some(native.clone());
+        Some(native)
     }
 
     fn prepare_selected_resource_key_for_nested_view(&mut self) -> Option<ResourceKey> {
@@ -2038,7 +2117,7 @@ mod tests {
             app.async_state
                 .describe
                 .pending()
-                .map(ResourceKey::to_key_string)
+                .map(|t| t.to_resource_key().to_key_string())
                 .as_deref(),
             Some("Kustomization:flux-system:my-kustomization")
         );
@@ -2532,7 +2611,7 @@ mod tests {
             app.async_state
                 .yaml
                 .pending()
-                .map(ResourceKey::to_key_string)
+                .map(|t| t.to_resource_key().to_key_string())
                 .as_deref(),
             Some("Kustomization:flux-system:my-kustomization")
         );
@@ -2547,7 +2626,7 @@ mod tests {
             app.async_state
                 .describe
                 .pending()
-                .map(ResourceKey::to_key_string)
+                .map(|t| t.to_resource_key().to_key_string())
                 .as_deref(),
             Some("Kustomization:flux-system:my-kustomization")
         );
@@ -2606,7 +2685,7 @@ mod tests {
             app.async_state
                 .yaml
                 .pending()
-                .map(ResourceKey::to_key_string)
+                .map(|t| t.to_resource_key().to_key_string())
                 .as_deref(),
             Some("Kustomization:flux-system:my-kustomization")
         );
@@ -2884,6 +2963,88 @@ mod tests {
         // Back returns to the graph
         app.handle_key(make_key(KeyCode::Esc));
         assert_eq!(app.view_state.current_view, View::ResourceGraph);
+    }
+
+    #[test]
+    fn opening_inventory_requests_object_statuses() {
+        let mut app = app_on_graph_with_resource_group();
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert!(app.async_state.inventory_status.is_loading());
+        assert_eq!(
+            app.async_state.inventory_status.pending().map(Vec::len),
+            Some(3)
+        );
+
+        // Leaving the inventory drops the status lookup.
+        app.handle_key(make_key(KeyCode::Esc));
+        assert!(!app.async_state.inventory_status.is_loading());
+    }
+
+    #[test]
+    fn inventory_enter_describes_native_object_and_back_returns() {
+        let mut app = app_on_graph_with_resource_group();
+        app.handle_key(make_key(KeyCode::Enter)); // graph → inventory
+        app.handle_key(make_key(KeyCode::Char('j'))); // Namespace row
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+        assert_eq!(
+            app.async_state.describe.pending().cloned(),
+            Some(ObjectRef::native("v1", "Namespace", "", "podinfo"))
+        );
+        assert!(app.selection_state.native_object.is_some());
+        // Flux-only actions have no target on a native object.
+        assert!(app.view_target().is_none());
+
+        // y toggles to YAML for the same native object.
+        app.handle_key(make_key(KeyCode::Char('y')));
+        assert_eq!(app.view_state.current_view, View::ResourceYAML);
+        assert_eq!(
+            app.async_state
+                .yaml
+                .pending()
+                .and_then(|t| t.api_version.clone()),
+            Some("v1".to_string())
+        );
+
+        // Back returns to the inventory with the selection intact.
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::InventoryList);
+        assert_eq!(app.view_state.selected_index, 1);
+        assert!(app.selection_state.native_object.is_none());
+    }
+
+    #[test]
+    fn event_for_unwatched_native_object_opens_describe() {
+        let mut app = create_test_app(false);
+        let event = crate::kube::events::KubeEventInfo::from_json(&serde_json::json!({
+            "metadata": {"uid": "uid-native", "namespace": "apps"},
+            "involvedObject": {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "namespace": "apps",
+                "name": "web"
+            },
+            "type": "Normal",
+            "reason": "ScalingReplicaSet",
+            "message": "Scaled up"
+        }))
+        .unwrap();
+        app.kube_events.upsert(event);
+        app.view_state.current_view = View::EventList;
+        app.view_state.selected_index = 0;
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+        assert_eq!(
+            app.async_state.describe.pending().cloned(),
+            Some(ObjectRef::native("apps/v1", "Deployment", "apps", "web"))
+        );
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::EventList);
     }
 
     #[test]
