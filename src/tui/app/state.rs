@@ -3,6 +3,7 @@
 //! This module contains state sub-structures that organize the App's fields
 //! into logical groupings for better maintainability and testability.
 
+use crate::kube::objects::ObjectRef;
 use crate::tui::app::async_task::AsyncTask;
 use crate::tui::submenu::SubmenuState;
 use crate::watcher::ResourceKey;
@@ -302,6 +303,11 @@ pub struct SelectionState {
     pub favorites: HashSet<String>,
     /// Flag indicating favorites need to be saved
     pub favorites_pending_save: bool,
+    /// Set while the YAML/describe views show a native (non-watched) object
+    /// opened from the inventory or events list (#262). Flux operations,
+    /// trace, and graph don't apply to it, and it carries the `apiVersion`
+    /// needed to refetch it.
+    pub native_object: Option<ObjectRef>,
 }
 
 /// UI-related state (command mode, status messages, layout cache)
@@ -360,16 +366,22 @@ impl UIState {
 /// mutation-operation flow (which carries confirmation state alongside).
 #[derive(Debug)]
 pub struct AsyncOperationState {
-    /// Full-object fetch backing the YAML view.
-    pub yaml: AsyncTask<ResourceKey, serde_json::Value>,
-    /// Object + events fetch backing the describe view.
-    pub describe: AsyncTask<ResourceKey, crate::kube::fetch::DescribeData>,
+    /// Full-object fetch backing the YAML view (Flux or native object).
+    pub yaml: AsyncTask<ObjectRef, serde_json::Value>,
+    /// Object + events fetch backing the describe view (Flux or native object).
+    pub describe: AsyncTask<ObjectRef, crate::kube::fetch::DescribeData>,
     /// Ownership-chain trace backing the trace view.
     pub trace: AsyncTask<ResourceKey, crate::trace::TraceResult>,
     /// Relationship graph backing the graph view.
     pub graph: AsyncTask<ResourceKey, crate::trace::ResourceGraph>,
     /// Workload drill-down fetch backing the workload detail view (#194).
     pub workload: AsyncTask<ResourceKey, crate::kube::workloads::WorkloadData>,
+    /// Per-object health for the inventory list (#262), aligned by index
+    /// with the requested entries.
+    pub inventory_status: AsyncTask<
+        Vec<crate::kube::inventory::InventoryEntry>,
+        Vec<crate::kube::object_status::ObjectStatus>,
+    >,
 
     /// Mutating operation (suspend, resume, reconcile, delete). The result
     /// payload is `()`; success/failure feeds the status message.
@@ -404,6 +416,7 @@ impl Default for AsyncOperationState {
             trace: Default::default(),
             graph: Default::default(),
             workload: Default::default(),
+            inventory_status: Default::default(),
             operation: Default::default(),
             last_operation_key: None,
             confirmation_pending: None,
@@ -425,6 +438,7 @@ impl AsyncOperationState {
         self.trace.clear();
         self.graph.clear();
         self.workload.clear();
+        self.inventory_status.clear();
         self.operation.clear();
         self.last_operation_key = None;
         self.confirmation_pending = None;

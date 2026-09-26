@@ -69,7 +69,22 @@ pub async fn fetch_describe_data(
     namespace: &str,
     name: &str,
 ) -> anyhow::Result<DescribeData> {
-    let object = fetch_resource(client, resource_type, namespace, name).await?;
+    let target = crate::kube::objects::ObjectRef::from(crate::watcher::ResourceKey::new(
+        resource_type,
+        namespace,
+        name,
+    ));
+    fetch_object_describe_data(client, &target).await
+}
+
+/// Fetch any object (Flux or native, see [`crate::kube::objects::ObjectRef`])
+/// and its Events for the describe view.
+pub async fn fetch_object_describe_data(
+    client: &kube::Client,
+    target: &crate::kube::objects::ObjectRef,
+) -> anyhow::Result<DescribeData> {
+    let (resource_type, namespace, name) = (&target.kind, &target.namespace, &target.name);
+    let object = crate::kube::objects::fetch_object(client, target).await?;
     let (events, events_error) = match crate::kube::events::fetch_events_for_resource(
         client,
         resource_type,

@@ -507,6 +507,11 @@ impl App {
                         f,
                         area,
                         &self.view_state.inventory_rows,
+                        self.async_state
+                            .inventory_status
+                            .result()
+                            .map(Vec::as_slice),
+                        self.async_state.inventory_status.is_loading(),
                         self.view_state.selected_index,
                         &mut self.view_state.scroll_offset,
                         &self.theme,

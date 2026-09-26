@@ -174,77 +174,47 @@ fn parse_inventory_entry(entry: &Value) -> Option<InventoryEntry> {
     None
 }
 
-/// Parse the id field format from Flux inventory
+/// Parse a Flux inventory `id` (cli-utils `ObjMetadata` string).
 ///
-/// Formats (discovered from actual Flux inventory data):
-/// - Cluster-scoped resources use `__`: `_<name>__<Kind>` (e.g., "_cabot-book__Namespace")
-/// - Namespaced resources WITHOUT API group use `__`: `<namespace>_<name>__<Kind>` (e.g., "cabot-book_cabot-book-service__Service")
-/// - Namespaced resources WITH API group use `_`: `<namespace>_<name>_<group>_<Kind>` (e.g., "cabot-book_cabot-book_apps_Deployment")
+/// The format is always four `_`-separated fields,
+/// `<namespace>_<name>_<group>_<Kind>`, where the namespace is empty for
+/// cluster-scoped objects and the group is empty for core kinds:
+/// - `_cabot-book__Namespace` — cluster-scoped, core
+/// - `cabot-book_web__Service` — namespaced, core
+/// - `cabot-book_web_apps_Deployment` — namespaced, grouped
+/// - `_system__auth_rbac.authorization.k8s.io_ClusterRole` — a `:` in a name
+///   (`system:auth`) is transcoded to `__`
 ///
-/// The key insight: `__` (double underscore) appears ONLY when there's NO API group.
+/// Namespace, kind, and group never contain `_`, so they are split off from
+/// the ends and whatever remains is the name — the same algorithm as
+/// cli-utils' `ParseObjMetadata`. The `v` field only holds the version, so the
+/// full `apiVersion` is rebuilt from the group.
 fn parse_id_field(id: &str, v: &Value) -> Option<InventoryEntry> {
-    let api_version = v.as_str().unwrap_or("v1").to_string();
-
-    // Check if this uses double underscore (no API group) or single underscores (has API group)
-    if id.contains("__") {
-        // Format with double underscore (no API group)
-        let parts: Vec<&str> = id.split("__").collect();
-        if parts.len() != 2 {
-            tracing::warn!("Invalid __ format: {}", id);
-            return None;
-        }
-
-        let kind = parts[1].to_string();
-        let before_kind = parts[0];
-
-        // Split the part before __ by single underscore
-        let name_parts: Vec<&str> = before_kind.split('_').collect();
-
-        if name_parts.len() == 2 && name_parts[0].is_empty() {
-            // Cluster-scoped resource: "_<name>__<Kind>"
-            return Some(InventoryEntry {
-                kind,
-                name: name_parts[1].to_string(),
-                namespace: "".to_string(),
-                api_version,
-            });
-        } else if name_parts.len() >= 2 {
-            // Namespaced resource without API group: "<namespace>_<name>__<Kind>"
-            let namespace = name_parts[0].to_string();
-            let name = name_parts[1..].join("_"); // Handle names with underscores
-            return Some(InventoryEntry {
-                kind,
-                name,
-                namespace,
-                api_version,
-            });
-        }
-    } else {
-        // Format with single underscores (has API group)
-        // Format: "<namespace>_<name>_<group>_<Kind>"
-        let parts: Vec<&str> = id.split('_').collect();
-
-        if parts.len() >= 4 {
-            // The last part is the Kind
-            let kind = parts[parts.len() - 1].to_string();
-            // The second-to-last part is the API group (might contain dots)
-            let _api_group = parts[parts.len() - 2];
-            // The first part is the namespace
-            let namespace = parts[0].to_string();
-            // Everything between namespace and API group is the name
-            let name = parts[1..parts.len() - 2].join("_");
-
-            return Some(InventoryEntry {
-                kind,
-                name,
-                namespace,
-                api_version,
-            });
-        }
+    let version = v.as_str().unwrap_or("v1");
+    let parsed = id.split_once('_').and_then(|(namespace, rest)| {
+        let (rest, kind) = rest.rsplit_once('_')?;
+        let (name, group) = rest.rsplit_once('_')?;
+        Some((namespace, name, group, kind))
+    });
+    let Some((namespace, name, group, kind)) = parsed else {
+        tracing::warn!("Failed to parse inventory ID format: {}", id);
+        return None;
+    };
+    if name.is_empty() || kind.is_empty() {
+        tracing::warn!("Failed to parse inventory ID format: {}", id);
+        return None;
     }
-
-    tracing::warn!("Failed to parse inventory ID format: {}", id);
-    None
+    let api_version = if group.is_empty() {
+        version.to_string()
+    } else {
+        format!("{group}/{version}")
+    };
+    Some(InventoryEntry {
+        kind: kind.to_string(),
+        name: name.replace("__", ":"),
+        namespace: namespace.to_string(),
+        api_version,
+    })
 }
 
 /// Group inventory entries by category for graph display
@@ -338,7 +308,32 @@ mod tests {
         assert_eq!(parsed.kind, "Deployment");
         assert_eq!(parsed.name, "cabot-book");
         assert_eq!(parsed.namespace, "cabot-book");
-        assert_eq!(parsed.api_version, "v1");
+        // The group from the id is folded into the apiVersion (#262).
+        assert_eq!(parsed.api_version, "apps/v1");
+    }
+
+    #[test]
+    fn test_parse_inventory_id_cluster_scoped_grouped_and_colon_names() {
+        let parsed = parse_inventory_entry(&json!({
+            "id": "_system__auth-delegator_rbac.authorization.k8s.io_ClusterRole",
+            "v": "v1"
+        }))
+        .unwrap();
+        assert_eq!(parsed.kind, "ClusterRole");
+        assert_eq!(parsed.namespace, "");
+        // `__` in a name decodes back to `:`
+        assert_eq!(parsed.name, "system:auth-delegator");
+        assert_eq!(parsed.api_version, "rbac.authorization.k8s.io/v1");
+
+        let crd = parse_inventory_entry(&json!({
+            "id": "_widgets.example.com_apiextensions.k8s.io_CustomResourceDefinition",
+            "v": "v1"
+        }))
+        .unwrap();
+        assert_eq!(crd.name, "widgets.example.com");
+        assert_eq!(crd.api_version, "apiextensions.k8s.io/v1");
+
+        assert!(parse_inventory_entry(&json!({"id": "garbage", "v": "v1"})).is_none());
     }
 
     #[test]

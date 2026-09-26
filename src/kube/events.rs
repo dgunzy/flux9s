@@ -24,6 +24,9 @@ pub struct KubeEventInfo {
     pub message: String,
     /// Kind of the object this event is about.
     pub involved_kind: String,
+    /// `apiVersion` of the involved object; empty when the event omits it.
+    /// Lets native objects be resolved through discovery (#262).
+    pub involved_api_version: String,
     /// Namespace of the involved object (falls back to the event's namespace).
     pub involved_namespace: String,
     /// Name of the involved object.
@@ -93,6 +96,7 @@ impl KubeEventInfo {
             reason: str_field(&event_json["reason"]),
             message: str_field(&event_json["message"]),
             involved_kind: str_field(&involved["kind"]),
+            involved_api_version: str_field(&involved["apiVersion"]),
             involved_namespace,
             involved_name: str_field(&involved["name"]),
             count,
@@ -111,11 +115,22 @@ pub async fn fetch_events_for_resource(
     namespace: &str,
     name: &str,
 ) -> anyhow::Result<Vec<KubeEventInfo>> {
-    let api: Api<CoreEvent> = Api::namespaced(client.clone(), namespace);
-    let field_selector = format!(
-        "involvedObject.kind={},involvedObject.name={},involvedObject.namespace={}",
-        kind, name, namespace
-    );
+    // Cluster-scoped objects (Namespace, ClusterRole, …) have no namespace of
+    // their own; their events land wherever the reporter chose, so search all.
+    let (api, field_selector): (Api<CoreEvent>, String) = if namespace.is_empty() {
+        (
+            Api::all(client.clone()),
+            format!("involvedObject.kind={},involvedObject.name={}", kind, name),
+        )
+    } else {
+        (
+            Api::namespaced(client.clone(), namespace),
+            format!(
+                "involvedObject.kind={},involvedObject.name={},involvedObject.namespace={}",
+                kind, name, namespace
+            ),
+        )
+    };
     let params = ListParams::default().fields(&field_selector);
     let events = api.list(&params).await.with_context(|| {
         format!(
