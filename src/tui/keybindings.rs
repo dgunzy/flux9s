@@ -48,6 +48,107 @@ pub fn get_navigation_commands() -> Vec<NavigationCommand> {
     ]
 }
 
+/// Footer hints shared by every non-resource view: command mode, help, back.
+fn common_tail() -> [NavigationCommand; 3] {
+    [
+        NavigationCommand::new(":", "Command"),
+        NavigationCommand::new("?", "Help"),
+        NavigationCommand::new("Esc/q", "Back"),
+    ]
+}
+
+/// Footer hints for the workload list (#194, #263).
+pub fn get_workload_list_commands() -> Vec<NavigationCommand> {
+    let mut commands = vec![
+        NavigationCommand::new("j/k ", "Navigate"),
+        NavigationCommand::new("^f/^b", "PgDn/Up"),
+        NavigationCommand::new("Enter", "Details"),
+        NavigationCommand::new("l", "Logs"),
+        NavigationCommand::new("r", "Restart"),
+    ];
+    commands.extend(common_tail());
+    commands
+}
+
+/// Footer hints for a workload's detail view (#194, #263).
+pub fn get_workload_detail_commands() -> Vec<NavigationCommand> {
+    let mut commands = vec![
+        NavigationCommand::new("j/k ", "Scroll"),
+        NavigationCommand::new("^f/^b", "PgDn/Up"),
+        NavigationCommand::new("/", "Search"),
+        NavigationCommand::new("l", "Logs"),
+        NavigationCommand::new("r", "Restart"),
+        NavigationCommand::new("^d", "Delete pod"),
+    ];
+    commands.extend(common_tail());
+    commands
+}
+
+/// Footer hints for the inventory breakdown (#262).
+pub fn get_inventory_commands() -> Vec<NavigationCommand> {
+    let mut commands = vec![
+        NavigationCommand::new("j/k ", "Navigate"),
+        NavigationCommand::new("^f/^b", "PgDn/Up"),
+        NavigationCommand::new("Enter/d", "Describe"),
+        NavigationCommand::new("y", "YAML"),
+    ];
+    commands.extend(common_tail());
+    commands
+}
+
+/// Footer hints for YAML/describe of a native (non-Flux) object (#262):
+/// Flux operations don't apply, so only viewing keys are offered.
+pub fn get_native_object_commands() -> Vec<NavigationCommand> {
+    let mut commands = vec![
+        NavigationCommand::new("j/k ", "Scroll"),
+        NavigationCommand::new("^f/^b", "PgDn/Up"),
+        NavigationCommand::new("/", "Search"),
+        NavigationCommand::new("n/N", "Next/Prev"),
+        NavigationCommand::new("y", "YAML"),
+        NavigationCommand::new("d", "Describe"),
+    ];
+    commands.extend(common_tail());
+    commands
+}
+
+/// Footer hints for the log viewer.
+pub fn get_logs_commands() -> Vec<NavigationCommand> {
+    let mut commands = vec![
+        NavigationCommand::new("j/k ", "Scroll"),
+        NavigationCommand::new("^f/^b", "PgDn/Up"),
+        NavigationCommand::new("/", "Search"),
+        NavigationCommand::new("n/N", "Next/Prev"),
+        NavigationCommand::new("G", "Follow"),
+    ];
+    commands.extend(common_tail());
+    commands
+}
+
+/// Footer hints for the live events feed.
+pub fn get_events_commands() -> Vec<NavigationCommand> {
+    let mut commands = vec![
+        NavigationCommand::new("j/k ", "Navigate"),
+        NavigationCommand::new("^f/^b", "PgDn/Up"),
+        NavigationCommand::new("Enter", "Open"),
+        NavigationCommand::new("/", "Filter"),
+        NavigationCommand::new("y", "YAML"),
+        NavigationCommand::new("d", "Describe"),
+    ];
+    commands.extend(common_tail());
+    commands
+}
+
+/// Footer hints for the pulse dashboard.
+pub fn get_pulse_commands() -> Vec<NavigationCommand> {
+    let mut commands = vec![
+        NavigationCommand::new("j/k ", "Scroll"),
+        NavigationCommand::new("^f/^b", "PgDn/Up"),
+        NavigationCommand::new("/", "Search"),
+    ];
+    commands.extend(common_tail());
+    commands
+}
+
 /// Get navigation commands for the connection error state
 pub fn get_connection_error_commands() -> Vec<NavigationCommand> {
     vec![
@@ -112,13 +213,8 @@ pub fn get_resource_help_commands() -> Vec<(&'static str, &'static str)> {
 ///
 /// This function uses the exact same logic as `render_navigation_footer` in footer.rs
 /// to ensure consistent height calculations.
-pub fn calculate_footer_height(terminal_width: u16, has_connection_error: bool) -> u16 {
-    // Get base navigation commands
-    let nav_segments = if has_connection_error {
-        navigation_commands_to_segments_simple(&get_connection_error_commands())
-    } else {
-        navigation_commands_to_segments_simple(&get_navigation_commands())
-    };
+pub fn calculate_footer_height(terminal_width: u16, commands: &[NavigationCommand]) -> u16 {
+    let nav_segments = navigation_commands_to_segments_simple(commands);
 
     let footer_available_width = terminal_width.saturating_sub(2); // Account for borders
 
@@ -168,14 +264,14 @@ mod tests {
     #[test]
     fn test_calculate_footer_height_connection_error() {
         // Under a connection error state, the footer has fewer options and fits on one line.
-        let height = calculate_footer_height(80, true);
+        let height = calculate_footer_height(80, &get_connection_error_commands());
         assert_eq!(height, 3); // 1 content line + 2 borders
     }
 
     #[test]
     fn test_calculate_footer_height_normal() {
         // Under normal circumstances, check that it calculates correctly.
-        let height = calculate_footer_height(80, false);
+        let height = calculate_footer_height(80, &get_navigation_commands());
         // Normally at 80 cols, the default commands (lots of them) wrap to 2 lines.
         assert_eq!(height, 4); // 2 content lines + 2 borders
     }

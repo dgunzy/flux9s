@@ -16,6 +16,7 @@ pub mod events;
 pub mod fetch;
 pub mod health;
 pub mod inventory;
+pub mod live;
 pub mod object_status;
 pub mod objects;
 pub mod workloads;

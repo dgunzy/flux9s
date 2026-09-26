@@ -4,7 +4,7 @@
 //! command mode, filter mode, and confirmation dialogs.
 
 use super::core::App;
-use super::state::{HealthFilter, PendingOperation, View};
+use super::state::{Confirmation, HealthFilter, PendingOperation, View};
 use crate::kube::objects::ObjectRef;
 use crate::tui::commands;
 use crate::watcher::ResourceKey;
@@ -290,7 +290,13 @@ impl App {
                     return None;
                 }
                 crossterm::event::KeyCode::Char('d') => {
-                    self.handle_operation_key('d');
+                    // In workload detail, Ctrl+d deletes a pod (#263); the
+                    // workload itself is owned by Flux.
+                    if self.view_state.current_view == View::WorkloadDetail {
+                        self.request_pod_delete();
+                    } else {
+                        self.handle_operation_key('d');
+                    }
                     return None;
                 }
                 _ => {}
@@ -338,6 +344,15 @@ impl App {
             }
             crossterm::event::KeyCode::Char('?') => {
                 self.ui_state.show_help = !self.ui_state.show_help;
+            }
+            // Rollout restart from the workload views (#263), k9s-style.
+            crossterm::event::KeyCode::Char('r')
+                if matches!(
+                    self.view_state.current_view,
+                    View::WorkloadList | View::WorkloadDetail
+                ) =>
+            {
+                self.request_workload_restart();
             }
             crossterm::event::KeyCode::Char('s')
             | crossterm::event::KeyCode::Char('r')
@@ -926,6 +941,16 @@ impl App {
                             self.switch_namespace(new_namespace);
                         } else if command == "logs" {
                             self.open_log_view(&value);
+                        } else if command == "pod-delete" {
+                            // Workload pod delete: the value is "namespace/pod".
+                            if let Some((namespace, pod)) = value.split_once('/') {
+                                self.confirm_workload_action(
+                                    crate::kube::workloads::WorkloadAction::DeletePod {
+                                        namespace: namespace.to_string(),
+                                        name: pod.to_string(),
+                                    },
+                                );
+                            }
                         } else if command == "pod-logs" {
                             // Workload pod logs: the value is "namespace/pod".
                             if let Some((namespace, pod)) = value.split_once('/') {
@@ -1322,6 +1347,95 @@ impl App {
         }
     }
 
+    /// Queue a workload action for confirmation, unless read-only (#263).
+    fn confirm_workload_action(&mut self, action: crate::kube::workloads::WorkloadAction) {
+        if self.config.read_only {
+            self.set_status_message((
+                crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
+                true,
+            ));
+            return;
+        }
+        self.async_state.confirmation_pending = Some(Confirmation::Workload(action));
+    }
+
+    /// `r` in the workload list/detail: confirm a rollout restart of the
+    /// selected (list) or displayed (detail) workload.
+    fn request_workload_restart(&mut self) {
+        let target = match self.view_state.current_view {
+            View::WorkloadList => self
+                .view_state
+                .workload_rows
+                .get(self.view_state.selected_index)
+                .map(|row| (row.kind.clone(), row.namespace.clone(), row.name.clone())),
+            View::WorkloadDetail => self
+                .async_state
+                .workload
+                .result()
+                .map(|w| (w.kind.clone(), w.namespace.clone(), w.name.clone())),
+            _ => None,
+        };
+        let Some((kind, namespace, name)) = target else {
+            return; // Nothing selected, or still loading
+        };
+        if !crate::kube::workloads::WorkloadAction::is_restartable(&kind) {
+            self.set_status_message((format!("{kind} does not support a rollout restart"), true));
+            return;
+        }
+        self.confirm_workload_action(crate::kube::workloads::WorkloadAction::Restart {
+            kind,
+            namespace,
+            name,
+        });
+    }
+
+    /// Ctrl+d in workload detail: confirm deleting the only pod directly, or
+    /// pick one from a submenu when there are several.
+    fn request_pod_delete(&mut self) {
+        let Some(workload) = self.async_state.workload.result() else {
+            return; // Still loading
+        };
+        match workload.pods.as_slice() {
+            [] => {
+                let msg = format!("{}/{} has no pods to delete", workload.kind, workload.name);
+                self.set_status_message((msg, false));
+            }
+            [only] => {
+                let action = crate::kube::workloads::WorkloadAction::DeletePod {
+                    namespace: workload.namespace.clone(),
+                    name: only.name.clone(),
+                };
+                self.confirm_workload_action(action);
+            }
+            pods => {
+                if self.config.read_only {
+                    self.set_status_message((
+                        crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
+                        true,
+                    ));
+                    return;
+                }
+                let items: Vec<crate::tui::submenu::SubmenuItem> = pods
+                    .iter()
+                    .map(|pod| {
+                        crate::tui::submenu::SubmenuItem::with_display(
+                            format!("{}/{}", workload.namespace, pod.name),
+                            format!("{} ({}, ready {})", pod.name, pod.phase, pod.ready),
+                        )
+                    })
+                    .collect();
+                self.view_state.submenu_state = Some(
+                    crate::tui::submenu::SubmenuState::new("pod-delete".to_string(), items)
+                        .with_title("Delete Pod".to_string())
+                        .with_help(
+                            "j/k: Navigate | /: Filter | Enter: Delete (confirm) | Esc: Cancel"
+                                .to_string(),
+                        ),
+                );
+            }
+        }
+    }
+
     /// Open the YAML view for the current view's target (Flux or native).
     fn open_yaml_view(&mut self) {
         if let Some(target) = self.prepare_nested_view_target() {
@@ -1444,12 +1558,13 @@ impl App {
                 }
 
                 if operation.requires_confirmation() {
-                    self.async_state.confirmation_pending = Some(PendingOperation::new(
-                        resource.resource_type.clone(),
-                        resource.namespace.clone(),
-                        resource.name.clone(),
-                        op_key,
-                    ));
+                    self.async_state.confirmation_pending =
+                        Some(Confirmation::Flux(PendingOperation::new(
+                            resource.resource_type.clone(),
+                            resource.namespace.clone(),
+                            resource.name.clone(),
+                            op_key,
+                        )));
                     return;
                 }
 
@@ -1493,12 +1608,17 @@ impl App {
                     // Confirm operation - clone data before clearing pending state
                     let pending_clone = pending.clone();
                     self.async_state.confirmation_pending = None;
-                    self.execute_operation(
-                        &pending_clone.resource_type,
-                        &pending_clone.namespace,
-                        &pending_clone.name,
-                        pending_clone.operation_key,
-                    );
+                    match pending_clone {
+                        Confirmation::Flux(op) => self.execute_operation(
+                            &op.resource_type,
+                            &op.namespace,
+                            &op.name,
+                            op.operation_key,
+                        ),
+                        Confirmation::Workload(action) => {
+                            self.async_state.workload_action.request(action);
+                        }
+                    }
                 }
                 crossterm::event::KeyCode::Char('n')
                 | crossterm::event::KeyCode::Char('N')
@@ -2160,12 +2280,12 @@ mod tests {
     #[test]
     fn test_delete_confirmation_still_blocks_execution_in_readonly_mode() {
         let mut app = create_test_app(true);
-        app.async_state.confirmation_pending = Some(PendingOperation::new(
+        app.async_state.confirmation_pending = Some(Confirmation::Flux(PendingOperation::new(
             "Kustomization".to_string(),
             "flux-system".to_string(),
             "my-kustomization".to_string(),
             'd',
-        ));
+        )));
 
         let result = app.handle_key(make_key(KeyCode::Char('y')));
 
@@ -3129,6 +3249,7 @@ mod tests {
                 .collect(),
             events: Vec::new(),
             events_error: None,
+            pod_selector: None,
         }
     }
 
@@ -3177,6 +3298,170 @@ mod tests {
         app.handle_key(make_key(KeyCode::Enter));
         assert_eq!(app.view_state.current_view, View::Logs);
         assert_eq!(app.view_state.logs_back_view, Some(View::WorkloadDetail));
+    }
+
+    fn footer_labels(app: &App) -> Vec<(&'static str, &'static str)> {
+        app.footer_commands()
+            .into_iter()
+            .map(|c| (c.key, c.label))
+            .collect()
+    }
+
+    #[test]
+    fn footer_follows_the_current_view() {
+        let mut app = app_on_graph_with_workloads();
+
+        // Resource views keep the full Flux set.
+        app.view_state.current_view = View::ResourceList;
+        assert!(footer_labels(&app).contains(&("r", "Resume")));
+
+        // Workload detail advertises its own meaning of r and ^d.
+        app.view_state.current_view = View::WorkloadDetail;
+        let labels = footer_labels(&app);
+        assert!(labels.contains(&("r", "Restart")));
+        assert!(labels.contains(&("^d", "Delete pod")));
+        assert!(!labels.contains(&("r", "Resume")));
+        assert!(!labels.contains(&("s", "Suspend")));
+    }
+
+    #[test]
+    fn native_object_footer_offers_only_viewing_keys() {
+        let mut app = app_on_graph_with_resource_group();
+        app.handle_key(make_key(KeyCode::Enter)); // graph → inventory
+        assert!(footer_labels(&app).contains(&("Enter/d", "Describe")));
+
+        app.handle_key(make_key(KeyCode::Char('y'))); // native YAML
+        let labels = footer_labels(&app);
+        assert!(labels.contains(&("d", "Describe")));
+        assert!(!labels.iter().any(|(_, label)| *label == "Suspend"));
+    }
+
+    fn pending_workload_action(app: &App) -> Option<crate::kube::workloads::WorkloadAction> {
+        match app.async_state.confirmation_pending.as_ref()? {
+            Confirmation::Workload(action) => Some(action.clone()),
+            Confirmation::Flux(_) => None,
+        }
+    }
+
+    fn open_workload_list(app: &mut App) {
+        app.handle_key(make_key(KeyCode::Enter)); // graph → workload list
+        assert_eq!(app.view_state.current_view, View::WorkloadList);
+    }
+
+    #[test]
+    fn r_in_workload_list_confirms_then_runs_restart() {
+        use crate::kube::workloads::WorkloadAction;
+        let mut app = app_on_graph_with_workloads();
+        open_workload_list(&mut app);
+
+        app.handle_key(make_key(KeyCode::Char('r')));
+        let expected = WorkloadAction::Restart {
+            kind: "Deployment".into(),
+            namespace: "flux-system".into(),
+            name: "podinfo".into(),
+        };
+        assert_eq!(pending_workload_action(&app), Some(expected.clone()));
+        assert!(
+            app.confirmation_message()
+                .is_some_and(|m| m.contains("Restart Deployment 'podinfo'"))
+        );
+
+        app.handle_key(make_key(KeyCode::Char('y')));
+        assert!(app.async_state.confirmation_pending.is_none());
+        assert_eq!(app.async_state.workload_action.pending(), Some(&expected));
+    }
+
+    #[test]
+    fn restart_can_be_cancelled() {
+        let mut app = app_on_graph_with_workloads();
+        open_workload_list(&mut app);
+
+        app.handle_key(make_key(KeyCode::Char('r')));
+        app.handle_key(make_key(KeyCode::Char('n')));
+
+        assert!(app.async_state.confirmation_pending.is_none());
+        assert!(!app.async_state.workload_action.is_loading());
+        assert_eq!(app.view_state.current_view, View::WorkloadList);
+    }
+
+    #[test]
+    fn restart_is_blocked_in_read_only_mode() {
+        let mut app = app_on_graph_with_workloads();
+        app.config.read_only = true;
+        open_workload_list(&mut app);
+
+        app.handle_key(make_key(KeyCode::Char('r')));
+
+        assert!(app.async_state.confirmation_pending.is_none());
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(_, is_error)| *is_error)
+        );
+    }
+
+    #[test]
+    fn restart_rejects_cronjobs() {
+        let mut app = app_on_graph_with_workloads();
+        app.view_state.current_view = View::WorkloadDetail;
+        let mut data = workload_data(&[]);
+        data.kind = "CronJob".to_string();
+        app.async_state.workload.set_result(data);
+
+        app.handle_key(make_key(KeyCode::Char('r')));
+
+        assert!(app.async_state.confirmation_pending.is_none());
+    }
+
+    #[test]
+    fn ctrl_d_in_workload_detail_deletes_the_only_pod() {
+        use crate::kube::workloads::WorkloadAction;
+        let mut app = app_on_graph_with_workloads();
+        app.view_state.current_view = View::WorkloadDetail;
+        app.async_state
+            .workload
+            .set_result(workload_data(&["podinfo-abc"]));
+
+        app.handle_key(make_ctrl_key(KeyCode::Char('d')));
+
+        assert_eq!(
+            pending_workload_action(&app),
+            Some(WorkloadAction::DeletePod {
+                namespace: "flux-system".into(),
+                name: "podinfo-abc".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn ctrl_d_with_several_pods_picks_one_then_confirms() {
+        use crate::kube::workloads::WorkloadAction;
+        let mut app = app_on_graph_with_workloads();
+        app.view_state.current_view = View::WorkloadDetail;
+        app.async_state
+            .workload
+            .set_result(workload_data(&["podinfo-abc", "podinfo-def"]));
+
+        app.handle_key(make_ctrl_key(KeyCode::Char('d')));
+        let submenu = app
+            .view_state
+            .submenu_state
+            .as_ref()
+            .expect("several pods open a picker");
+        assert_eq!(submenu.command, "pod-delete");
+        assert!(app.async_state.confirmation_pending.is_none());
+
+        app.handle_key(make_key(KeyCode::Char('j')));
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(
+            pending_workload_action(&app),
+            Some(WorkloadAction::DeletePod {
+                namespace: "flux-system".into(),
+                name: "podinfo-def".into(),
+            })
+        );
     }
 
     #[test]

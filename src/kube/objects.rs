@@ -99,7 +99,7 @@ fn split_api_version(api_version: &str) -> (&str, &str) {
 }
 
 /// Resolve a native kind's API resource and scope through discovery.
-async fn discover(
+pub(crate) async fn discover(
     client: &kube::Client,
     api_version: &str,
     kind: &str,
@@ -112,7 +112,7 @@ async fn discover(
     Ok((resource, caps.scope))
 }
 
-fn api_for(
+pub(crate) fn api_for(
     client: &kube::Client,
     resource: &ApiResource,
     scope: &Scope,

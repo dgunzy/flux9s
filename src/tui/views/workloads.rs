@@ -318,6 +318,7 @@ mod tests {
             }],
             events: Vec::new(),
             events_error: Some("forbidden".to_string()),
+            pod_selector: None,
         }
     }
 

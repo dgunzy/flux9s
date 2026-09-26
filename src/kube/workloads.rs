@@ -8,8 +8,106 @@
 use anyhow::Context;
 use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
-use kube::api::ListParams;
+use kube::api::{DeleteParams, ListParams, Patch, PatchParams};
+use kube::core::DynamicObject;
 use serde_json::Value;
+
+/// Pod-template annotation `kubectl rollout restart` sets; changing it rolls
+/// every pod without touching anything Flux manages.
+pub const RESTARTED_AT_ANNOTATION: &str = "kubectl.kubernetes.io/restartedAt";
+
+/// Workload kinds that support a rollout restart. CronJobs have no running
+/// pod template to roll.
+const RESTARTABLE_KINDS: &[&str] = &["Deployment", "StatefulSet", "DaemonSet"];
+
+/// A write action on a workload or one of its pods (#263). Always confirmed
+/// by the user and blocked in read-only mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkloadAction {
+    /// Rollout restart, equivalent to `kubectl rollout restart`.
+    Restart {
+        kind: String,
+        namespace: String,
+        name: String,
+    },
+    /// Delete one pod; its controller replaces it.
+    DeletePod { namespace: String, name: String },
+}
+
+impl WorkloadAction {
+    /// Whether `kind` can be rollout-restarted.
+    pub fn is_restartable(kind: &str) -> bool {
+        RESTARTABLE_KINDS.contains(&kind)
+    }
+
+    /// Question shown in the confirmation dialog.
+    pub fn confirmation_message(&self) -> String {
+        match self {
+            WorkloadAction::Restart {
+                kind,
+                namespace,
+                name,
+            } => format!(
+                "Restart {kind} '{name}' in namespace '{namespace}'? All pods will be rolled."
+            ),
+            WorkloadAction::DeletePod { namespace, name } => {
+                format!("Delete pod '{name}' in namespace '{namespace}'?")
+            }
+        }
+    }
+
+    /// Status message after the action succeeds.
+    pub fn success_message(&self) -> String {
+        match self {
+            WorkloadAction::Restart { kind, name, .. } => format!("Restarted {kind} {name}"),
+            WorkloadAction::DeletePod { name, .. } => format!("Deleted pod {name}"),
+        }
+    }
+}
+
+/// The merge patch a rollout restart applies.
+fn restart_patch(now: &str) -> Value {
+    serde_json::json!({
+        "spec": {"template": {"metadata": {"annotations": {RESTARTED_AT_ANNOTATION: now}}}}
+    })
+}
+
+/// Perform a confirmed [`WorkloadAction`].
+pub async fn execute_workload_action(
+    client: &kube::Client,
+    action: &WorkloadAction,
+) -> anyhow::Result<()> {
+    match action {
+        WorkloadAction::Restart {
+            kind,
+            namespace,
+            name,
+        } => {
+            if !WorkloadAction::is_restartable(kind) {
+                anyhow::bail!("{kind} does not support a rollout restart");
+            }
+            let resource =
+                crate::kube::get_api_resource_with_fallback(client, kind, namespace, name).await?;
+            let api: Api<DynamicObject> =
+                Api::namespaced_with(client.clone(), namespace, &resource);
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            api.patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(restart_patch(&now)),
+            )
+            .await
+            .with_context(|| format!("Failed to restart {kind}/{name} in {namespace}"))?;
+        }
+        WorkloadAction::DeletePod { namespace, name } => {
+            let api: Api<Pod> = Api::namespaced(client.clone(), namespace);
+            api.delete(name, &DeleteParams::default())
+                .await
+                .with_context(|| format!("Failed to delete pod {name} in {namespace}"))?;
+        }
+    }
+    Ok(())
+}
 
 /// A workload reference as carried inside a graph WorkloadGroup node's
 /// description, one per line: `Kind|name|namespace|<indicator>|<status>`.
@@ -87,6 +185,8 @@ pub struct WorkloadData {
     pub events: Vec<crate::kube::events::KubeEventInfo>,
     /// Set when the events lookup failed (e.g. RBAC) — the view degrades.
     pub events_error: Option<String>,
+    /// Label selector the pods were listed with; the live view watches it.
+    pub pod_selector: Option<String>,
 }
 
 /// Fetch a workload and everything its detail view shows. The object fetch
@@ -103,7 +203,8 @@ pub async fn fetch_workload_data(
     let summary = extract_workload_summary(kind, &obj);
     let containers = extract_containers(&obj);
 
-    let pods = match extract_selector(&obj) {
+    let pod_selector = extract_selector(&obj);
+    let pods = match pod_selector.clone() {
         Some(selector) => {
             let api: Api<Pod> = Api::namespaced(client.clone(), namespace);
             let list = api
@@ -142,6 +243,7 @@ pub async fn fetch_workload_data(
         pods,
         events,
         events_error,
+        pod_selector,
     })
 }
 
@@ -455,5 +557,38 @@ mod tests {
             pod_row_from_json(&terminating).unwrap().phase,
             "Terminating"
         );
+    }
+
+    #[test]
+    fn restart_patch_sets_template_annotation() {
+        let patch = restart_patch("2026-09-26T00:00:00Z");
+        assert_eq!(
+            patch["spec"]["template"]["metadata"]["annotations"][RESTARTED_AT_ANNOTATION],
+            "2026-09-26T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn only_pod_template_workloads_are_restartable() {
+        assert!(WorkloadAction::is_restartable("Deployment"));
+        assert!(WorkloadAction::is_restartable("StatefulSet"));
+        assert!(WorkloadAction::is_restartable("DaemonSet"));
+        assert!(!WorkloadAction::is_restartable("CronJob"));
+    }
+
+    #[test]
+    fn action_messages_name_the_target() {
+        let restart = WorkloadAction::Restart {
+            kind: "Deployment".into(),
+            namespace: "apps".into(),
+            name: "web".into(),
+        };
+        assert!(restart.confirmation_message().contains("Deployment 'web'"));
+        assert_eq!(restart.success_message(), "Restarted Deployment web");
+        let delete = WorkloadAction::DeletePod {
+            namespace: "apps".into(),
+            name: "web-abc".into(),
+        };
+        assert!(delete.confirmation_message().contains("pod 'web-abc'"));
     }
 }

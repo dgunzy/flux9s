@@ -282,6 +282,21 @@ impl App {
 
     /// Invalidate the cached layout dimensions, forcing recalculation on next render.
     /// Call this when filter state or resource counts change (anything that affects header height).
+    /// Footer key hints for the current state: the connection-error set,
+    /// view-only keys for a native object (#262), else the view's own set.
+    pub(crate) fn footer_commands(&self) -> Vec<crate::tui::keybindings::NavigationCommand> {
+        if self.has_connection_error() {
+            return crate::tui::keybindings::get_connection_error_commands();
+        }
+        let view = self.view_state.current_view;
+        if self.selection_state.native_object.is_some()
+            && matches!(view, View::ResourceYAML | View::ResourceDescribe)
+        {
+            return crate::tui::keybindings::get_native_object_commands();
+        }
+        view.footer_commands()
+    }
+
     pub(crate) fn invalidate_layout_cache(&mut self) {
         self.ui_state.cached_terminal_size = None;
     }

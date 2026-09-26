@@ -211,7 +211,6 @@ fn test_render_header_with_filter() {
 
 #[test]
 fn test_render_footer_navigation() {
-    let state = create_test_resource_state();
     let theme = create_test_theme();
     let _config = create_test_config();
 
@@ -220,7 +219,6 @@ fn test_render_footer_navigation() {
     terminal
         .draw(|frame| {
             let area = frame.area();
-            let operation_registry = flux9s::tui::operations::OperationRegistry::new();
             render_footer(
                 frame,
                 area,
@@ -232,12 +230,10 @@ fn test_render_footer_navigation() {
                 "",
                 false,
                 false,
+                None,
                 &None,
-                &None,
-                &operation_registry,
-                &state,
                 &theme,
-                false,
+                &flux9s::tui::keybindings::get_navigation_commands(),
             );
         })
         .unwrap();
@@ -247,7 +243,6 @@ fn test_render_footer_navigation() {
 
 #[test]
 fn test_render_footer_command_mode() {
-    let state = create_test_resource_state();
     let theme = create_test_theme();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
@@ -255,7 +250,6 @@ fn test_render_footer_command_mode() {
     terminal
         .draw(|frame| {
             let area = frame.area();
-            let operation_registry = flux9s::tui::operations::OperationRegistry::new();
             render_footer(
                 frame,
                 area,
@@ -267,12 +261,10 @@ fn test_render_footer_command_mode() {
                 "",
                 false,
                 false,
+                None,
                 &None,
-                &None,
-                &operation_registry,
-                &state,
                 &theme,
-                false,
+                &flux9s::tui::keybindings::get_navigation_commands(),
             );
         })
         .unwrap();
@@ -282,7 +274,6 @@ fn test_render_footer_command_mode() {
 
 #[test]
 fn test_render_footer_filter_mode() {
-    let state = create_test_resource_state();
     let theme = create_test_theme();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
@@ -290,7 +281,6 @@ fn test_render_footer_filter_mode() {
     terminal
         .draw(|frame| {
             let area = frame.area();
-            let operation_registry = flux9s::tui::operations::OperationRegistry::new();
             render_footer(
                 frame,
                 area,
@@ -302,12 +292,10 @@ fn test_render_footer_filter_mode() {
                 "",
                 false,
                 false,
+                None,
                 &None,
-                &None,
-                &operation_registry,
-                &state,
                 &theme,
-                false,
+                &flux9s::tui::keybindings::get_navigation_commands(),
             );
         })
         .unwrap();
@@ -739,7 +727,6 @@ fn test_render_resource_yaml_with_data() {
 
 #[test]
 fn test_render_footer_connection_error() {
-    let state = create_test_resource_state();
     let theme = create_test_theme();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
@@ -747,7 +734,6 @@ fn test_render_footer_connection_error() {
     terminal
         .draw(|frame| {
             let area = frame.area();
-            let operation_registry = flux9s::tui::operations::OperationRegistry::new();
             render_footer(
                 frame,
                 area,
@@ -759,12 +745,10 @@ fn test_render_footer_connection_error() {
                 "",
                 false,
                 false,
+                None,
                 &None,
-                &None,
-                &operation_registry,
-                &state,
                 &theme,
-                true, // has_connection_error = true
+                &flux9s::tui::keybindings::get_connection_error_commands(),
             );
         })
         .unwrap();

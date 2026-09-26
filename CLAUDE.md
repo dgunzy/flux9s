@@ -120,7 +120,9 @@ connection-error gate) and the resource-type fallback stay outside the table.
 - State management for submenus lives in `ViewState.submenu_state`
 - Event handling priority: confirmation → submenu → filter → normal commands
 - Per-view behavior is consolidated on `impl View` (`src/tui/app/state.rs`):
-  `scroll_offset_mut`, `is_list_view`, `is_text_search_view`, `is_nested_view`.
+  `scroll_offset_mut`, `is_list_view`, `is_text_search_view`, `is_nested_view`,
+  `footer_commands` (the footer hints — each view advertises only the keys it
+  handles; sets live in `src/tui/keybindings.rs`).
   Add a new view's scroll/back/classification there instead of scattering
   `match current_view` arms across the event handlers.
 
