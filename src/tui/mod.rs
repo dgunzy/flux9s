@@ -6,7 +6,7 @@
 pub mod app;
 mod commands;
 pub mod constants;
-mod keybindings;
+pub mod keybindings;
 pub mod operations;
 mod submenu;
 mod theme;
@@ -400,16 +400,26 @@ pub async fn run_tui_with_async_init(
                     }
 
                     if let Some((entries, tx)) = app.async_state.inventory_status.dispatch() {
+                        let handle = tokio::spawn(crate::kube::live::watch_object_statuses(
+                            client.clone(),
+                            entries,
+                            tx,
+                        ));
+                        app.async_state.inventory_status.set_handle(handle);
+                    }
+
+                    if let Some((action, tx)) = app.async_state.workload_action.dispatch() {
                         let client = client.clone();
                         tokio::spawn(async move {
-                            tracing::debug!(
-                                "Fetching status for {} inventory objects",
-                                entries.len()
-                            );
-                            let statuses =
-                                crate::kube::objects::fetch_object_statuses(&client, &entries)
-                                    .await;
-                            let _ = tx.send(Ok(statuses));
+                            tracing::debug!("Running workload action {:?}", action);
+                            let result =
+                                crate::kube::workloads::execute_workload_action(&client, &action)
+                                    .await
+                                    .map(|()| action);
+                            if let Err(ref e) = result {
+                                tracing::warn!("Workload action failed: {:#}", e);
+                            }
+                            let _ = tx.send(result);
                         });
                     }
 
@@ -450,21 +460,15 @@ pub async fn run_tui_with_async_init(
                     }
 
                     if let Some((rk, tx)) = app.async_state.workload.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            tracing::debug!("Fetching workload data for {}", rk);
-                            let result = crate::kube::workloads::fetch_workload_data(
-                                &client,
-                                &rk.resource_type,
-                                &rk.namespace,
-                                &rk.name,
-                            )
-                            .await;
-                            if let Err(ref e) = result {
-                                tracing::warn!("Failed to fetch workload data for {}: {}", rk, e);
-                            }
-                            let _ = tx.send(result);
-                        });
+                        tracing::debug!("Watching workload {}", rk);
+                        let handle = tokio::spawn(crate::kube::live::watch_workload(
+                            client.clone(),
+                            rk.resource_type,
+                            rk.namespace,
+                            rk.name,
+                            tx,
+                        ));
+                        app.async_state.workload.set_handle(handle);
                     }
 
                     // Start a queued controller log stream. The task tails the
@@ -565,14 +569,15 @@ pub async fn run_tui_with_async_init(
                 }
             }
 
-            if let Some(result) = app.async_state.inventory_status.try_recv() {
+            if let Some(result) = app.async_state.inventory_status.poll() {
                 match result {
                     Ok(statuses) => app.async_state.inventory_status.set_result(statuses),
-                    Err(e) => {
-                        app.async_state.inventory_status.set_error();
-                        tracing::warn!("Inventory status lookup failed: {}", e);
-                    }
+                    Err(e) => tracing::warn!("Inventory status lookup failed: {}", e),
                 }
+            }
+
+            if let Some(result) = app.async_state.workload_action.try_recv() {
+                app.set_workload_action_result(result);
             }
 
             if let Some(result) = app.async_state.trace.try_recv() {
@@ -601,12 +606,16 @@ pub async fn run_tui_with_async_init(
                 }
             }
 
-            if let Some(result) = app.async_state.workload.try_recv() {
+            if let Some(result) = app.async_state.workload.poll() {
                 match result {
                     // May continue straight into pod logs (l from the list)
                     Ok(workload) => app.on_workload_loaded(workload),
+                    // A failed refresh keeps the last snapshot on screen.
+                    Err(e) if app.async_state.workload.result().is_some() => {
+                        app.set_status_message((format!("Workload refresh failed: {:#}", e), true));
+                    }
                     Err(e) => {
-                        app.async_state.workload.set_error();
+                        app.async_state.workload.clear();
                         app.logs_after_workload_load = false;
                         app.set_status_message((format!("Failed to fetch workload: {}", e), true));
                         // Return to the workload list instead of an empty detail

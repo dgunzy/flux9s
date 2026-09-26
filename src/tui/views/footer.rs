@@ -1,10 +1,7 @@
 //! Footer view rendering
 
-use crate::tui::app::PendingOperation;
-use crate::tui::keybindings::{get_navigation_commands, navigation_commands_to_segments};
-use crate::tui::operations::OperationRegistry;
+use crate::tui::keybindings::{NavigationCommand, navigation_commands_to_segments};
 use crate::tui::theme::Theme;
-use crate::watcher::ResourceState;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -26,12 +23,10 @@ pub fn render_footer(
     search_query: &str,
     show_help: bool,
     show_quit_confirm: bool,
-    confirmation_pending: &Option<PendingOperation>,
+    confirmation_message: Option<&str>,
     status_message: &Option<(String, bool)>,
-    operation_registry: &OperationRegistry,
-    state: &ResourceState,
     theme: &Theme,
-    has_connection_error: bool,
+    nav_commands: &[NavigationCommand],
 ) -> usize {
     if command_mode {
         return render_command_footer(f, area, command_buffer, theme);
@@ -52,8 +47,8 @@ pub fn render_footer(
     }
 
     // Handle default navigation footer (wrapped for smaller screens)
-    if !show_help && confirmation_pending.is_none() && status_message.is_none() {
-        return render_navigation_footer(f, area, theme, has_connection_error);
+    if !show_help && confirmation_message.is_none() && status_message.is_none() {
+        return render_navigation_footer(f, area, theme, nav_commands);
     }
 
     // Build footer text for non-default cases
@@ -63,16 +58,8 @@ pub fn render_footer(
             Span::styled("?", theme.footer_key_style()),
             Span::raw(" to hide help"),
         ]
-    } else if let Some(pending) = confirmation_pending {
-        render_confirmation_footer_text(
-            operation_registry,
-            state,
-            &pending.resource_type,
-            &pending.namespace,
-            &pending.name,
-            pending.operation_key,
-            theme,
-        )
+    } else if let Some(message) = confirmation_message {
+        render_confirmation_footer_text(message, theme)
     } else if let Some((msg, is_error)) = status_message {
         vec![Span::styled(
             msg.clone(),
@@ -181,17 +168,10 @@ fn render_navigation_footer(
     f: &mut Frame,
     area: Rect,
     theme: &Theme,
-    has_connection_error: bool,
+    commands: &[NavigationCommand],
 ) -> usize {
-    // Default navigation hints - wrap for smaller screens
-    // Returns the number of lines used
-    // Use centralized keybindings
-    let commands = if has_connection_error {
-        crate::tui::keybindings::get_connection_error_commands()
-    } else {
-        get_navigation_commands()
-    };
-    let nav_segments = navigation_commands_to_segments(&commands, theme.footer_key);
+    // Wraps onto a second line for smaller screens; returns the lines used.
+    let nav_segments = navigation_commands_to_segments(commands, theme.footer_key);
 
     // Build wrapped lines similar to header logic
     // Wrap footer content into 2 lines to prevent overflow
@@ -341,31 +321,12 @@ fn render_quit_confirm_footer(f: &mut Frame, area: Rect, theme: &Theme) -> usize
     1
 }
 
-fn render_confirmation_footer_text<'a>(
-    operation_registry: &OperationRegistry,
-    state: &ResourceState,
-    resource_type: &str,
-    namespace: &str,
-    name: &str,
-    op_key: char,
-    theme: &Theme,
-) -> Vec<Span<'a>> {
-    let confirmation_msg = if let Some(operation) = operation_registry.get_by_keybinding(op_key) {
-        if let Some(resource) = state.get(&crate::watcher::resource_key(
-            namespace,
-            name,
-            resource_type,
-        )) {
-            operation.confirmation_message(&resource)
-        } else {
-            "Resource not found".to_string()
-        }
-    } else {
-        "Unknown operation".to_string()
-    };
-
+fn render_confirmation_footer_text<'a>(confirmation_msg: &str, theme: &Theme) -> Vec<Span<'a>> {
     vec![
-        Span::styled(confirmation_msg, theme.operation_warning_style()),
+        Span::styled(
+            confirmation_msg.to_string(),
+            theme.operation_warning_style(),
+        ),
         Span::raw("  "),
         Span::styled(
             "y",

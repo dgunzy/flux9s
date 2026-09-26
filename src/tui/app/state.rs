@@ -5,6 +5,7 @@
 
 use crate::kube::objects::ObjectRef;
 use crate::tui::app::async_task::AsyncTask;
+use crate::tui::app::live_task::LiveTask;
 use crate::tui::submenu::SubmenuState;
 use crate::watcher::ResourceKey;
 use std::collections::HashSet;
@@ -61,6 +62,32 @@ impl View {
             View::WorkloadDetail => Some(&mut vs.workload_scroll_offset),
             View::Pulse => Some(&mut vs.pulse_scroll_offset),
             _ => None,
+        }
+    }
+
+    /// Footer key hints for this view. Views that act on Flux resources share
+    /// the full resource set; the others advertise only the keys they handle,
+    /// so e.g. `r` reads "Restart" in the workload views, not "Resume".
+    /// Add a new view's hints here (and its key handling in `events.rs`).
+    pub fn footer_commands(self) -> Vec<crate::tui::keybindings::NavigationCommand> {
+        use crate::tui::keybindings as kb;
+        match self {
+            View::WorkloadList => kb::get_workload_list_commands(),
+            View::WorkloadDetail => kb::get_workload_detail_commands(),
+            View::InventoryList => kb::get_inventory_commands(),
+            View::Logs => kb::get_logs_commands(),
+            View::EventList => kb::get_events_commands(),
+            View::Pulse => kb::get_pulse_commands(),
+            View::ResourceList
+            | View::ResourceDetail
+            | View::ResourceDescribe
+            | View::ResourceYAML
+            | View::ResourceTrace
+            | View::ResourceGraph
+            | View::ResourceFavorites
+            | View::ResourceHistory
+            | View::ResourceEdit
+            | View::Help => kb::get_navigation_commands(),
         }
     }
 
@@ -375,10 +402,11 @@ pub struct AsyncOperationState {
     /// Relationship graph backing the graph view.
     pub graph: AsyncTask<ResourceKey, crate::trace::ResourceGraph>,
     /// Workload drill-down fetch backing the workload detail view (#194).
-    pub workload: AsyncTask<ResourceKey, crate::kube::workloads::WorkloadData>,
+    /// Live (watch-driven) data for the workload detail view (#194).
+    pub workload: LiveTask<ResourceKey, crate::kube::workloads::WorkloadData>,
     /// Per-object health for the inventory list (#262), aligned by index
     /// with the requested entries.
-    pub inventory_status: AsyncTask<
+    pub inventory_status: LiveTask<
         Vec<crate::kube::inventory::InventoryEntry>,
         Vec<crate::kube::object_status::ObjectStatus>,
     >,
@@ -388,8 +416,12 @@ pub struct AsyncOperationState {
     pub operation: AsyncTask<PendingOperation, ()>,
     /// Keybinding of the last dispatched operation, for the success message.
     pub last_operation_key: Option<char>,
-    /// Operation waiting for the user's confirmation dialog.
-    pub confirmation_pending: Option<PendingOperation>,
+    /// Write action waiting for the user's confirmation dialog.
+    pub confirmation_pending: Option<Confirmation>,
+    /// Confirmed workload restart / pod delete in flight (#263).
+    /// Resolves to the action itself so the success message can name it.
+    pub workload_action:
+        AsyncTask<crate::kube::workloads::WorkloadAction, crate::kube::workloads::WorkloadAction>,
 
     // Edit operation
     /// Resource being edited (key used for SSA apply)
@@ -420,6 +452,7 @@ impl Default for AsyncOperationState {
             operation: Default::default(),
             last_operation_key: None,
             confirmation_pending: None,
+            workload_action: Default::default(),
             edit_pending: None,
             edit_full_yaml: None,
             edit_save_pending: None,
@@ -442,6 +475,7 @@ impl AsyncOperationState {
         self.operation.clear();
         self.last_operation_key = None;
         self.confirmation_pending = None;
+        self.workload_action.clear();
 
         self.edit_pending = None;
         self.edit_full_yaml = None;
@@ -454,6 +488,15 @@ impl AsyncOperationState {
 }
 
 /// Pending operation awaiting confirmation
+/// A write action waiting on the confirmation dialog.
+#[derive(Clone, Debug)]
+pub enum Confirmation {
+    /// A Flux operation (suspend, delete, …) on a watched resource.
+    Flux(PendingOperation),
+    /// A workload rollout restart or pod delete (#263).
+    Workload(crate::kube::workloads::WorkloadAction),
+}
+
 #[derive(Clone, Debug)]
 pub struct PendingOperation {
     pub resource_type: String,
@@ -594,6 +637,33 @@ impl KubeEventStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_view_footer_offers_help_and_back() {
+        let views = [
+            View::ResourceList,
+            View::ResourceDetail,
+            View::ResourceDescribe,
+            View::ResourceYAML,
+            View::ResourceTrace,
+            View::ResourceGraph,
+            View::ResourceFavorites,
+            View::ResourceHistory,
+            View::EventList,
+            View::Logs,
+            View::WorkloadList,
+            View::WorkloadDetail,
+            View::InventoryList,
+            View::Pulse,
+            View::ResourceEdit,
+            View::Help,
+        ];
+        for view in views {
+            let keys: Vec<_> = view.footer_commands().iter().map(|c| c.key).collect();
+            assert!(keys.contains(&"?"), "{view:?} footer lacks help");
+            assert!(keys.contains(&"Esc/q"), "{view:?} footer lacks back");
+        }
+    }
 
     fn make_event(uid: &str, seconds_ago: i64) -> crate::kube::events::KubeEventInfo {
         crate::kube::events::KubeEventInfo::from_json(&serde_json::json!({

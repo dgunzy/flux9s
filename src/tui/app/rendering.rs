@@ -130,11 +130,13 @@ impl App {
             // Minimum height for ASCII art + borders
             use crate::tui::constants::MIN_HEADER_HEIGHT;
             self.ui_state.cached_header_height = (content_lines + 2).max(MIN_HEADER_HEIGHT);
-
-            // Calculate footer height using centralized function
-            self.ui_state.cached_footer_height =
-                calculate_footer_height(terminal_width, self.has_connection_error());
         }
+
+        // The footer's hints depend on the current view, so its height is
+        // recomputed every frame (cheap) instead of living in the layout cache.
+        let footer_commands = self.footer_commands();
+        self.ui_state.cached_footer_height =
+            calculate_footer_height(terminal_width, &footer_commands);
 
         let header_height = self.ui_state.cached_header_height;
         let footer_constraint = self.ui_state.cached_footer_height;
@@ -202,6 +204,7 @@ impl App {
             );
         }
         self.render_main(f, chunks[1]);
+        let confirmation_message = self.confirmation_message();
         render_footer(
             f,
             chunks[2],
@@ -213,12 +216,10 @@ impl App {
             &self.view_state.text_search.query,
             self.ui_state.show_help,
             self.ui_state.show_quit_confirm,
-            &self.async_state.confirmation_pending,
+            confirmation_message.as_deref(),
             &self.ui_state.status_message,
-            &self.operation_registry,
-            &self.state,
             &self.theme,
-            self.has_connection_error(),
+            &footer_commands,
         );
     }
 
@@ -309,17 +310,8 @@ impl App {
             return;
         }
 
-        if self.async_state.confirmation_pending.is_some() {
-            if let Some(ref confirmation) = self.async_state.confirmation_pending {
-                render_confirmation(
-                    f,
-                    area,
-                    confirmation,
-                    &self.operation_registry,
-                    &self.state,
-                    &self.theme,
-                );
-            }
+        if let Some(message) = self.confirmation_message() {
+            render_confirmation(f, area, &message, &self.theme);
             return;
         }
 

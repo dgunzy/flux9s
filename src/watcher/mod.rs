@@ -44,12 +44,12 @@ const WATCH_BACKOFF_MIN: Duration = Duration::from_millis(800);
 /// Retries forever — `next()` never returns `None` — so a watcher is never
 /// permanently abandoned during a prolonged outage. `reset()` is called by
 /// `StreamBackoff` on every successful watch event, returning to the minimum.
-struct CappedBackoff {
+pub(crate) struct CappedBackoff {
     current: Duration,
 }
 
 impl CappedBackoff {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             current: WATCH_BACKOFF_MIN,
         }

@@ -140,6 +140,41 @@ impl App {
         }
     }
 
+    /// Question for the pending confirmation dialog, if one is open.
+    pub fn confirmation_message(&self) -> Option<String> {
+        use super::state::Confirmation;
+        Some(match self.async_state.confirmation_pending.as_ref()? {
+            Confirmation::Flux(pending) => self
+                .operation_registry
+                .get_by_keybinding(pending.operation_key)
+                .and_then(|operation| {
+                    self.state
+                        .get(&crate::watcher::resource_key(
+                            &pending.namespace,
+                            &pending.name,
+                            &pending.resource_type,
+                        ))
+                        .map(|resource| operation.confirmation_message(&resource))
+                })
+                .unwrap_or_else(|| "Resource not found".to_string()),
+            Confirmation::Workload(action) => action.confirmation_message(),
+        })
+    }
+
+    /// Record a finished workload action (#263). The live workload watch
+    /// picks up the resulting rollout / replacement pod on its own.
+    pub fn set_workload_action_result(
+        &mut self,
+        result: anyhow::Result<crate::kube::workloads::WorkloadAction>,
+    ) {
+        match result {
+            Ok(action) => {
+                self.set_status_message((action.success_message(), false));
+            }
+            Err(e) => self.set_status_message((format!("Operation failed: {:#}", e), true)),
+        }
+    }
+
     /// Set operation result and update status message
     pub fn set_operation_result(&mut self, result: anyhow::Result<()>) {
         match result {
@@ -298,5 +333,47 @@ mod tests {
         app.set_edit_save_result(Ok(()));
 
         assert_eq!(app.view_state.current_view, View::ResourceYAML);
+    }
+
+    #[test]
+    fn workload_action_success_reports() {
+        use crate::kube::workloads::{WorkloadAction, WorkloadData};
+        let mut app = create_test_app();
+        app.view_state.current_view = super::super::state::View::WorkloadDetail;
+        app.async_state.workload.set_result(WorkloadData {
+            kind: "Deployment".into(),
+            name: "web".into(),
+            namespace: "apps".into(),
+            ready: Some(true),
+            summary: Vec::new(),
+            containers: Vec::new(),
+            pods: Vec::new(),
+            events: Vec::new(),
+            events_error: None,
+            pod_selector: None,
+        });
+
+        app.set_workload_action_result(Ok(WorkloadAction::Restart {
+            kind: "Deployment".into(),
+            namespace: "apps".into(),
+            name: "web".into(),
+        }));
+
+        assert_eq!(
+            app.ui_state.status_message,
+            Some(("Restarted Deployment web".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn workload_action_failure_reports_error() {
+        let mut app = create_test_app();
+        app.set_workload_action_result(Err(anyhow::anyhow!("forbidden")));
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(msg, is_error)| *is_error && msg.contains("forbidden"))
+        );
     }
 }

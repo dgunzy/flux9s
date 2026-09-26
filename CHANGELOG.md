@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Workload actions: `r` rolls out a restart of a Deployment/StatefulSet/DaemonSet from the workload list or detail, and `Ctrl+d` in workload detail deletes a pod (with a picker for several). Both are confirmed and blocked in read-only mode (#263)
+- Workload detail and inventory statuses are live — driven by the watch API while the view is open instead of fetched once
+- Footer hints follow the current view (e.g. `r Restart` / `^d Delete pod` in workload detail instead of the Flux resource keys)
 - Inventory drill-down shows live health (STATUS + MESSAGE) for every managed object, using kstatus rules (#262)
 - `Enter`/`d` and `y` on an inventory row open the describe and YAML views for any native Kubernetes object, resolved through API discovery; Secret values are redacted (#262)
 - `Enter` on an event whose object flux9s doesn't watch opens its describe view instead of a status message (#262)
