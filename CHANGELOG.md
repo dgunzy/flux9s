@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-27
+
+# Version 1.1.0 Changelog
+
+**Added**
+- Workload create, update, delete (CUD) operations (#269)
+- Inventory drill down functionality (#268)
+
+**Changed**
+- Updated clap_complete from 4.6.10 to 4.6.11 (#261)
+- Updated cargo dependencies in minor-patch group (#260)
+
 ### Added
 
 - Workload actions: `r` rolls out a restart of a Deployment/StatefulSet/DaemonSet from the workload list or detail, and `Ctrl+d` in workload detail deletes a pod (with a picker for several). Both are confirmed and blocked in read-only mode (#263)
