@@ -15,6 +15,7 @@ pub mod api;
 pub mod events;
 pub mod fetch;
 pub mod health;
+pub mod helm_values;
 pub mod inventory;
 pub mod live;
 pub mod logs;

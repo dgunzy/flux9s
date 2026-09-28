@@ -6,6 +6,7 @@
 use super::core::App;
 use super::state::{Confirmation, HealthFilter, PendingOperation, View};
 use crate::kube::objects::ObjectRef;
+use crate::models::FluxResourceKind;
 use crate::tui::commands;
 use crate::watcher::ResourceKey;
 use crossterm::event::KeyEvent;
@@ -494,6 +495,14 @@ impl App {
                     self.view_state.text_search.clear();
                     self.view_state.current_view = View::WorkloadDetail;
                 }
+            }
+            // HelmRelease effective values (#264).
+            crossterm::event::KeyCode::Char('v') => self.open_helm_values(),
+            // Reveal / hide Secret-sourced values in the values view.
+            crossterm::event::KeyCode::Char('x')
+                if self.view_state.current_view == View::HelmValues =>
+            {
+                self.toggle_helm_values_secrets();
             }
             // Switch container in a multi-container pod's log stream.
             crossterm::event::KeyCode::Char('c') if self.view_state.current_view == View::Logs => {
@@ -1182,7 +1191,12 @@ impl App {
             | View::ResourceYAML
             | View::ResourceTrace
             | View::ResourceHistory
-            | View::ResourceGraph => {
+            | View::ResourceGraph
+            | View::HelmValues => {
+                // Leaving the values view stops its live watch.
+                if self.view_state.current_view == View::HelmValues {
+                    self.async_state.helm_values.clear();
+                }
                 // If we drilled into this detail view from the graph, return to
                 // the graph; otherwise go back to the previous list view
                 // (favourites if we came from there, else the main resource list).
@@ -1351,6 +1365,63 @@ impl App {
                 );
             }
         }
+    }
+
+    /// `v`: open the effective values of the current HelmRelease.
+    fn open_helm_values(&mut self) {
+        let Some(resource) = self.get_current_resource() else {
+            return;
+        };
+        if FluxResourceKind::parse_optional(&resource.resource_type)
+            != Some(FluxResourceKind::HelmRelease)
+        {
+            self.set_status_message((
+                format!(
+                    "Values are only available for HelmReleases, not {}",
+                    resource.resource_type
+                ),
+                true,
+            ));
+            return;
+        }
+        let Some(key) = self.prepare_selected_resource_key_for_nested_view() else {
+            return;
+        };
+        self.selection_state.native_object = None;
+        self.async_state
+            .helm_values
+            .request(super::state::HelmValuesRequest {
+                key,
+                reveal_secrets: false,
+            });
+        self.view_state.helm_values_scroll_offset = 0;
+        self.view_state.text_search.clear();
+        self.view_state.current_view = View::HelmValues;
+    }
+
+    /// `x` in the values view: re-resolve with Secret values shown / hidden.
+    fn toggle_helm_values_secrets(&mut self) {
+        let Some(key) = self
+            .selection_state
+            .selected_resource_key
+            .as_deref()
+            .and_then(ResourceKey::parse)
+        else {
+            return;
+        };
+        let reveal = !self
+            .async_state
+            .helm_values
+            .result()
+            .is_some_and(|v| v.secrets_revealed);
+        self.async_state
+            .helm_values
+            .request(super::state::HelmValuesRequest {
+                key,
+                reveal_secrets: reveal,
+            });
+        // No status message: the title's "[secrets shown]" marks the state,
+        // and a message would swallow the next Esc.
     }
 
     /// `c` in the log view: pick another container of the streamed pod.
@@ -2265,6 +2336,75 @@ mod tests {
         app.state.upsert(
             resource_key(&resource.namespace, &resource.name, &resource.resource_type),
             resource,
+        );
+    }
+
+    fn add_helm_release(app: &mut App) {
+        let resource = ResourceInfo {
+            name: "podinfo".to_string(),
+            namespace: "apps".to_string(),
+            resource_type: "HelmRelease".to_string(),
+            age: None,
+            suspended: Some(false),
+            ready: Some(true),
+            message: None,
+            revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: vec![],
+        };
+        app.state.upsert(
+            resource_key(&resource.namespace, &resource.name, &resource.resource_type),
+            resource,
+        );
+    }
+
+    #[test]
+    fn v_opens_live_values_for_helm_release_and_x_toggles_secrets() {
+        let mut app = create_test_app(false);
+        add_helm_release(&mut app);
+        app.view_state.current_view = View::ResourceList;
+
+        app.handle_key(make_key(KeyCode::Char('v')));
+
+        assert_eq!(app.view_state.current_view, View::HelmValues);
+        let request = app.async_state.helm_values.pending().cloned().unwrap();
+        assert_eq!(request.key.to_key_string(), "HelmRelease:apps:podinfo");
+        assert!(!request.reveal_secrets);
+        // Flux operations still target the release from the values view.
+        assert_eq!(
+            app.view_target().map(|rk| rk.to_key_string()),
+            Some("HelmRelease:apps:podinfo".to_string())
+        );
+
+        app.handle_key(make_key(KeyCode::Char('x')));
+        assert!(
+            app.async_state
+                .helm_values
+                .pending()
+                .is_some_and(|r| r.reveal_secrets)
+        );
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert!(!app.async_state.helm_values.is_loading(), "watch stopped");
+    }
+
+    #[test]
+    fn v_on_non_helm_release_explains() {
+        let mut app = create_test_app(false);
+        add_resource(&mut app); // a Kustomization
+        app.view_state.current_view = View::ResourceList;
+
+        app.handle_key(make_key(KeyCode::Char('v')));
+
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(msg, err)| *err && msg.contains("only available for HelmReleases"))
         );
     }
 

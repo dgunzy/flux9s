@@ -70,6 +70,7 @@ Use these keyboard shortcuts to navigate flux9s:
 | `f`       | Toggle favorite                                         |
 | `g`       | View resource graph (Kustomization, HelmRelease, etc.)  |
 | `h`       | View reconciliation history                             |
+| `v`       | HelmRelease effective values                            |
 | `t`       | Trace ownership chain                                   |
 | `W`       | Reconcile with source                                   |
 | `Ctrl+d`  | Delete resource (with confirmation)                     |
@@ -257,6 +258,24 @@ The graph view displays:
 - `Esc` / `Backspace` - Return to the graph (when you opened a view from it), then back to the resource list.
 
 Focus starts on the resource you opened the graph from, so you can immediately walk its sources and dependencies.
+
+### HelmRelease Values (`v`)
+
+`v` on a HelmRelease shows the values Helm actually receives — every
+`spec.valuesFrom` ConfigMap/Secret merged in order, then `spec.values` on top —
+exactly as helm-controller builds them:
+
+- A sources list shows each reference (`Kind/name [valuesKey → targetPath]`)
+  and whether it was applied, skipped (optional and absent), or failed (not
+  found, missing key, forbidden, invalid YAML). A failed source doesn't hide
+  the rest — the view shows what the other sources produce.
+- `targetPath` values follow Helm `--set` typing (quoted strings, `true`/`false`,
+  integers, `{a,b}` lists, `\.` for literal dots).
+- Values that come from a Secret show as `<redacted>` unless something later
+  overrides them; `x` reveals / hides them (the title reads `[secrets shown]`).
+- The view is live: changes to the release or any referenced ConfigMap/Secret
+  update it in place. `/` searches, and Flux keys like `R` still act on the
+  release.
 
 ### Reconciliation History (`h`)
 

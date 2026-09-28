@@ -376,6 +376,18 @@ impl App {
                         &self.theme,
                     );
                 }
+                View::HelmValues => {
+                    views::render_helm_values(
+                        f,
+                        area,
+                        &self.selection_state.selected_resource_key,
+                        self.async_state.helm_values.result(),
+                        self.async_state.helm_values.is_loading(),
+                        &mut self.view_state.helm_values_scroll_offset,
+                        &mut self.view_state.text_search,
+                        &self.theme,
+                    );
+                }
                 View::ResourceTrace => {
                     views::trace::render_resource_trace(
                         f,

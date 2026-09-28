@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `v` on a HelmRelease shows its effective values: `valuesFrom` ConfigMaps/Secrets merged in order (honouring `valuesKey`, `targetPath`, `optional`) with `spec.values` last, a per-source outcome list, Secret values redacted until `x` reveals them, and live updates (#264)
+
 ### Fixed
 
 - Logs for multi-container pods failed with an API error; they now stream the default container (`kubectl.kubernetes.io/default-container`, else the first) and `c` switches containers

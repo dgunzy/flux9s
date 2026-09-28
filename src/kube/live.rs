@@ -133,6 +133,96 @@ pub async fn watch_workload(
     }
 }
 
+/// Keep a HelmRelease's effective values live (#264): send the initial
+/// values, then recompute whenever the release or any ConfigMap/Secret it
+/// references changes. When `valuesFrom` itself changes, the set of watched
+/// objects is rebuilt.
+///
+/// Ends when the receiver is dropped (view closed) or the initial fetch fails.
+pub async fn watch_helm_values(
+    client: kube::Client,
+    namespace: String,
+    name: String,
+    reveal_secrets: bool,
+    tx: UnboundedSender<anyhow::Result<crate::kube::helm_values::HelmValues>>,
+) {
+    use crate::kube::helm_values::fetch_helm_values;
+    use k8s_openapi::api::core::v1::{ConfigMap, Secret};
+
+    let initial = fetch_helm_values(&client, &namespace, &name, reveal_secrets).await;
+    let mut refs: Vec<_> = match &initial {
+        Ok(values) => values.sources.iter().map(|s| s.reference.clone()).collect(),
+        Err(_) => Vec::new(),
+    };
+    let failed = initial.is_err();
+    if tx.send(initial).is_err() || failed {
+        return;
+    }
+    let release = match crate::kube::get_api_resource_with_fallback(
+        &client,
+        "HelmRelease",
+        &namespace,
+        &name,
+    )
+    .await
+    {
+        Ok(resource) => resource,
+        Err(e) => {
+            tracing::warn!("Live values watch unavailable for {name}: {e:#}");
+            return;
+        }
+    };
+
+    loop {
+        let by_name = |n: &str| watcher::Config::default().fields(&format!("metadata.name={n}"));
+        let mut streams: Vec<BoxStream<'static, bool>> = vec![changes(change_stream(
+            Api::<DynamicObject>::namespaced_with(client.clone(), &namespace, &release),
+            by_name(&name),
+        ))];
+        for reference in &refs {
+            let config = by_name(&reference.name);
+            match reference.kind.as_str() {
+                "ConfigMap" => streams.push(changes(change_stream(
+                    Api::<ConfigMap>::namespaced(client.clone(), &namespace),
+                    config,
+                ))),
+                "Secret" => streams.push(changes(change_stream(
+                    Api::<Secret>::namespaced(client.clone(), &namespace),
+                    config,
+                ))),
+                _ => {}
+            }
+        }
+
+        let mut events = futures::stream::select_all(streams);
+        let rebuild = loop {
+            let Some(changed) = events.next().await else {
+                return; // Every watch ended (forbidden); keep the last values.
+            };
+            if !changed {
+                continue;
+            }
+            tokio::time::sleep(WORKLOAD_DEBOUNCE).await;
+            while let Some(Some(_)) = events.next().now_or_never() {}
+            let result = fetch_helm_values(&client, &namespace, &name, reveal_secrets).await;
+            let new_refs: Option<Vec<_>> = result
+                .as_ref()
+                .ok()
+                .map(|v| v.sources.iter().map(|s| s.reference.clone()).collect());
+            if tx.send(result).is_err() {
+                return;
+            }
+            // valuesFrom changed: watch the new set of objects.
+            if let Some(new_refs) = new_refs
+                && new_refs != refs
+            {
+                break new_refs;
+            }
+        };
+        refs = rebuild;
+    }
+}
+
 /// Inventory rows sharing one watch: the row indexes for each object name.
 type RowsByName = HashMap<String, Vec<usize>>;
 

@@ -197,7 +197,7 @@ pub fn render_resource_yaml(
 }
 
 /// Highlight a YAML line using the active theme's label, value, and secondary text colors.
-fn highlight_yaml_line(line: &str, theme: &Theme) -> Line<'static> {
+pub(crate) fn highlight_yaml_line(line: &str, theme: &Theme) -> Line<'static> {
     let mut spans = Vec::new();
     let mut chars = line.chars().peekable();
     let mut current_token = String::new();
