@@ -88,6 +88,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         ("</>", "Search in YAML/describe/trace/logs"),
         ("<n>/<N>", "Next/prev search match"),
         ("<G>", "Follow newest line (logs view)"),
+        ("<c>", "Switch container (logs view)"),
         ("<q>/<Esc>", "Back / quit at root"),
     ];
     render_help_column(f, column_chunks[2], "NAVIGATION", &nav_items, theme);

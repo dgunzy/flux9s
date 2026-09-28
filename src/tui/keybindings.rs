@@ -119,6 +119,7 @@ pub fn get_logs_commands() -> Vec<NavigationCommand> {
         NavigationCommand::new("/", "Search"),
         NavigationCommand::new("n/N", "Next/Prev"),
         NavigationCommand::new("G", "Follow"),
+        NavigationCommand::new("c", "Container"),
     ];
     commands.extend(common_tail());
     commands

@@ -495,6 +495,10 @@ impl App {
                     self.view_state.current_view = View::WorkloadDetail;
                 }
             }
+            // Switch container in a multi-container pod's log stream.
+            crossterm::event::KeyCode::Char('c') if self.view_state.current_view == View::Logs => {
+                self.open_log_container_picker();
+            }
             // Stream logs for the detailed workload's pods (#194).
             crossterm::event::KeyCode::Char('l')
                 if self.view_state.current_view == View::WorkloadDetail =>
@@ -951,6 +955,8 @@ impl App {
                                     },
                                 );
                             }
+                        } else if command == "log-container" {
+                            self.switch_log_container(value);
                         } else if command == "pod-logs" {
                             // Workload pod logs: the value is "namespace/pod".
                             if let Some((namespace, pod)) = value.split_once('/') {
@@ -1345,6 +1351,45 @@ impl App {
                 );
             }
         }
+    }
+
+    /// `c` in the log view: pick another container of the streamed pod.
+    fn open_log_container_picker(&mut self) {
+        let Some(session) = self.logs.session.as_ref() else {
+            return;
+        };
+        if session.containers.len() < 2 {
+            self.set_status_message(("This pod has a single container".to_string(), false));
+            return;
+        }
+        let items = session
+            .containers
+            .iter()
+            .map(|name| {
+                let display = if session.container.as_deref() == Some(name.as_str()) {
+                    format!("{name} (current)")
+                } else {
+                    name.clone()
+                };
+                crate::tui::submenu::SubmenuItem::with_display(name.clone(), display)
+            })
+            .collect();
+        self.view_state.submenu_state = Some(
+            crate::tui::submenu::SubmenuState::new("log-container".to_string(), items)
+                .with_title("Container".to_string())
+                .with_help("j/k: Navigate | /: Filter | Enter: Stream | Esc: Cancel".to_string()),
+        );
+    }
+
+    /// Restart the log stream on another container of the same pod.
+    fn switch_log_container(&mut self, container: String) {
+        let Some(session) = self.logs.session.as_ref() else {
+            return;
+        };
+        let (namespace, pod) = (session.namespace.clone(), session.pod.clone());
+        self.logs.request_container(namespace, pod, Some(container));
+        self.view_state.log_scroll_offset = 0;
+        self.view_state.text_search.clear();
     }
 
     /// Queue a workload action for confirmation, unless read-only (#263).
@@ -3334,6 +3379,34 @@ mod tests {
         let labels = footer_labels(&app);
         assert!(labels.contains(&("d", "Describe")));
         assert!(!labels.iter().any(|(_, label)| *label == "Suspend"));
+    }
+
+    #[tokio::test]
+    async fn c_in_logs_switches_container() {
+        use crate::tui::app::logs::LogEvent;
+        let mut app = create_test_app(false);
+        app.open_pod_logs("apps", "web-abc");
+        let (_, tx) = app.logs.dispatch().unwrap();
+        tx.send(LogEvent::Containers {
+            selected: "app".to_string(),
+            available: vec!["app".to_string(), "istio-proxy".to_string()],
+        })
+        .unwrap();
+        app.logs.drain();
+
+        app.handle_key(make_key(KeyCode::Char('c')));
+        let submenu = app.view_state.submenu_state.as_ref().expect("picker opens");
+        assert_eq!(submenu.command, "log-container");
+        assert_eq!(submenu.items[0].display_text, "app (current)");
+
+        app.handle_key(make_key(KeyCode::Char('j')));
+        app.handle_key(make_key(KeyCode::Enter));
+
+        // A new stream is queued for the chosen container of the same pod.
+        let (request, _) = app.logs.dispatch().expect("switch queues a stream");
+        assert_eq!(request.pod, "web-abc");
+        assert_eq!(request.container.as_deref(), Some("istio-proxy"));
+        assert_eq!(app.view_state.current_view, View::Logs);
     }
 
     fn pending_workload_action(app: &App) -> Option<crate::kube::workloads::WorkloadAction> {

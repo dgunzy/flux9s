@@ -335,6 +335,9 @@ explain.
 - The stream tails recent lines and follows new output live; scrolling up
   (`j`/`k`, page keys) pauses following and `G` jumps back to the newest line
 - `/` searches the log buffer with `n`/`N` to cycle matches
+- Multi-container pods stream their default container — the
+  `kubectl.kubernetes.io/default-container` annotation, else the first
+  container, as `kubectl logs` does — named in the title; `c` picks another
 - The buffer is bounded (oldest lines evicted), and the stream runs only while
   the view is open — `Esc` stops it and returns to where you came from
 
