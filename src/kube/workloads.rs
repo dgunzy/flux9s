@@ -165,6 +165,8 @@ pub struct PodRow {
     /// Total container restarts.
     pub restarts: i64,
     pub age: Option<chrono::DateTime<chrono::Utc>>,
+    /// Summed container requests/limits, for the usage columns (#265).
+    pub resources: crate::kube::metrics::PodResources,
 }
 
 /// Everything the workload detail view renders.
@@ -437,6 +439,7 @@ fn pod_row_from_json(pod: &Value) -> Option<PodRow> {
         ready: format!("{ready_count}/{total}"),
         restarts,
         age,
+        resources: crate::kube::metrics::pod_resources(pod),
     })
 }
 

@@ -428,6 +428,9 @@ pub struct AsyncOperationState {
     pub last_operation_key: Option<char>,
     /// Write action waiting for the user's confirmation dialog.
     pub confirmation_pending: Option<Confirmation>,
+    /// Live pod CPU/memory for the workload detail view (#265).
+    pub workload_metrics:
+        LiveTask<crate::kube::metrics::MetricsRequest, crate::kube::metrics::MetricsSnapshot>,
     /// Live effective values for the HelmRelease values view (#264).
     pub helm_values: LiveTask<HelmValuesRequest, crate::kube::helm_values::HelmValues>,
     /// Confirmed workload restart / pod delete in flight (#263).
@@ -466,6 +469,7 @@ impl Default for AsyncOperationState {
             confirmation_pending: None,
             workload_action: Default::default(),
             helm_values: Default::default(),
+            workload_metrics: Default::default(),
             edit_pending: None,
             edit_full_yaml: None,
             edit_save_pending: None,
@@ -490,6 +494,7 @@ impl AsyncOperationState {
         self.confirmation_pending = None;
         self.workload_action.clear();
         self.helm_values.clear();
+        self.workload_metrics.clear();
 
         self.edit_pending = None;
         self.edit_full_yaml = None;

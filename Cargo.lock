@@ -776,6 +776,7 @@ dependencies = [
  "directories",
  "flate2",
  "futures",
+ "http",
  "insta",
  "k8s-openapi",
  "kube",

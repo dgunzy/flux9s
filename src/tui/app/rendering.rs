@@ -526,6 +526,7 @@ impl App {
                         f,
                         area,
                         self.async_state.workload.result(),
+                        self.async_state.workload_metrics.result(),
                         self.async_state.workload.is_loading(),
                         &mut self.view_state.workload_scroll_offset,
                         &mut self.view_state.text_search,

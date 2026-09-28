@@ -485,6 +485,7 @@ impl App {
                     .workload_rows
                     .get(self.view_state.selected_index)
                 {
+                    self.async_state.workload_metrics.clear();
                     self.async_state.workload.request(ResourceKey::new(
                         row.kind.clone(),
                         row.namespace.clone(),
@@ -525,6 +526,7 @@ impl App {
                     .workload_rows
                     .get(self.view_state.selected_index)
                 {
+                    self.async_state.workload_metrics.clear();
                     self.async_state.workload.request(ResourceKey::new(
                         row.kind.clone(),
                         row.namespace.clone(),
@@ -713,6 +715,7 @@ impl App {
                     self.view_state.current_view = View::ResourceGraph;
                 } else if self.view_state.current_view == View::WorkloadDetail {
                     self.async_state.workload.clear();
+                    self.async_state.workload_metrics.clear();
                     self.logs_after_workload_load = false;
                     self.view_state.text_search.clear();
                     self.view_state.current_view = View::WorkloadList;
@@ -1250,6 +1253,7 @@ impl App {
             }
             View::WorkloadDetail => {
                 self.async_state.workload.clear();
+                self.async_state.workload_metrics.clear();
                 self.logs_after_workload_load = false;
                 self.view_state.text_search.clear();
                 self.view_state.current_view = View::WorkloadList;
@@ -2297,6 +2301,7 @@ mod tests {
             default_namespace: "".to_string(),
             default_controller_namespace: "".to_string(),
             discover_flux_resources: false,
+            metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             namespace_hotkeys: vec![],
             ui: UiConfig {
                 enable_mouse: false,
@@ -3430,6 +3435,7 @@ mod tests {
                     ready: "1/1".to_string(),
                     restarts: 0,
                     age: None,
+                    resources: Default::default(),
                 })
                 .collect(),
             events: Vec::new(),
@@ -3547,6 +3553,33 @@ mod tests {
         assert_eq!(request.pod, "web-abc");
         assert_eq!(request.container.as_deref(), Some("istio-proxy"));
         assert_eq!(app.view_state.current_view, View::Logs);
+    }
+
+    #[test]
+    fn workload_load_starts_metrics_once_and_back_stops_them() {
+        let mut app = app_on_graph_with_workloads();
+        app.view_state.current_view = View::WorkloadDetail;
+        let mut data = workload_data(&["podinfo-abc"]);
+        data.pod_selector = Some("app=podinfo".to_string());
+
+        app.on_workload_loaded(data.clone());
+        let request = app.async_state.workload_metrics.pending().cloned().unwrap();
+        assert_eq!(request.selector, "app=podinfo");
+        assert_eq!(request.namespace, "flux-system");
+        let (_, _tx) = app.async_state.workload_metrics.dispatch().unwrap();
+
+        // A live refresh with the same selector keeps the running task (and
+        // its CPU counters) instead of restarting it.
+        app.on_workload_loaded(data);
+        assert!(app.async_state.workload_metrics.pending().is_none());
+        assert!(app.async_state.workload_metrics.key().is_some());
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::WorkloadList);
+        assert!(
+            app.async_state.workload_metrics.key().is_none(),
+            "stopped on leave"
+        );
     }
 
     fn pending_workload_action(app: &App) -> Option<crate::kube::workloads::WorkloadAction> {

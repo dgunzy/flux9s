@@ -37,7 +37,8 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 - **YAML viewing** - Inspect full resource manifests
 - **Kubernetes Events** - Per-resource events in the describe view, plus a live `:events` feed for the current namespace or cluster
 - **Controller logs** - Stream any Flux controller pod's logs live with `:logs` (follow, search, bounded buffer)
-- **Workload drill-down** - Open a graph workload group to walk Deployments/StatefulSets/DaemonSets: rollout status, containers, pods, events, and pod logs
+- **Workload drill-down** - Open a graph workload group to walk Deployments/StatefulSets/DaemonSets: live rollout status, containers, pods, events, pod logs, and restart/delete-pod actions
+- **Pod usage** - Live CPU/memory against limits, with no setup: auto-detects kubelet metrics (`nodes/proxy`), then metrics-server, then falls back to requests/limits
 - **Pulse dashboard** - `:pulse` shows cluster health at a glance: per-kind counts, recent failures, and Flux distribution info
 - **CRD discovery (opt-in)** - `discoverFluxResources: true` dynamically shows any CRD labeled `app.kubernetes.io/part-of=flux` (Flagger, tofu-controller, ExternalArtifact-SDK controllers), view-only with generic columns
 - **Graph visualization** - Visualize resource relationships and dependencies (Kustomization, HelmRelease, etc.)

@@ -99,6 +99,9 @@ tokio = { version = "1.48", features = [
     "time",
 ] }
 futures = "0.3"
+# Raw requests for the kubelet metrics proxy (#265). Already in the tree via
+# kube; declared directly because kube doesn't re-export it.
+http = "1"
 
 # TUI framework (optional — enable with "tui" feature)
 # default-features disabled to keep the dependency tree minimal (no calendar

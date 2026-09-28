@@ -408,6 +408,15 @@ pub async fn run_tui_with_async_init(
                         app.async_state.inventory_status.set_handle(handle);
                     }
 
+                    if let Some((request, tx)) = app.async_state.workload_metrics.dispatch() {
+                        let handle = tokio::spawn(crate::kube::metrics::watch_pod_metrics(
+                            client.clone(),
+                            request,
+                            tx,
+                        ));
+                        app.async_state.workload_metrics.set_handle(handle);
+                    }
+
                     if let Some((request, tx)) = app.async_state.helm_values.dispatch() {
                         let handle = tokio::spawn(crate::kube::live::watch_helm_values(
                             client.clone(),
@@ -547,6 +556,14 @@ pub async fn run_tui_with_async_init(
                 }
             }
 
+            // Usage is best-effort: failures never reach the status bar.
+            if let Some(result) = app.async_state.workload_metrics.poll() {
+                match result {
+                    Ok(snapshot) => app.async_state.workload_metrics.set_result(snapshot),
+                    Err(e) => tracing::debug!("Pod metrics unavailable: {:#}", e),
+                }
+            }
+
             if let Some(result) = app.async_state.helm_values.poll() {
                 match result {
                     Ok(values) => app.async_state.helm_values.set_result(values),
@@ -605,6 +622,7 @@ pub async fn run_tui_with_async_init(
                     }
                     Err(e) => {
                         app.async_state.workload.clear();
+                        app.async_state.workload_metrics.clear();
                         app.logs_after_workload_load = false;
                         app.set_status_message((format!("Failed to fetch workload: {}", e), true));
                         // Return to the workload list instead of an empty detail

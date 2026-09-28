@@ -29,6 +29,12 @@ pub struct Config {
     #[serde(default)]
     pub discover_flux_resources: bool,
 
+    /// Where pod CPU/memory usage comes from (#265): `auto` (kubelet via
+    /// `nodes/proxy` if permitted, else metrics-server, else none),
+    /// `kubelet`, `metrics-server`, or `none` (requests/limits only).
+    #[serde(default)]
+    pub metrics_source: crate::kube::metrics::MetricsSourceSetting,
+
     /// UI configuration
     #[serde(default)]
     pub ui: UiConfig,
@@ -83,6 +89,7 @@ impl Config {
             default_namespace: "flux-system".to_string(),
             default_controller_namespace: "flux-system".to_string(),
             discover_flux_resources: true,
+            metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             ui: UiConfig {
                 enable_mouse: true,
                 headless: true,
@@ -208,6 +215,7 @@ impl Default for Config {
             default_namespace: default_namespace(),
             default_controller_namespace: default_namespace(),
             discover_flux_resources: false,
+            metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             ui: UiConfig::default(),
             namespace_hotkeys: Vec::new(), // Empty means use auto-discovered defaults
             context_skins: HashMap::new(),
@@ -293,6 +301,15 @@ ui:
         let yaml = "readOnly: false\n";
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert!(config.editor.is_none());
+    }
+
+    #[test]
+    fn test_metrics_source_defaults_to_auto_and_parses() {
+        use crate::kube::metrics::MetricsSourceSetting;
+        let config: Config = serde_yaml::from_str("readOnly: false\n").unwrap();
+        assert_eq!(config.metrics_source, MetricsSourceSetting::Auto);
+        let config: Config = serde_yaml::from_str("metricsSource: metrics-server\n").unwrap();
+        assert_eq!(config.metrics_source, MetricsSourceSetting::MetricsServer);
     }
 
     #[test]
