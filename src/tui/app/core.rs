@@ -719,6 +719,18 @@ impl App {
     /// Store a loaded workload; when the load was initiated by `l` on the
     /// workload list, immediately continue into its pod logs.
     pub fn on_workload_loaded(&mut self, workload: crate::kube::workloads::WorkloadData) {
+        // Start (or keep) live usage for the workload's pods. Only restarted
+        // when the selector changes, so each refresh doesn't reset CPU rates.
+        if let Some(selector) = workload.pod_selector.clone() {
+            let request = crate::kube::metrics::MetricsRequest {
+                namespace: workload.namespace.clone(),
+                selector,
+                setting: self.config.metrics_source,
+            };
+            if self.async_state.workload_metrics.key() != Some(&request) {
+                self.async_state.workload_metrics.request(request);
+            }
+        }
         self.async_state.workload.set_result(workload);
         if std::mem::take(&mut self.logs_after_workload_load)
             && self.view_state.current_view == View::WorkloadDetail
@@ -1008,6 +1020,7 @@ mod tests {
             default_namespace: "".to_string(),
             default_controller_namespace: "".to_string(),
             discover_flux_resources: false,
+            metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             namespace_hotkeys: vec![],
             ui: UiConfig {
                 enable_mouse: false,

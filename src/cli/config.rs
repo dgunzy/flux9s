@@ -375,6 +375,7 @@ fn reference_text() -> String {
         "defaultNamespace - Starting namespace, or \"all\"/\"-A\" for all namespaces (default: flux-system)",
         "defaultControllerNamespace - Flux controller namespace (default: flux-system)",
         "discoverFluxResources - Discover CRDs labeled app.kubernetes.io/part-of=flux as view-only kinds (default: false)",
+        "metricsSource - Pod usage source: auto (kubelet via nodes/proxy, else metrics-server, else none), kubelet, metrics-server, none (default: auto)",
         "defaultResourceFilter - Resource type filter at startup, e.g. \"Kustomization\" (default: none, shows all)",
         "connectTimeoutSeconds - Startup Kubernetes API health-check timeout in seconds (default: 10)",
         "editor - Editor command for resource editing; falls back through $VISUAL, $EDITOR, vi (default: none)",

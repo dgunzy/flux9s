@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pod CPU/memory in workload detail: a Resources section with use / request / limit and a bar per pod, flagged near limits. Sources are auto-detected like ktop: kubelet resource metrics via `nodes/proxy`, then metrics-server, then requests/limits only. Every step fails closed, and `metricsSource` in config forces one. Hydrated immediately when a view opens, then polled every 15s with backoff, since neither source supports watch (#265)
 - `v` on a HelmRelease shows its effective values: `valuesFrom` ConfigMaps/Secrets merged in order (honouring `valuesKey`, `targetPath`, `optional`) with `spec.values` last, a per-source outcome list, Secret values redacted until `x` reveals them, and live updates (#264)
 
 ### Fixed

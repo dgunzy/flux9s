@@ -12,6 +12,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError}
 pub struct LiveTask<K, T> {
     /// Request queued by an event handler, waiting for the main loop.
     pending: Option<K>,
+    /// The most recent request, kept while its task runs (see [`Self::key`]).
+    key: Option<K>,
     /// Latest snapshot.
     result: Option<T>,
     /// Snapshots from the running task.
@@ -24,6 +26,7 @@ impl<K, T> Default for LiveTask<K, T> {
     fn default() -> Self {
         Self {
             pending: None,
+            key: None,
             result: None,
             rx: None,
             handle: None,
@@ -31,11 +34,18 @@ impl<K, T> Default for LiveTask<K, T> {
     }
 }
 
-impl<K, T> LiveTask<K, T> {
+impl<K: Clone, T> LiveTask<K, T> {
     /// Queue a new request, stopping any running task and dropping its data.
     pub fn request(&mut self, key: K) {
         self.clear();
+        self.key = Some(key.clone());
         self.pending = Some(key);
+    }
+
+    /// The request currently queued or running, if any — lets callers avoid
+    /// restarting a task that already serves the same request.
+    pub fn key(&self) -> Option<&K> {
+        self.key.as_ref()
     }
 
     /// Take the queued request and arm the channel the spawned task sends
@@ -99,6 +109,7 @@ impl<K, T> LiveTask<K, T> {
             handle.abort();
         }
         self.pending = None;
+        self.key = None;
         self.result = None;
         self.rx = None;
     }

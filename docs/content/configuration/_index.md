@@ -33,6 +33,7 @@ flux9s config path
 | `defaultResourceFilter` | string | *(none)* | Resource type shown at startup (e.g., `Kustomization`) |
 | `connectTimeoutSeconds` | integer | `10` | Startup Kubernetes API health-check timeout in seconds |
 | `discoverFluxResources` | boolean | `false` | Opt-in dynamic discovery of Flux-adjacent CRDs (see below) |
+| `metricsSource` | string | `auto` | Pod CPU/memory source: `auto`, `kubelet`, `metrics-server`, `none` (see below) |
 | `editor` | string | *(none)* | Editor command for `e` keybinding; falls back through `$VISUAL`, `$EDITOR`, then `vi` |
 | `ui.enableMouse` | bool | `false` | Enable mouse support |
 | `ui.headless` | bool | `false` | Hide the header bar |
@@ -169,6 +170,42 @@ session only — including across a context switch — and never writes the
 config file; set `discoverFluxResources` above to change the default.
 Disabling stops the CRD watch, deregisters the discovered kinds along with
 their `:` commands, and removes their resources from the list.
+
+### Pod Usage Metrics
+
+The workload detail shows each pod's CPU and memory next to its limits. With
+`metricsSource: auto` (the default) flux9s picks the first source that works,
+the same order [ktop](https://github.com/vladimirvivien/ktop) uses:
+
+1. **kubelet** — reads each node's resource metrics through the API server
+   (`/api/v1/nodes/{node}/proxy/metrics/resource`). No Prometheus or
+   metrics-server needed, but it requires `get` on `nodes/proxy`.
+2. **metrics-server** — `metrics.k8s.io` PodMetrics, when the kubelet route
+   isn't permitted.
+3. **none** — no usage; the columns show requests/limits instead.
+
+Every step fails closed: missing permissions or an absent metrics-server just
+move on to the next source, silently. The source in use is shown in the view
+title. Force one with:
+
+```bash
+flux9s config set metricsSource metrics-server   # auto | kubelet | metrics-server | none
+```
+
+Neither source supports watch, so usage is polled every 15s (both refresh
+about that often), backing off to 2 minutes while requests fail. Opening a
+view hydrates immediately: with the kubelet source, one read of each node's
+summary (`/stats/summary`, same `nodes/proxy` permission) gives CPU straight
+away instead of waiting for the next counter update.
+
+To grant the kubelet route, allow:
+
+```yaml
+rules:
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+```
 
 ### Kubernetes API Connection Timeout
 

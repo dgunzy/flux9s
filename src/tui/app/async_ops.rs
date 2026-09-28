@@ -242,6 +242,7 @@ mod tests {
             default_resource_filter: None,
             connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
             discover_flux_resources: false,
+            metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             editor: None,
         };
         let theme = Theme::default();

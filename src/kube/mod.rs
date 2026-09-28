@@ -19,6 +19,7 @@ pub mod helm_values;
 pub mod inventory;
 pub mod live;
 pub mod logs;
+pub mod metrics;
 pub mod object_status;
 pub mod objects;
 pub mod workloads;

@@ -255,6 +255,7 @@ The graph view displays:
   - `Ctrl+d` in the detail deletes a pod so its controller replaces it; with several pods a picker opens first.
   - Both ask for confirmation and are blocked in read-only mode.
   - The detail is live: the workload, its pods, and its events are watched while it is open, so a restart's new pods appear and old ones drain away as it happens.
+  - A **Resources** section shows each pod's CPU and memory use next to its request and limit, with a bar filled against the limit (`│` marks the request) that turns amber at 75% and red at 90% of the limit (throttling / OOM risk). CPU is always in millicores so the three compare directly. The source — kubelet, metrics-server, or none (requests/limits only) — is picked automatically and named in the section header; see [Pod Usage Metrics](../configuration/#pod-usage-metrics).
 - `Esc` / `Backspace` - Return to the graph (when you opened a view from it), then back to the resource list.
 
 Focus starts on the resource you opened the graph from, so you can immediately walk its sources and dependencies.
