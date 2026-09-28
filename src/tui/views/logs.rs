@@ -50,6 +50,16 @@ pub fn render_controller_logs(
     };
 
     let mut title = format!("Logs: {}/{}", session.namespace, session.pod);
+    // Name the container when there is a choice (c switches).
+    if session.containers.len() > 1
+        && let Some(ref container) = session.container
+    {
+        title.push_str(&format!(
+            " [{}] ({} containers)",
+            container,
+            session.containers.len()
+        ));
+    }
     if let Some(ref status) = session.status {
         title.push_str(&format!(" ({})", status));
     } else if follow {

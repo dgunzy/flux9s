@@ -8,23 +8,7 @@
 
 use std::collections::VecDeque;
 
-/// Which pod to stream logs from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LogRequest {
-    pub namespace: String,
-    pub pod: String,
-}
-
-/// Message from the log stream task to the app.
-#[derive(Debug)]
-pub enum LogEvent {
-    /// One log line.
-    Line(String),
-    /// The stream failed (RBAC, pod gone, container restart, …).
-    Error(String),
-    /// The stream ended cleanly (pod terminated).
-    Ended,
-}
+pub use crate::kube::logs::{LogEvent, LogRequest};
 
 /// A running log stream: its bounded line buffer and the channel/handle of
 /// the streaming task.
@@ -32,6 +16,10 @@ pub enum LogEvent {
 pub struct LogSession {
     pub pod: String,
     pub namespace: String,
+    /// Container being streamed, once the task has resolved it.
+    pub container: Option<String>,
+    /// Every container in the pod, for the `c` switcher.
+    pub containers: Vec<String>,
     lines: VecDeque<String>,
     rx: tokio::sync::mpsc::UnboundedReceiver<LogEvent>,
     /// Handle of the streaming task; set by the main loop right after
@@ -54,6 +42,13 @@ impl LogSession {
                         self.lines.pop_front();
                     }
                     received += 1;
+                }
+                LogEvent::Containers {
+                    selected,
+                    available,
+                } => {
+                    self.container = Some(selected);
+                    self.containers = available;
                 }
                 LogEvent::Error(e) => self.status = Some(format!("stream error: {}", e)),
                 LogEvent::Ended => self.status = Some("stream ended".to_string()),
@@ -80,11 +75,21 @@ pub struct LogState {
 }
 
 impl LogState {
-    /// Queue a log stream for the given pod, replacing (and stopping) any
-    /// active session.
+    /// Queue a log stream for the given pod's default container, replacing
+    /// (and stopping) any active session.
     pub fn request(&mut self, namespace: String, pod: String) {
+        self.request_container(namespace, pod, None);
+    }
+
+    /// Queue a log stream for a specific container (`None` = the pod's
+    /// default), replacing any active session.
+    pub fn request_container(&mut self, namespace: String, pod: String, container: Option<String>) {
         self.stop();
-        self.pending = Some(LogRequest { namespace, pod });
+        self.pending = Some(LogRequest {
+            namespace,
+            pod,
+            container,
+        });
         self.follow = true;
     }
 
@@ -99,6 +104,8 @@ impl LogState {
         self.session = Some(LogSession {
             pod: request.pod.clone(),
             namespace: request.namespace.clone(),
+            container: request.container.clone(),
+            containers: Vec::new(),
             lines: VecDeque::new(),
             rx,
             handle: None,
@@ -159,11 +166,18 @@ mod tests {
         assert_eq!(request.pod, "source-controller-abc");
         assert_eq!(request.namespace, "flux-system");
 
+        tx.send(LogEvent::Containers {
+            selected: "manager".to_string(),
+            available: vec!["manager".to_string(), "sidecar".to_string()],
+        })
+        .unwrap();
         tx.send(LogEvent::Line("line 1".to_string())).unwrap();
         tx.send(LogEvent::Line("line 2".to_string())).unwrap();
         assert_eq!(state.drain(), 2);
         let session = state.session.as_ref().unwrap();
         assert_eq!(session.lines().len(), 2);
+        assert_eq!(session.container.as_deref(), Some("manager"));
+        assert_eq!(session.containers.len(), 2);
         assert!(state.is_loading(), "stream still running");
 
         tx.send(LogEvent::Ended).unwrap();

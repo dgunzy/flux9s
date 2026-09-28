@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Logs for multi-container pods failed with an API error; they now stream the default container (`kubectl.kubernetes.io/default-container`, else the first) and `c` switches containers
+
 ## [1.1.0] - 2026-09-27
 
 # Version 1.1.0 Changelog
