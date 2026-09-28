@@ -12,6 +12,7 @@ mod events;
 mod footer;
 mod graph;
 mod header;
+mod helm_values;
 mod help;
 mod helpers;
 mod history;
@@ -36,8 +37,9 @@ pub use events::*;
 pub use footer::*;
 pub use graph::*;
 pub use header::*;
-pub use help::*;
 #[allow(unused_imports)] // Used via fully qualified paths (crate::tui::views::helpers::)
+pub use helm_values::*;
+pub use help::*;
 pub use helpers::*;
 pub use history::*;
 pub use inventory::*;

@@ -678,7 +678,8 @@ impl App {
             | View::ResourceDescribe
             | View::ResourceYAML
             | View::ResourceTrace
-            | View::ResourceHistory => self
+            | View::ResourceHistory
+            | View::HelmValues => self
                 .selection_state
                 .selected_resource_key
                 .as_deref()

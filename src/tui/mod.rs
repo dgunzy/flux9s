@@ -408,6 +408,17 @@ pub async fn run_tui_with_async_init(
                         app.async_state.inventory_status.set_handle(handle);
                     }
 
+                    if let Some((request, tx)) = app.async_state.helm_values.dispatch() {
+                        let handle = tokio::spawn(crate::kube::live::watch_helm_values(
+                            client.clone(),
+                            request.key.namespace,
+                            request.key.name,
+                            request.reveal_secrets,
+                            tx,
+                        ));
+                        app.async_state.helm_values.set_handle(handle);
+                    }
+
                     if let Some((action, tx)) = app.async_state.workload_action.dispatch() {
                         let client = client.clone();
                         tokio::spawn(async move {
@@ -533,6 +544,24 @@ pub async fn run_tui_with_async_init(
                 match result {
                     Ok(statuses) => app.async_state.inventory_status.set_result(statuses),
                     Err(e) => tracing::warn!("Inventory status lookup failed: {}", e),
+                }
+            }
+
+            if let Some(result) = app.async_state.helm_values.poll() {
+                match result {
+                    Ok(values) => app.async_state.helm_values.set_result(values),
+                    // A failed refresh keeps the last values on screen.
+                    Err(e) if app.async_state.helm_values.result().is_some() => {
+                        app.set_status_message((format!("Values refresh failed: {:#}", e), true));
+                    }
+                    Err(e) => {
+                        app.async_state.helm_values.clear();
+                        app.set_status_message((
+                            format!("Failed to resolve values: {:#}", e),
+                            true,
+                        ));
+                        app.set_view(app.previous_list_view());
+                    }
                 }
             }
 

@@ -40,6 +40,7 @@ pub fn get_navigation_commands() -> Vec<NavigationCommand> {
         NavigationCommand::new("f", "Favorite"),
         NavigationCommand::new("g", "Graph"),
         NavigationCommand::new("h", "History"),
+        NavigationCommand::new("v", "Values"),
         NavigationCommand::new("t", "Trace"),
         NavigationCommand::new("W", "Reconcile+Source"),
         NavigationCommand::new("^d", "Delete"),
@@ -139,6 +140,20 @@ pub fn get_events_commands() -> Vec<NavigationCommand> {
     commands
 }
 
+/// Footer hints for the HelmRelease values view (#264).
+pub fn get_helm_values_commands() -> Vec<NavigationCommand> {
+    let mut commands = vec![
+        NavigationCommand::new("j/k ", "Scroll"),
+        NavigationCommand::new("^f/^b", "PgDn/Up"),
+        NavigationCommand::new("/", "Search"),
+        NavigationCommand::new("n/N", "Next/Prev"),
+        NavigationCommand::new("x", "Reveal secrets"),
+        NavigationCommand::new("R", "Reconcile"),
+    ];
+    commands.extend(common_tail());
+    commands
+}
+
 /// Footer hints for the pulse dashboard.
 pub fn get_pulse_commands() -> Vec<NavigationCommand> {
     let mut commands = vec![
@@ -201,6 +216,7 @@ pub fn get_resource_help_commands() -> Vec<(&'static str, &'static str)> {
                 "f" => Some(("<f>", "Toggle favorite")),
                 "g" => Some(("<g>", "View resource graph")),
                 "h" => Some(("<h>", "View reconciliation history")),
+                "v" => Some(("<v>", "HelmRelease effective values")),
                 "t" => Some(("<t>", "Trace ownership chain")),
                 "W" => Some(("<W>", "Reconcile with source")),
                 "^d" => Some(("<Ctrl+d>", "Delete resource")),

@@ -40,6 +40,9 @@ pub enum View {
     /// Cluster pulse dashboard (#195): per-kind health counts, recent
     /// failures, and FluxReport distribution info. Opened with `:pulse`.
     Pulse,
+    /// A HelmRelease's effective values (#264): valuesFrom sources merged
+    /// with spec.values, kept live. Opened with `v`.
+    HelmValues,
     /// Waiting for external editor / SSA apply
     ResourceEdit,
     #[allow(dead_code)] // Reserved for future alternative help view implementation
@@ -58,6 +61,7 @@ impl View {
             View::ResourceDescribe => Some(&mut vs.describe_scroll_offset),
             View::ResourceTrace => Some(&mut vs.trace_scroll_offset),
             View::ResourceHistory => Some(&mut vs.history_scroll_offset),
+            View::HelmValues => Some(&mut vs.helm_values_scroll_offset),
             View::Logs => Some(&mut vs.log_scroll_offset),
             View::WorkloadDetail => Some(&mut vs.workload_scroll_offset),
             View::Pulse => Some(&mut vs.pulse_scroll_offset),
@@ -78,6 +82,7 @@ impl View {
             View::Logs => kb::get_logs_commands(),
             View::EventList => kb::get_events_commands(),
             View::Pulse => kb::get_pulse_commands(),
+            View::HelmValues => kb::get_helm_values_commands(),
             View::ResourceList
             | View::ResourceDetail
             | View::ResourceDescribe
@@ -108,6 +113,7 @@ impl View {
                 | View::Logs
                 | View::WorkloadDetail
                 | View::Pulse
+                | View::HelmValues
         )
     }
 
@@ -122,6 +128,7 @@ impl View {
                 | View::ResourceTrace
                 | View::ResourceHistory
                 | View::ResourceGraph
+                | View::HelmValues
         )
     }
 }
@@ -246,6 +253,8 @@ pub struct ViewState {
     pub trace_scroll_offset: usize,
     /// Scroll offset for history view
     pub history_scroll_offset: usize,
+    /// Scroll offset for the HelmRelease values view
+    pub helm_values_scroll_offset: usize,
     /// Scroll offset for the controller log view
     pub log_scroll_offset: usize,
     /// Scroll offset for the workload detail view
@@ -301,6 +310,7 @@ impl Default for ViewState {
             describe_scroll_offset: 0,
             trace_scroll_offset: 0,
             history_scroll_offset: 0,
+            helm_values_scroll_offset: 0,
             log_scroll_offset: 0,
             workload_scroll_offset: 0,
             pulse_scroll_offset: 0,
@@ -418,6 +428,8 @@ pub struct AsyncOperationState {
     pub last_operation_key: Option<char>,
     /// Write action waiting for the user's confirmation dialog.
     pub confirmation_pending: Option<Confirmation>,
+    /// Live effective values for the HelmRelease values view (#264).
+    pub helm_values: LiveTask<HelmValuesRequest, crate::kube::helm_values::HelmValues>,
     /// Confirmed workload restart / pod delete in flight (#263).
     /// Resolves to the action itself so the success message can name it.
     pub workload_action:
@@ -453,6 +465,7 @@ impl Default for AsyncOperationState {
             last_operation_key: None,
             confirmation_pending: None,
             workload_action: Default::default(),
+            helm_values: Default::default(),
             edit_pending: None,
             edit_full_yaml: None,
             edit_save_pending: None,
@@ -476,6 +489,7 @@ impl AsyncOperationState {
         self.last_operation_key = None;
         self.confirmation_pending = None;
         self.workload_action.clear();
+        self.helm_values.clear();
 
         self.edit_pending = None;
         self.edit_full_yaml = None;
@@ -488,6 +502,14 @@ impl AsyncOperationState {
 }
 
 /// Pending operation awaiting confirmation
+/// Which HelmRelease's values to show, and whether Secret-sourced values are
+/// revealed (`x` toggles).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelmValuesRequest {
+    pub key: ResourceKey,
+    pub reveal_secrets: bool,
+}
+
 /// A write action waiting on the confirmation dialog.
 #[derive(Clone, Debug)]
 pub enum Confirmation {
@@ -655,6 +677,7 @@ mod tests {
             View::WorkloadDetail,
             View::InventoryList,
             View::Pulse,
+            View::HelmValues,
             View::ResourceEdit,
             View::Help,
         ];
