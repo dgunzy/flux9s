@@ -180,6 +180,7 @@ fn build_describe_lines(
     resource: Option<&crate::watcher::ResourceInfo>,
     obj_json: &Value,
     events: Option<(&[crate::kube::events::KubeEventInfo], Option<&str>)>,
+    managed_by: Option<&str>,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -234,6 +235,9 @@ fn build_describe_lines(
         }
     }
 
+    if let Some(managed_by) = managed_by {
+        push_scalar_field(&mut lines, "Managed By", managed_by, theme);
+    }
     if let Some(api_version) = obj_json.get("apiVersion").and_then(|value| value.as_str()) {
         push_scalar_field(&mut lines, "API Version", api_version, theme);
     }
@@ -349,13 +353,20 @@ pub fn render_resource_describe(
 
     let cleaned_json = crate::tui::views::helpers::clean_resource_json(&obj_json);
     let resource = state.get(key);
-    let mut title = if let Some(ref resource) = resource {
-        format!("Describe - {} - {}", resource.resource_type, resource.name)
-    } else {
-        "Describe".to_string()
+    // Native objects (#262/#267) aren't in the watched state; title them
+    // from the selected key so the view still says what it's showing.
+    let mut title = match (
+        &resource,
+        crate::tui::views::helpers::key_kind_and_name(key),
+    ) {
+        (Some(resource), _) => format!("Describe - {} - {}", resource.resource_type, resource.name),
+        (None, Some((kind, name))) => format!("Describe - {kind} - {name}"),
+        (None, None) => "Describe".to_string(),
     };
 
-    let all_lines = build_describe_lines(resource.as_ref(), &cleaned_json, events, theme);
+    let managed_by = describe_fetched.and_then(|d| d.managed_by.as_deref());
+    let all_lines =
+        build_describe_lines(resource.as_ref(), &cleaned_json, events, managed_by, theme);
     let visible_height = area.height.saturating_sub(2) as usize;
 
     // Text search: match against the plain-text content of each line
@@ -481,11 +492,41 @@ mod tests {
         });
         let theme = Theme::default();
 
-        let without = build_describe_lines(None, &obj, None, &theme);
+        let without = build_describe_lines(None, &obj, None, None, &theme);
         assert!(!without.iter().map(line_text).any(|l| l.trim() == "Events"));
 
         let events = [sample_event("Normal", "ok")];
-        let with = build_describe_lines(None, &obj, Some((&events, None)), &theme);
+        let with = build_describe_lines(None, &obj, Some((&events, None)), None, &theme);
         assert!(with.iter().map(line_text).any(|l| l.trim() == "Events"));
+    }
+
+    #[test]
+    fn describe_shows_managed_by_when_known() {
+        let theme = Theme::default();
+        let obj =
+            serde_json::json!({"kind": "Pod", "apiVersion": "v1", "metadata": {"name": "web-abc"}});
+        let text = |lines: Vec<Line<'static>>| {
+            lines
+                .iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let with = text(build_describe_lines(
+            None,
+            &obj,
+            None,
+            Some("Flux Kustomization flux-system/apps (via ReplicaSet/web-7b5)"),
+            &theme,
+        ));
+        assert!(with.contains("Managed By"));
+        assert!(with.contains("Flux Kustomization flux-system/apps (via ReplicaSet/web-7b5)"));
+        let without = text(build_describe_lines(None, &obj, None, None, &theme));
+        assert!(!without.contains("Managed By"));
     }
 }

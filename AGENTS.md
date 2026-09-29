@@ -296,5 +296,6 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
 - Always check `config.read_only` before write operations
 - Update both `NO_PROXY` and `no_proxy` for environment compatibility
 - Generated models are version-controlled for reproducible builds
+- **Kind registry**: `:<kind>` resolves through `models::kinds::resolve` (Flux → Flux-adjacent → discovered). Keep `KindSpec` columns/health/capabilities as data (no fn pointers) so config overlays (#277) stay possible; `nativeResources` is an opt-in preview (default false; `:native` toggles per session) — while off, discovery and kind watches must not run at all, including Flux-adjacent CRD discovery (`Config::flux_crd_discovery_enabled`). See DEVELOPER_GUIDE "The Kind Registry".
 - **Never hardcode Flux resource types, API groups, versions, or plural names** - always use `FluxResourceKind` enum and `get_gvk_for_resource_type()` helper function to ensure single source of truth
 - **Graph node dimensions have one source of truth**: `GraphNode::render_width`/`render_height` (`src/trace/graph.rs`). Both layout (`calculate_layout`) and drawing (`src/tui/views/graph.rs`) call them - never recompute node size inline. Connector geometry is produced by the pure, `Frame`-free `fanout_routes()` so it can be unit tested, separate from the drawing pass.

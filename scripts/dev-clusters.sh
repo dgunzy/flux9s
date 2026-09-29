@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# dev-clusters.sh - Tear down all kind clusters and rebuild dedicated test clusters
+# dev-clusters.sh - Rebuild dedicated flux9s test clusters
+#
+# Only clusters this script owns (flux9s-*) are ever deleted: each build
+# recreates just its own cluster, and `delete` removes just the flux9s-*
+# clusters. Other kind clusters on the machine are never touched.
 #
 # Creates three clearly-named clusters:
 #
@@ -18,7 +22,7 @@
 #   ./scripts/dev-clusters.sh legacy       # build flux9s-legacy only
 #   ./scripts/dev-clusters.sh ci           # build simple + legacy (live-test set)
 #   ./scripts/dev-clusters.sh all          # build all three clusters
-#   ./scripts/dev-clusters.sh delete       # delete all kind clusters and exit
+#   ./scripts/dev-clusters.sh delete       # delete the flux9s-* kind clusters and exit
 
 set -euo pipefail
 
@@ -287,9 +291,22 @@ apply_stress_manifests() {
     success "Applied stress manifests (suffix='${suffix}', ns=${ns})"
 }
 
+# Delete one cluster if it exists (never anything but the named one).
+delete_cluster_if_exists() {
+    local cluster_name="$1"
+    if kind get clusters 2>/dev/null | grep -qx "$cluster_name"; then
+        info "Deleting cluster: $cluster_name"
+        kind delete cluster --name "$cluster_name"
+        success "Deleted: $cluster_name"
+    fi
+}
+
 run_build() {
     local cluster_name="$1"
     shift
+
+    # Recreate only this cluster.
+    delete_cluster_if_exists "$cluster_name"
 
     if "$@"; then
         success "Completed build workflow for ${cluster_name}"
@@ -394,23 +411,13 @@ main() {
     echo "  Mode:     $mode"
     echo
 
-    # ── delete all existing kind clusters ──────────────────────────────────────
-    header "Deleting all existing kind clusters"
-    existing=$(kind get clusters 2>/dev/null || true)
-    if [ -z "$existing" ]; then
-        info "No existing clusters to remove"
-    else
-        while IFS= read -r cluster; do
-            [ -z "$cluster" ] && continue
-            info "Deleting cluster: $cluster"
-            kind delete cluster --name "$cluster"
-            success "Deleted: $cluster"
-        done <<< "$existing"
-    fi
-
-    # ── early exit for delete-only mode ───────────────────────────────────────
+    # ── delete-only mode: this script's clusters, never anyone else's ─────────
     if [ "$mode" = "delete" ]; then
-        success "All clusters deleted. Done."
+        header "Deleting flux9s kind clusters"
+        for cluster in "$SIMPLE_CLUSTER" "$STRESS_CLUSTER" "$LEGACY_CLUSTER"; do
+            delete_cluster_if_exists "$cluster"
+        done
+        success "flux9s clusters deleted. Done."
         return 0
     fi
 

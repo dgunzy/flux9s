@@ -189,6 +189,8 @@ pub struct WorkloadData {
     pub events_error: Option<String>,
     /// Label selector the pods were listed with; the live view watches it.
     pub pod_selector: Option<String>,
+    /// Who manages the workload, in full (Flux / Argo CD / Helm / owner).
+    pub managed_by: Option<String>,
 }
 
 /// Fetch a workload and everything its detail view shows. The object fetch
@@ -246,6 +248,7 @@ pub async fn fetch_workload_data(
         events,
         events_error,
         pod_selector,
+        managed_by: Some(crate::kube::ownership::describe_manager(client, &obj).await),
     })
 }
 

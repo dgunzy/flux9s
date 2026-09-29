@@ -29,6 +29,14 @@ pub struct Config {
     #[serde(default)]
     pub discover_flux_resources: bool,
 
+    /// Browse native Kubernetes resources and CRDs with `:<kind>` (#267):
+    /// API discovery on connect plus a watch per kind while it's shown.
+    /// **Preview, opt-in (default false)** — `:native` tries it for a
+    /// session. While off, flux9s is Flux-only: no discovery, no extra
+    /// watches (including Flux-adjacent CRD discovery).
+    #[serde(default)]
+    pub native_resources: bool,
+
     /// Where pod CPU/memory usage comes from (#265): `auto` (kubelet via
     /// `nodes/proxy` if permitted, else metrics-server, else none),
     /// `kubelet`, `metrics-server`, or `none` (requests/limits only).
@@ -76,6 +84,15 @@ pub struct Config {
 }
 
 impl Config {
+    /// Whether Flux-adjacent CRD discovery (#197) runs. It is an extra
+    /// watch, so the `nativeResources: false` opt-out (#267) switches it off
+    /// even when `discoverFluxResources` is set — the single place that
+    /// decides, used at startup, context switches, `:discover`, and when
+    /// handling queued discovery events.
+    pub fn flux_crd_discovery_enabled(&self) -> bool {
+        self.native_resources && self.discover_flux_resources
+    }
+
     /// A config with every field populated — the field-enumeration source for
     /// `config list` and the completeness tests, since `skip_serializing_if`
     /// hides empty fields from a serialized real config.
@@ -89,6 +106,7 @@ impl Config {
             default_namespace: "flux-system".to_string(),
             default_controller_namespace: "flux-system".to_string(),
             discover_flux_resources: true,
+            native_resources: true,
             metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             ui: UiConfig {
                 enable_mouse: true,
@@ -215,6 +233,7 @@ impl Default for Config {
             default_namespace: default_namespace(),
             default_controller_namespace: default_namespace(),
             discover_flux_resources: false,
+            native_resources: false,
             metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             ui: UiConfig::default(),
             namespace_hotkeys: Vec::new(), // Empty means use auto-discovered defaults
@@ -301,6 +320,32 @@ ui:
         let yaml = "readOnly: false\n";
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert!(config.editor.is_none());
+    }
+
+    #[test]
+    fn test_native_resources_opt_out_also_disables_crd_discovery() {
+        let both: Config =
+            serde_yaml::from_str("nativeResources: true\ndiscoverFluxResources: true\n").unwrap();
+        assert!(both.flux_crd_discovery_enabled());
+        let opted_out: Config =
+            serde_yaml::from_str("nativeResources: false\ndiscoverFluxResources: true\n").unwrap();
+        assert!(
+            !opted_out.flux_crd_discovery_enabled(),
+            "nativeResources: false must mean no discovery or extra watches"
+        );
+        assert!(
+            !Config::default().flux_crd_discovery_enabled(),
+            "discovery stays opt-in"
+        );
+    }
+
+    #[test]
+    fn test_native_resources_is_an_opt_in_preview() {
+        let config: Config = serde_yaml::from_str("readOnly: false\n").unwrap();
+        assert!(!config.native_resources, "preview: off unless opted in");
+        assert!(!Config::default().native_resources);
+        let config: Config = serde_yaml::from_str("nativeResources: true\n").unwrap();
+        assert!(config.native_resources);
     }
 
     #[test]

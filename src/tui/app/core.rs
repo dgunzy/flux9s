@@ -30,7 +30,14 @@ pub struct App {
     pub(crate) kube_client: Option<kube::Client>,
     pub(crate) operation_registry: OperationRegistry,
     pub(crate) namespace_hotkeys: Vec<String>,
+    /// Every namespace with Flux resources (the hotkeys keep only 10).
+    pub(crate) flux_namespaces: Vec<String>,
+    /// Every namespace in the cluster, for the `:ns` picker. Empty when
+    /// `nativeResources` is off or listing namespaces is forbidden.
+    pub(crate) all_namespaces: Vec<String>,
     pub(crate) pending_context_switch: Option<String>,
+    /// A `:<kind>` typed before discovery finished, opened when it lands.
+    pub(crate) pending_kind_command: Option<String>,
     pub(crate) controller_pods: ControllerPodState,
     /// Live Kubernetes events feed (populated while the events view is open).
     pub(crate) kube_events: KubeEventStore,
@@ -91,7 +98,10 @@ impl App {
             kube_client: None,
             operation_registry: OperationRegistry::new(),
             namespace_hotkeys: Self::build_namespace_hotkeys(&config, Vec::new()),
+            flux_namespaces: Vec::new(),
+            all_namespaces: Vec::new(),
             pending_context_switch: None,
+            pending_kind_command: None,
             controller_pods: ControllerPodState::default(),
             kube_events: KubeEventStore::default(),
             logs: super::logs::LogState::default(),
@@ -174,6 +184,9 @@ impl App {
         // Fresh watchers — any degraded/forbidden state belongs to the old set.
         self.degraded_watchers.clear();
         self.forbidden_watchers.clear();
+        // (Re)discover the cluster's kinds for `:<kind>` (#267).
+        self.request_kind_discovery();
+        self.request_namespace_list();
     }
 
     /// Record a fatal connection error to display on the error screen.
@@ -252,6 +265,7 @@ impl App {
 
     /// Update namespace hotkeys with discovered namespaces
     pub fn update_namespace_hotkeys(&mut self, discovered_namespaces: Vec<String>) {
+        self.flux_namespaces = discovered_namespaces.clone();
         self.namespace_hotkeys = Self::build_namespace_hotkeys(&self.config, discovered_namespaces);
     }
 
@@ -265,19 +279,32 @@ impl App {
     /// Always offers `all` (cluster-wide) first, followed by the discovered /
     /// configured hotkey namespaces, and guarantees the currently watched
     /// namespace is selectable even when it is not among the hotkeys.
+    ///
+    /// Order: `all`, the hotkey namespaces, the other namespaces with Flux
+    /// resources, the current one, then every other namespace alphabetically
+    /// (#267 — the cluster-wide list is empty when `nativeResources` is off,
+    /// which keeps the picker exactly as it was).
     pub fn namespace_picker_options(&self) -> Vec<String> {
         let mut options = vec!["all".to_string()];
-        for ns in &self.namespace_hotkeys {
+        let mut push = |ns: &String| {
             if ns != "all" && !options.contains(ns) {
                 options.push(ns.clone());
             }
-        }
+        };
+        self.namespace_hotkeys.iter().for_each(&mut push);
+        self.flux_namespaces.iter().for_each(&mut push);
         if let Some(current) = &self.namespace {
-            if !options.contains(current) {
-                options.push(current.clone());
-            }
+            push(current);
         }
+        let mut rest = self.all_namespaces.clone();
+        rest.sort();
+        rest.iter().for_each(&mut push);
         options
+    }
+
+    /// Namespaces that hold Flux resources, for the picker's marker.
+    pub(crate) fn flux_namespace_set(&self) -> std::collections::HashSet<String> {
+        self.flux_namespaces.iter().cloned().collect()
     }
 
     /// Invalidate the cached layout dimensions, forcing recalculation on next render.
@@ -293,6 +320,9 @@ impl App {
             && matches!(view, View::ResourceYAML | View::ResourceDescribe)
         {
             return crate::tui::keybindings::get_native_object_commands();
+        }
+        if view == View::KindList {
+            return self.kind_list_footer();
         }
         view.footer_commands()
     }
@@ -515,6 +545,16 @@ impl App {
         self.view_state.scroll_offset = 0;
         self.view_state.selected_resource_type = None;
         self.async_state.clear_pending();
+        // Kind lists and discovered kinds belong to the old cluster.
+        crate::models::kinds::catalog().clear();
+        self.async_state.kind_discovery_at = None;
+        self.all_namespaces.clear();
+        self.pending_kind_command = None;
+        self.view_state.list_history.clear();
+        self.view_state.kind_list_error = None;
+        if self.view_state.current_view == View::KindList {
+            self.view_state.current_view = View::ResourceList;
+        }
     }
 
     /// Cycle the sort for the resource list: ascending → descending → default.
@@ -689,6 +729,7 @@ impl App {
             View::Logs
             | View::WorkloadList
             | View::InventoryList
+            | View::KindList
             | View::WorkloadDetail
             | View::Pulse
             | View::ResourceEdit
@@ -1020,6 +1061,7 @@ mod tests {
             default_namespace: "".to_string(),
             default_controller_namespace: "".to_string(),
             discover_flux_resources: false,
+            native_resources: true,
             metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             namespace_hotkeys: vec![],
             ui: UiConfig {

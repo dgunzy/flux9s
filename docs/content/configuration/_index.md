@@ -32,7 +32,8 @@ flux9s config path
 | `defaultControllerNamespace` | string | `flux-system` | Namespace where Flux controllers run |
 | `defaultResourceFilter` | string | *(none)* | Resource type shown at startup (e.g., `Kustomization`) |
 | `connectTimeoutSeconds` | integer | `10` | Startup Kubernetes API health-check timeout in seconds |
-| `discoverFluxResources` | boolean | `false` | Opt-in dynamic discovery of Flux-adjacent CRDs (see below) |
+| `discoverFluxResources` | boolean | `false` | Opt-in dynamic discovery of Flux-adjacent CRDs (see below); needs `nativeResources: true` |
+| `nativeResources` | boolean | `false` | **Preview.** Browse native Kubernetes resources and CRDs with `:<kind>` ([details](../user-guide/#browsing-any-kind)); off keeps flux9s Flux-only — no API discovery or extra watches, including `discoverFluxResources`. Try it per session with `:native` |
 | `metricsSource` | string | `auto` | Pod CPU/memory source: `auto`, `kubelet`, `metrics-server`, `none` (see below) |
 | `editor` | string | *(none)* | Editor command for `e` keybinding; falls back through `$VISUAL`, `$EDITOR`, then `vi` |
 | `ui.enableMouse` | bool | `false` | Enable mouse support |

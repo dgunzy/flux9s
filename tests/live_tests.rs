@@ -362,3 +362,115 @@ async fn labeled_crd_discovers_and_lists_instances() {
     assert_eq!(ready_states.get("widget-healthy"), Some(&Some(true)));
     assert_eq!(ready_states.get("widget-broken"), Some(&Some(false)));
 }
+
+/// Kind registry + `:<kind>` browser (#267) against a real API server:
+/// discovery wire format, served-version handling, and the live list watch.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn kind_discovery_and_live_kind_list() {
+    use flux9s::kube::kind_list::{KindListRequest, watch_kind};
+    use flux9s::kube::object_status::ObjectHealth;
+    use flux9s::models::kinds::KindScope;
+
+    let client = client_for(&simple_context()).await;
+    let kinds = flux9s::kube::discovery::discover_kinds(&client)
+        .await
+        .unwrap_or_else(|e| panic!("discovery failed: {e:#}"));
+
+    let find = |kind: &str, group: &str| {
+        kinds
+            .iter()
+            .find(|k| k.gvk.kind == kind && k.gvk.group == group)
+            .cloned()
+            .unwrap_or_else(|| panic!("{kind} ({group}) not discovered"))
+    };
+    let deployments = find("Deployment", "apps");
+    assert_eq!(deployments.gvk.api_version(), "apps/v1");
+    assert_eq!(deployments.scope, KindScope::Namespaced);
+    assert!(deployments.names.short_names.iter().any(|s| s == "deploy"));
+    assert_eq!(find("Node", "").scope, KindScope::Cluster);
+    // Flux kinds are discovered too; the registry keeps them on the Flux provider.
+    find("Kustomization", "kustomize.toolkit.fluxcd.io");
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(watch_kind(
+        client,
+        KindListRequest {
+            spec: deployments,
+            namespace: Some("flux-system".to_string()),
+        },
+        tx,
+    ));
+    // Snapshots keep arriving as the list changes. Read them until the
+    // controller is healthy: a freshly started cluster reports it
+    // InProgress first, so this also proves rows update live.
+    let deadline = Instant::now() + Duration::from_secs(240);
+    let mut seen_states = Vec::new();
+    let snapshot = loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let snapshot = match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(Ok(snapshot))) => snapshot,
+            Ok(Some(Err(e))) => panic!("kind list failed: {e:#}"),
+            Ok(None) => panic!("kind list task ended early"),
+            Err(_) => panic!("source-controller never became Current; saw {seen_states:?}"),
+        };
+        let controller = snapshot
+            .rows
+            .iter()
+            .find(|row| row.name == "source-controller")
+            .unwrap_or_else(|| panic!("source-controller missing: {:?}", snapshot.rows));
+        assert_eq!(controller.namespace, "flux-system");
+        seen_states.push(controller.health);
+        if controller.health == ObjectHealth::Current {
+            break snapshot;
+        }
+    };
+    task.abort();
+
+    assert!(!snapshot.truncated());
+
+    // The controllers are installed by the Flux Operator: MANAGED-BY reads
+    // the FluxInstance (flux-operator labels, same rules as its web UI).
+    let managed = snapshot
+        .columns
+        .iter()
+        .position(|c| c.header() == "MANAGED-BY")
+        .expect("MANAGED-BY column");
+    let controller = snapshot
+        .rows
+        .iter()
+        .find(|row| row.name == "source-controller")
+        .expect("source-controller row");
+    assert_eq!(controller.cells[managed], "Flux instance");
+}
+
+/// Both discovery paths must see the same kinds at the same versions —
+/// aggregated discovery on current servers, the legacy walk on older ones.
+/// Checked on both dev clusters (different Flux / CRD sets).
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple and kind-flux9s-legacy dev clusters"]
+async fn aggregated_and_legacy_discovery_agree() {
+    for context in [simple_context(), legacy_context()] {
+        let client = client_for(&context).await;
+        let summarize = |kinds: Vec<flux9s::models::kinds::KindSpec>| {
+            let mut out: Vec<String> = kinds
+                .iter()
+                .map(|k| format!("{}|{}|{:?}", k.gvk.api_version(), k.gvk.kind, k.scope))
+                .collect();
+            out.sort();
+            out
+        };
+        let aggregated = summarize(
+            flux9s::kube::discovery::discover_kinds(&client)
+                .await
+                .unwrap_or_else(|e| panic!("{context}: discovery failed: {e:#}")),
+        );
+        let legacy = summarize(
+            flux9s::kube::discovery::discover_legacy(&client)
+                .await
+                .unwrap_or_else(|e| panic!("{context}: legacy discovery failed: {e:#}")),
+        );
+        assert!(aggregated.len() > 50, "{context}: suspiciously few kinds");
+        assert_eq!(aggregated, legacy, "{context}: discovery paths disagree");
+    }
+}

@@ -242,6 +242,7 @@ mod tests {
             default_resource_filter: None,
             connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
             discover_flux_resources: false,
+            native_resources: true,
             metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             editor: None,
         };
@@ -352,6 +353,7 @@ mod tests {
             events: Vec::new(),
             events_error: None,
             pod_selector: None,
+            managed_by: None,
         });
 
         app.set_workload_action_result(Ok(WorkloadAction::Restart {

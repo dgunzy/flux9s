@@ -140,6 +140,21 @@ pub fn get_events_commands() -> Vec<NavigationCommand> {
     commands
 }
 
+/// Footer hints for a `:<kind>` list (#267).
+pub fn get_kind_list_commands() -> Vec<NavigationCommand> {
+    vec![
+        NavigationCommand::new("j/k ", "Navigate"),
+        NavigationCommand::new("^f/^b", "PgDn/Up"),
+        NavigationCommand::new("Enter/d", "Describe"),
+        NavigationCommand::new("y", "YAML"),
+        NavigationCommand::new("/", "Filter"),
+        NavigationCommand::new(":flux", "Flux view"),
+        NavigationCommand::new(":", "Command"),
+        NavigationCommand::new("?", "Help"),
+        NavigationCommand::new("Esc/q", "Back"),
+    ]
+}
+
 /// Footer hints for the HelmRelease values view (#264).
 pub fn get_helm_values_commands() -> Vec<NavigationCommand> {
     let mut commands = vec![

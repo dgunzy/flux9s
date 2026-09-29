@@ -89,7 +89,7 @@ Type these commands in command mode (press `:`):
 | `:ctx <name>`      | Switch to a different Kubernetes context |
 | `:ctx`             | Open interactive context selection menu  |
 | `:context <name>`  | Alias for `:ctx <name>`                  |
-| `:ns`              | Open interactive namespace picker menu   |
+| `:ns`              | Namespace picker (with `:native`: every namespace, Flux ones first `◆ flux`) |
 | `:ns <namespace>`  | Switch to a specific namespace           |
 | `:namespace <ns>`  | Alias for `:ns <namespace>`              |
 | `:ns all`          | View all namespaces                      |
@@ -141,6 +141,92 @@ is the runtime sibling of `:readonly`: it applies to the current session only
 discovery off deregisters the discovered kinds, drops their `:` commands, and
 removes their resources from the list.
 
+### Browsing Any Kind (`:<kind>`) — preview {#browsing-any-kind}
+
+{{% alert title="Preview — off by default" color="info" %}}
+Browsing native resources and CRDs is a **preview** while it matures. It is
+**off by default**, so flux9s stays Flux-only unless you opt in:
+
+- **Try it for a session:** `:native` (again to turn it off)
+- **Keep it on:** `flux9s config set nativeResources true`
+
+With it off, `:deploy` and other Kubernetes kinds tell you how to turn it on.
+Feedback welcome — it will become the default once it has had some mileage.
+{{% /alert %}}
+
+Beyond Flux, `:<kind>` opens a live list of **any** kind the cluster serves —
+native resources and third-party CRDs alike — using the names `kubectl`
+accepts: the kind, its plural, or a short name (`:deploy`, `:po`, `:svc`,
+`:httproutes`). When two API groups serve the same name, use the fully
+qualified `plural.group` form (`:clusters.postgresql.cnpg.io`).
+
+- Lists follow the current namespace (`:ns`); cluster-scoped kinds (nodes,
+  CRDs, …) always show everything. Updates arrive live through a watch that
+  runs only while the list is on screen.
+- STATUS uses the same kstatus health as the inventory view. CRDs also show
+  the columns their author declared (`additionalPrinterColumns`, what
+  `kubectl get` shows); when a CRD brings its own Status column, the health
+  column is labelled HEALTH.
+- `d` describes the selected object, `y` shows its YAML (Secret values
+  redacted), and `/` filters by name or namespace (`Esc` clears an applied
+  filter first). `Enter` describes too — except for workloads, below.
+- **Same actions as the workload views.** Keys come from what each kind
+  supports, and the footer only shows what applies:
+  - Deployments, StatefulSets, DaemonSets: `Enter` opens the same workload
+    detail as the graph drill-down (rollout, pods, events, CPU/memory), `r`
+    restarts, `l` streams pod logs.
+  - CronJobs: `Enter` opens the workload detail.
+  - Pods: `l` streams logs (container picker included), `Ctrl+d` deletes the
+    pod so its controller replaces it.
+  - Writes ask for confirmation and are blocked in read-only mode.
+- **MANAGED-BY** shows *what kind* of manager owns each object, following
+  the conventions the tools write themselves, first match wins:
+  1. **Flux** — `Flux ks`, `Flux hr`, `Flux rset`, or `Flux instance`
+     (Kustomization / HelmRelease / ResourceSet / FluxInstance labels, as the
+     Flux Operator UI reads them)
+  2. **Argo CD** — `Argo CD` (tracking annotation or instance label)
+  3. **Kubernetes owner chain** — objects created by a controller are traced
+     up (`Pod → ReplicaSet → Deployment`) to whatever manages the top, so a
+     Flux-managed Deployment's pods read `Flux ks`. With no manager at the
+     top, the top owner's kind is shown (e.g. `DaemonSet`).
+  4. **Helm** — `Helm` (release annotations, on objects nothing owns)
+  5. Any other `app.kubernetes.io/managed-by` value, else `-` (unmanaged)
+
+  Owner chains resolve in the background (cached per owner, at most 300
+  lookups per list) — rows show their direct owner's kind until then.
+- **Managed By** — `Enter` (describe or workload detail) shows the full
+  answer, e.g. `Flux HelmRelease cert-manager/cert-manager (via
+  ReplicaSet/cert-manager-857cf84654)` or `not managed — top owner
+  Deployment/coredns`. The cursor stays on the same object as the list
+  updates live.
+- Very large lists show the first 5,000 rows (sorted by namespace/name) and
+  say so in the title — narrow with `:ns` or `/`. Only the displayed text of
+  each object is kept in memory (listing Secrets holds no secret data).
+- Flux kinds keep their meaning: `:ks`, `:hr`, … still filter the Flux list.
+  flux9s commands also win over kind names — `:ns`, `:events`, and `:logs`
+  keep their flux9s behaviour; use the plural (`:namespaces`) for the kind.
+- Lists start watching when opened, so returning to one with `Esc` re-lists
+  it (typically under a second).
+- **Getting back:** `Esc` walks back through the lists you opened
+  (`:deploy` → `:po` → `Esc` → `Esc`), and `:flux` returns to the Flux view
+  from anywhere. While browsing, the header reads
+  `Browsing: Cluster › deployments (27)` with the Flux total alongside.
+
+Any kind the API server serves as a listable, watchable top-level resource
+is browsable — in whichever served version it appears (preferred first), so
+CRDs that keep some kinds in an older version (e.g. metallb's
+`IPAddressPool` in `v1beta1`) work too. Kinds are discovered when flux9s
+connects and after `:ctx`; an unknown `:<kind>` triggers a re-check (at most
+every 30s), so a CRD installed while flux9s runs is found on the next try.
+
+Non-Flux kinds are view-only for now: `e` explains that and suggests the
+equivalent `kubectl edit` command.
+
+While the preview is off (the default), flux9s makes no discovery calls and
+no extra watches — Flux-adjacent CRD discovery (`discoverFluxResources`,
+`:discover`) included, since that is an extra watch too — and the `:ns`
+picker keeps its Flux-only list.
+
 ## Interactive Submenus
 
 Some commands open interactive selection menus when used without arguments, providing an easier way to select from available options.
@@ -180,6 +266,12 @@ When you type `:skin` and press Enter without specifying a theme name, flux9s di
 - `Esc` - Cancel and restore original theme
 
 The submenu saves themes to `ui.skin` in normal mode, or `ui.skinReadOnly` when readonly mode is enabled.
+
+With native resources on (`:native`), the `:ns` picker lists every namespace in the cluster: `all` first, then your
+hotkey namespaces and any namespace holding Flux resources (marked `◆ flux`,
+or `[flux]` with `ui.noIcons`), then the rest alphabetically. If your RBAC
+can't list namespaces, it shows the Flux namespaces as before. With
+`nativeResources: false` it keeps its original Flux-only list.
 
 ## Health Filtering
 

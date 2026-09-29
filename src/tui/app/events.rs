@@ -30,9 +30,42 @@ const COMMAND_TABLE: &[(fn(&str) -> bool, CommandHandler)] = &[
     (commands::is_events_command, App::cmd_show_events),
     (commands::is_pulse_command, App::cmd_show_pulse),
     (commands::is_logs_command, App::cmd_show_logs),
+    (commands::is_flux_command, App::cmd_show_flux),
     (commands::is_all_command, App::cmd_show_all),
     (commands::is_discover_command, App::cmd_toggle_discover),
+    (commands::is_native_command, App::cmd_toggle_native),
 ];
+
+/// Status message for `e` on a native object: editing isn't supported yet,
+/// here's the kubectl command that does it. A Flux kind only lands here when
+/// it's outside the watched namespace scope (e.g. from the events feed).
+fn native_edit_message(target: &ObjectRef) -> String {
+    if FluxResourceKind::parse_optional(&target.kind).is_some() {
+        return format!(
+            "{} {}/{} isn't in the watched namespace — :ns {} to edit it",
+            target.kind, target.namespace, target.name, target.namespace
+        );
+    }
+    let group = target
+        .api_version
+        .as_deref()
+        .and_then(|av| av.split_once('/'))
+        .map(|(group, _)| format!(".{group}"))
+        .unwrap_or_default();
+    let namespace = if target.namespace.is_empty() {
+        String::new()
+    } else {
+        format!(" -n {}", target.namespace)
+    };
+    format!(
+        "Editing {} isn't supported yet (non-Flux kinds are view-only). Try: kubectl edit {}{}/{}{}",
+        target.kind,
+        target.kind.to_lowercase(),
+        group,
+        target.name,
+        namespace
+    )
+}
 
 impl App {
     /// Scroll the active view down by `amount` lines, or advance the list
@@ -57,6 +90,8 @@ impl App {
                 self.view_state.workload_rows.len().saturating_sub(1)
             } else if view == View::InventoryList {
                 self.view_state.inventory_rows.len().saturating_sub(1)
+            } else if view == View::KindList {
+                self.filtered_kind_rows().len().saturating_sub(1)
             } else {
                 self.get_filtered_resources().len().saturating_sub(1)
             };
@@ -226,45 +261,33 @@ impl App {
             return self.handle_text_search_key(key);
         }
 
+        // Kind-list actions (restart, logs, delete pod, …) come from the
+        // capability-driven table in kind_browser.rs (#267/#276).
+        if self.view_state.current_view == View::KindList && self.handle_kind_list_key(key) {
+            return None;
+        }
+
         // Handle namespace hotkeys (0-9)
         if let crossterm::event::KeyCode::Char(c) = key.code {
             if c.is_ascii_digit() {
                 let index = c as usize - '0' as usize;
                 if index < self.namespace_hotkeys.len() {
-                    let ns_name = &self.namespace_hotkeys[index];
+                    let ns_name = self.namespace_hotkeys[index].clone();
                     let new_namespace = if ns_name == "all" {
                         None
                     } else {
                         Some(ns_name.clone())
                     };
-
-                    // Update namespace and restart watchers if changed
+                    // One code path with `:ns`, so everything that follows the
+                    // namespace (events feed, kind lists) follows hotkeys too.
                     if self.namespace != new_namespace {
-                        self.namespace = new_namespace.clone();
-
-                        self.state.clear();
-                        self.resource_objects.clear();
-                        self.controller_pods.clear();
-                        // Restarted watchers start clean; stale degraded/forbidden
-                        // state from the old set would otherwise never clear.
-                        self.degraded_watchers.clear();
-                        self.forbidden_watchers.clear();
-                        if let Some(ref mut watcher) = self.watcher {
-                            if let Err(e) = watcher.set_namespace(new_namespace) {
-                                self.set_status_message((
-                                    format!("Failed to switch namespace: {}", e),
-                                    true,
-                                ));
-                            } else {
-                                self.set_status_message((
-                                    format!("Switched to namespace: {}", ns_name),
-                                    false,
-                                ));
-                            }
+                        self.switch_namespace(new_namespace);
+                        if self.ui_state.status_message.is_none() {
+                            self.set_status_message((
+                                format!("Switched to namespace: {}", ns_name),
+                                false,
+                            ));
                         }
-
-                        self.view_state.selected_index = 0;
-                        self.view_state.scroll_offset = 0;
                     }
                     return None;
                 }
@@ -436,7 +459,11 @@ impl App {
             crossterm::event::KeyCode::Char('y') => self.open_yaml_view(),
             crossterm::event::KeyCode::Char('d') => self.open_describe_view(),
             crossterm::event::KeyCode::Char('e') => {
-                if self.config.read_only {
+                if let Some(native) = self.native_view_target() {
+                    // Native kinds are view-only for now (#276); point at the
+                    // equivalent kubectl command instead of a vague error.
+                    self.set_status_message((native_edit_message(&native), true));
+                } else if self.config.read_only {
                     self.set_status_message((
                         "Editing disabled in read-only mode".to_string(),
                         true,
@@ -466,6 +493,9 @@ impl App {
                 // Drill into the focused graph node's resource.
                 self.navigate_to_focused_graph_node();
             }
+            crossterm::event::KeyCode::Enter if self.view_state.current_view == View::KindList => {
+                self.kind_enter_selected();
+            }
             crossterm::event::KeyCode::Enter
                 if self.view_state.current_view == View::InventoryList =>
             {
@@ -484,17 +514,15 @@ impl App {
                     .view_state
                     .workload_rows
                     .get(self.view_state.selected_index)
+                    .cloned()
                 {
-                    self.async_state.workload_metrics.clear();
-                    self.async_state.workload.request(ResourceKey::new(
-                        row.kind.clone(),
-                        row.namespace.clone(),
-                        row.name.clone(),
-                    ));
-                    self.logs_after_workload_load = false;
-                    self.view_state.workload_scroll_offset = 0;
-                    self.view_state.text_search.clear();
-                    self.view_state.current_view = View::WorkloadDetail;
+                    self.open_workload_detail(
+                        row.kind,
+                        row.namespace,
+                        row.name,
+                        View::WorkloadList,
+                        false,
+                    );
                 }
             }
             // HelmRelease effective values (#264).
@@ -525,18 +553,15 @@ impl App {
                     .view_state
                     .workload_rows
                     .get(self.view_state.selected_index)
+                    .cloned()
                 {
-                    self.async_state.workload_metrics.clear();
-                    self.async_state.workload.request(ResourceKey::new(
-                        row.kind.clone(),
-                        row.namespace.clone(),
-                        row.name.clone(),
-                    ));
-                    self.logs_after_workload_load = true;
-                    self.view_state.logs_back_view = Some(View::WorkloadList);
-                    self.view_state.workload_scroll_offset = 0;
-                    self.view_state.text_search.clear();
-                    self.view_state.current_view = View::WorkloadDetail;
+                    self.open_workload_detail(
+                        row.kind,
+                        row.namespace,
+                        row.name,
+                        View::WorkloadList,
+                        true,
+                    );
                 }
             }
             crossterm::event::KeyCode::Enter if self.view_state.current_view.is_list_view() => {
@@ -718,7 +743,11 @@ impl App {
                     self.async_state.workload_metrics.clear();
                     self.logs_after_workload_load = false;
                     self.view_state.text_search.clear();
-                    self.view_state.current_view = View::WorkloadList;
+                    self.view_state.current_view = self
+                        .view_state
+                        .workload_back_view
+                        .take()
+                        .unwrap_or(View::WorkloadList);
                 } else if self.view_state.current_view == View::Pulse {
                     self.view_state.text_search.clear();
                     self.view_state.current_view = View::ResourceList;
@@ -1245,6 +1274,10 @@ impl App {
                     .unwrap_or(self.view_state.previous_list_view);
                 None
             }
+            View::KindList => {
+                self.kind_list_escape();
+                None
+            }
             View::WorkloadList | View::InventoryList => {
                 // Entered from a graph inventory group — return to the graph.
                 self.async_state.inventory_status.clear();
@@ -1256,7 +1289,11 @@ impl App {
                 self.async_state.workload_metrics.clear();
                 self.logs_after_workload_load = false;
                 self.view_state.text_search.clear();
-                self.view_state.current_view = View::WorkloadList;
+                self.view_state.current_view = self
+                    .view_state
+                    .workload_back_view
+                    .take()
+                    .unwrap_or(View::WorkloadList);
                 None
             }
             View::Pulse => {
@@ -1467,8 +1504,36 @@ impl App {
         self.view_state.text_search.clear();
     }
 
+    /// Open the shared workload detail view for a workload, remembering
+    /// where Back returns (the graph's workload list or a `:<kind>` list).
+    /// With `then_logs`, continue into pod logs once the data arrives.
+    pub(crate) fn open_workload_detail(
+        &mut self,
+        kind: String,
+        namespace: String,
+        name: String,
+        back: View,
+        then_logs: bool,
+    ) {
+        self.async_state.workload_metrics.clear();
+        self.async_state
+            .workload
+            .request(ResourceKey::new(kind, namespace, name));
+        self.logs_after_workload_load = then_logs;
+        if then_logs {
+            self.view_state.logs_back_view = Some(back);
+        }
+        self.view_state.workload_back_view = Some(back);
+        self.view_state.workload_scroll_offset = 0;
+        self.view_state.text_search.clear();
+        self.view_state.current_view = View::WorkloadDetail;
+    }
+
     /// Queue a workload action for confirmation, unless read-only (#263).
-    fn confirm_workload_action(&mut self, action: crate::kube::workloads::WorkloadAction) {
+    pub(crate) fn confirm_workload_action(
+        &mut self,
+        action: crate::kube::workloads::WorkloadAction,
+    ) {
         if self.config.read_only {
             self.set_status_message((
                 crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
@@ -1567,7 +1632,7 @@ impl App {
     }
 
     /// Open the describe view for the current view's target (Flux or native).
-    fn open_describe_view(&mut self) {
+    pub(crate) fn open_describe_view(&mut self) {
         if let Some(target) = self.prepare_nested_view_target() {
             self.async_state.describe.request(target);
             self.view_state.describe_scroll_offset = 0;
@@ -1586,6 +1651,17 @@ impl App {
                 .inventory_rows
                 .get(self.view_state.selected_index)
                 .map(ObjectRef::from),
+            View::KindList => {
+                let spec = &self.async_state.kind_list.key()?.spec;
+                let rows = self.filtered_kind_rows();
+                let row = rows.get(self.view_state.selected_index)?;
+                Some(ObjectRef::native(
+                    spec.gvk.api_version(),
+                    spec.gvk.kind.clone(),
+                    row.namespace.clone(),
+                    row.name.clone(),
+                ))
+            }
             View::EventList => {
                 let events = self.filtered_kube_events();
                 let event = events.get(self.view_state.selected_index)?;
@@ -1623,6 +1699,9 @@ impl App {
         match self.view_state.current_view {
             View::InventoryList => {
                 self.view_state.detail_back_view = Some(View::InventoryList);
+            }
+            View::KindList => {
+                self.view_state.detail_back_view = Some(View::KindList);
             }
             View::EventList => {
                 self.view_state.previous_list_view = View::EventList;
@@ -1889,25 +1968,60 @@ impl App {
             }
         }
 
-        // Fallback: a resource-type command (e.g. `:ks`, `:hr`), else a
-        // dynamically discovered kind (#197), else unknown.
-        if let Some(display_name) = crate::watcher::get_display_name_for_command(&cmd_lower) {
-            self.view_state.selected_resource_type = Some(display_name.to_string());
-            self.reset_list_position();
-            self.invalidate_layout_cache(); // Resource type filter affects header display
-        } else if let Some(kind) = crate::models::extra_kinds::global().resolve_command(&cmd_lower)
-        {
-            self.view_state.selected_resource_type = Some(kind);
-            self.reset_list_position();
-            self.invalidate_layout_cache();
-        } else if !cmd.is_empty() {
-            self.set_status_message((
-                format!(
-                    "Unknown command: '{}'. Type :help for available commands",
-                    cmd
-                ),
-                true,
-            ));
+        // Fallback: a kind (#267). Flux and Flux-adjacent kinds filter the
+        // Flux list as before; any other served kind opens a kind list.
+        match crate::models::kinds::resolve(&cmd_lower) {
+            Some(spec) if spec.family == crate::models::kinds::Family::Native => {
+                self.open_kind_list(spec);
+            }
+            Some(spec) => {
+                if self.view_state.current_view == View::KindList {
+                    self.go_home_flux();
+                }
+                self.view_state.selected_resource_type = Some(spec.names.kind);
+                self.reset_list_position();
+                self.invalidate_layout_cache(); // Resource type filter affects header display
+            }
+            // Discovery still running (just connected): hold the command and
+            // open it when the kinds land, instead of calling it unknown.
+            None if !cmd.is_empty()
+                && self.config.native_resources
+                && self.async_state.kind_discovery.is_loading() =>
+            {
+                self.pending_kind_command = Some(cmd_lower.clone());
+                self.set_status_message((
+                    format!("Discovering the cluster's kinds — :{cmd} opens when ready"),
+                    false,
+                ));
+            }
+            // Preview off: a recognisable Kubernetes kind gets pointed at
+            // :native instead of an unhelpful "unknown command".
+            None if !cmd.is_empty()
+                && !self.config.native_resources
+                && crate::models::kinds::looks_like_kubernetes_kind(&cmd_lower) =>
+            {
+                self.set_status_message((
+                    format!(
+                        ":{cmd} is a Kubernetes kind — browsing kinds is a preview. \
+                         Try it with :native, or: flux9s config set nativeResources true"
+                    ),
+                    true,
+                ));
+            }
+            None if !cmd.is_empty() => {
+                // A CRD installed after connecting isn't in the catalog yet:
+                // re-check the cluster's kinds (throttled) so a retry finds it.
+                let rechecking = self.refresh_kind_discovery();
+                let hint = if !self.config.native_resources {
+                    "Browsing Kubernetes kinds is a preview — :native turns it on"
+                } else if rechecking {
+                    "Re-checking the cluster's kinds — if it was just installed, try again in a moment"
+                } else {
+                    "Type :help for available commands"
+                };
+                self.set_status_message((format!("Unknown command: '{}'. {}", cmd, hint), true));
+            }
+            None => {}
         }
 
         None
@@ -1943,48 +2057,109 @@ impl App {
     /// it, drops the discovered kinds' `:` commands, and purges their resources
     /// from the list.
     fn cmd_toggle_discover(&mut self, _cmd: &str) {
-        let enable = !self.config.discover_flux_resources;
-
-        // Captured before the registry is cleared — needed to purge the
-        // discovered resources out of the list state.
-        let discovered = crate::models::extra_kinds::global().kind_names();
-
-        if let Some(watcher) = self.watcher.as_mut()
-            && let Err(e) = watcher.set_discovery_enabled(enable)
-        {
-            self.set_status_message((format!("Failed to start CRD discovery: {}", e), true));
+        // The opt-out means no discovery or extra watches at all (#267).
+        if !self.config.native_resources {
+            self.set_status_message((
+                "CRD discovery needs native resources (preview) — turn them on with :native first"
+                    .to_string(),
+                true,
+            ));
             return;
         }
+        let enable = !self.config.discover_flux_resources;
+        let removed = match self.apply_flux_crd_discovery(enable) {
+            Ok(removed) => removed,
+            Err(e) => {
+                self.set_status_message((format!("Failed to start CRD discovery: {}", e), true));
+                return;
+            }
+        };
         self.config.discover_flux_resources = enable;
-
-        if !enable {
-            // Also covers the no-watcher case, where nothing else clears it.
-            crate::models::extra_kinds::global().clear();
-            for kind in &discovered {
-                self.purge_kind(kind);
-            }
-            // A discovered kind can't stay selected once it's gone.
-            if self
-                .view_state
-                .selected_resource_type
-                .as_ref()
-                .is_some_and(|selected| discovered.contains(selected))
-            {
-                self.view_state.selected_resource_type = None;
-                self.reset_list_position();
-            }
-            self.notify_resource_types_changed();
-        }
-
+        let discovered_len = removed;
         let status = if enable {
             "CRD discovery enabled (session only) - watching for Flux-labeled CRDs".to_string()
         } else {
             format!(
                 "CRD discovery disabled (session only) - removed {} discovered kind(s)",
-                discovered.len()
+                discovered_len
             )
         };
         self.set_status_message((status, false));
+    }
+
+    /// Start or stop Flux-adjacent CRD discovery on the watcher. Stopping
+    /// also drops the discovered kinds and their rows. Returns how many kinds
+    /// were removed. Shared by `:discover` and `:native`.
+    fn apply_flux_crd_discovery(&mut self, enable: bool) -> Result<usize, String> {
+        // Captured before the registry is cleared — needed to purge the
+        // discovered resources out of the list state.
+        let discovered = crate::models::extra_kinds::global().kind_names();
+
+        if let Some(watcher) = self.watcher.as_mut() {
+            watcher
+                .set_discovery_enabled(enable)
+                .map_err(|e| e.to_string())?;
+        }
+        if enable {
+            return Ok(0);
+        }
+        // Also covers the no-watcher case, where nothing else clears it.
+        crate::models::extra_kinds::global().clear();
+        for kind in &discovered {
+            self.purge_kind(kind);
+        }
+        // A discovered kind can't stay selected once it's gone.
+        if self
+            .view_state
+            .selected_resource_type
+            .as_ref()
+            .is_some_and(|selected| discovered.contains(selected))
+        {
+            self.view_state.selected_resource_type = None;
+            self.reset_list_position();
+        }
+        self.notify_resource_types_changed();
+        Ok(discovered.len())
+    }
+
+    /// `:native` — turn native resource browsing (preview, #267) on or off
+    /// for this session, like `:readonly` / `:discover`: the in-memory
+    /// config flips (a later context switch keeps it), the file doesn't.
+    fn cmd_toggle_native(&mut self, _cmd: &str) {
+        let enable = !self.config.native_resources;
+        self.config.native_resources = enable;
+
+        // Flux-adjacent CRD discovery follows too (it needs both flags).
+        if self.config.discover_flux_resources
+            && let Err(e) = self.apply_flux_crd_discovery(self.config.flux_crd_discovery_enabled())
+        {
+            tracing::warn!("CRD discovery toggle failed: {e}");
+        }
+
+        if enable {
+            self.request_kind_discovery();
+            self.request_namespace_list();
+            self.set_status_message((
+                "Native resources on (preview, session only) — try :deploy, :po, :svc. \
+                 Keep it on with: flux9s config set nativeResources true"
+                    .to_string(),
+                false,
+            ));
+        } else {
+            if self.view_state.current_view == View::KindList {
+                self.go_home_flux();
+            }
+            self.async_state.kind_list.clear();
+            self.async_state.kind_discovery.clear();
+            self.async_state.namespace_list.clear();
+            crate::models::kinds::catalog().clear();
+            self.all_namespaces.clear();
+            self.pending_kind_command = None;
+            self.set_status_message((
+                "Native resources off (session only) — flux9s is Flux-only again".to_string(),
+                false,
+            ));
+        }
     }
 
     /// Open the interactive submenu for `cmd` if it has one (contexts, skins, …),
@@ -2136,8 +2311,16 @@ impl App {
             None => {
                 // No argument: open the searchable picker (same reusable submenu
                 // as :ctx / :skin) instead of listing options in the bars.
+                // Keep the cluster-wide list fresh for the next open.
+                self.request_namespace_list();
                 let options = self.namespace_picker_options();
-                match commands::namespace_submenu(&options, &self.namespace) {
+                let flux = self.flux_namespace_set();
+                match commands::namespace_submenu(
+                    &options,
+                    &self.namespace,
+                    &flux,
+                    self.config.ui.no_icons,
+                ) {
                     Some(submenu) => self.view_state.submenu_state = Some(submenu),
                     None => {
                         self.set_status_message(("No namespaces discovered yet".to_string(), true))
@@ -2171,6 +2354,8 @@ impl App {
         }
 
         self.reset_list_position();
+        // A kind list follows the namespace (#267).
+        self.refresh_kind_list_namespace();
     }
 
     /// `:healthy` — filter the list to healthy resources.
@@ -2247,7 +2432,18 @@ impl App {
 
     /// `:all` — clear resource-type and health filters and return to the main
     /// resource list (also from the favorites and events views).
+    /// `:flux` — back to the Flux resource list, as it was left.
+    fn cmd_show_flux(&mut self, _cmd: &str) {
+        if self.view_state.current_view == View::EventList {
+            self.stop_kube_events_watch();
+        }
+        self.go_home_flux();
+    }
+
     fn cmd_show_all(&mut self, _cmd: &str) {
+        if self.view_state.current_view == View::KindList {
+            self.go_home_flux();
+        }
         if self.view_state.current_view == View::ResourceFavorites {
             self.view_state.current_view = View::ResourceList;
         }
@@ -2301,6 +2497,7 @@ mod tests {
             default_namespace: "".to_string(),
             default_controller_namespace: "".to_string(),
             discover_flux_resources: false,
+            native_resources: true,
             metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             namespace_hotkeys: vec![],
             ui: UiConfig {
@@ -3441,6 +3638,7 @@ mod tests {
             events: Vec::new(),
             events_error: None,
             pod_selector: None,
+            managed_by: None,
         }
     }
 
@@ -3580,6 +3778,650 @@ mod tests {
             app.async_state.workload_metrics.key().is_none(),
             "stopped on leave"
         );
+    }
+
+    fn kind(group: &str, kind: &str, plural: &str) -> crate::models::kinds::KindSpec {
+        crate::models::kinds::KindSpec::generic(
+            crate::models::kinds::Gvk {
+                group: group.into(),
+                version: "v1".into(),
+                kind: kind.into(),
+            },
+            crate::models::kinds::KindScope::Namespaced,
+            plural.into(),
+            vec![],
+        )
+    }
+
+    fn with_rows(app: &mut App, rows: &[(&str, &str)]) {
+        let columns = app
+            .async_state
+            .kind_list
+            .key()
+            .map(|r| r.spec.columns.clone())
+            .unwrap_or_default();
+        app.async_state
+            .kind_list
+            .set_result(crate::kube::kind_list::KindListSnapshot {
+                columns,
+                rows: rows
+                    .iter()
+                    .map(|(ns, name)| crate::kube::kind_list::KindRow {
+                        namespace: ns.to_string(),
+                        name: name.to_string(),
+                        health: crate::kube::object_status::ObjectHealth::Current,
+                        cells: vec![],
+                        created: None,
+                        ownership: crate::kube::ownership::Ownership::Unmanaged,
+                    })
+                    .collect(),
+                total: rows.len(),
+            });
+    }
+
+    #[test]
+    fn kind_lists_stack_history_and_esc_walks_back_home() {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = View::ResourceList;
+
+        app.open_kind_list(kind("apps", "Deployment", "deployments"));
+        assert_eq!(app.view_state.current_view, View::KindList);
+        let request = app.async_state.kind_list.pending().cloned().unwrap();
+        assert_eq!(request.spec.gvk.kind, "Deployment");
+        assert_eq!(
+            request.namespace, app.namespace,
+            "follows the current namespace"
+        );
+
+        app.open_kind_list(kind("", "Pod", "pods"));
+        assert_eq!(
+            app.view_state.list_history.len(),
+            2,
+            "Flux, then deployments"
+        );
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::KindList);
+        assert_eq!(
+            app.async_state
+                .kind_list
+                .key()
+                .map(|r| r.spec.gvk.kind.clone()),
+            Some("Deployment".to_string())
+        );
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert!(
+            app.async_state.kind_list.key().is_none(),
+            "watch stopped at home"
+        );
+    }
+
+    #[test]
+    fn flux_command_goes_home_from_any_depth() {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = View::ResourceList;
+        app.open_kind_list(kind("apps", "Deployment", "deployments"));
+        app.open_kind_list(kind("", "Pod", "pods"));
+
+        app.ui_state.command_buffer = "flux".to_string();
+        app.execute_command();
+
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert!(app.view_state.list_history.is_empty());
+        assert!(app.async_state.kind_list.key().is_none());
+    }
+
+    #[test]
+    fn d_on_a_kind_row_describes_it_and_back_returns_to_the_list() {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = View::ResourceList;
+        app.open_kind_list(kind("apps", "Deployment", "deployments"));
+        with_rows(&mut app, &[("apps", "api"), ("apps", "web")]);
+
+        app.handle_key(make_key(KeyCode::Char('j')));
+        // `d` always describes (Enter opens the workload detail for
+        // workload kinds — covered separately).
+        app.handle_key(make_key(KeyCode::Char('d')));
+
+        assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+        assert_eq!(
+            app.async_state.describe.pending().cloned(),
+            Some(ObjectRef::native("apps/v1", "Deployment", "apps", "web"))
+        );
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::KindList);
+        assert_eq!(app.view_state.selected_index, 1);
+    }
+
+    #[test]
+    fn filter_narrows_kind_rows() {
+        let mut app = create_test_app(false);
+        app.open_kind_list(kind("apps", "Deployment", "deployments"));
+        with_rows(
+            &mut app,
+            &[("apps", "api"), ("apps", "web"), ("ops", "webhook")],
+        );
+        app.view_state.filter = "web".to_string();
+        let names: Vec<_> = app
+            .filtered_kind_rows()
+            .iter()
+            .map(|r| r.name.clone())
+            .collect();
+        assert_eq!(names, ["web", "webhook"]);
+    }
+
+    #[test]
+    fn namespace_switch_restarts_the_kind_list() {
+        let mut app = create_test_app(false);
+        app.open_kind_list(kind("apps", "Deployment", "deployments"));
+        app.switch_namespace(Some("ops".to_string()));
+        let request = app.async_state.kind_list.pending().cloned().unwrap();
+        assert_eq!(request.namespace.as_deref(), Some("ops"));
+        assert_eq!(app.view_state.current_view, View::KindList);
+    }
+
+    #[test]
+    fn flux_aliases_still_filter_the_flux_list() {
+        let mut app = create_test_app(false);
+        app.open_kind_list(kind("apps", "Deployment", "deployments"));
+        app.ui_state.command_buffer = "ks".to_string();
+        app.execute_command();
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert_eq!(
+            app.view_state.selected_resource_type.as_deref(),
+            Some("Kustomization")
+        );
+    }
+
+    #[test]
+    fn native_resources_opt_out_keeps_flux_only() {
+        let mut app = create_test_app(false);
+        app.config.native_resources = false;
+        app.view_state.current_view = View::ResourceList;
+        app.open_kind_list(kind("apps", "Deployment", "deployments"));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(m, _)| m.contains(":native turns it on"))
+        );
+    }
+
+    #[test]
+    fn unknown_kind_rechecks_discovery_at_most_every_30s() {
+        let mut app = create_test_app(false);
+        assert!(app.refresh_kind_discovery(), "first unknown kind re-checks");
+        assert!(app.async_state.kind_discovery.is_loading());
+        assert!(!app.refresh_kind_discovery(), "throttled while recent");
+
+        app.config.native_resources = false;
+        app.async_state.kind_discovery.clear();
+        app.async_state.kind_discovery_at = None;
+        assert!(!app.refresh_kind_discovery(), "never when opted out");
+    }
+
+    #[test]
+    fn edit_on_native_objects_explains_and_suggests_kubectl() {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = View::ResourceList;
+        app.open_kind_list(kind("metallb.io", "IPAddressPool", "ipaddresspools"));
+        with_rows(&mut app, &[("metallb-system", "main-pool")]);
+
+        app.handle_key(make_key(KeyCode::Char('e')));
+
+        assert_eq!(app.view_state.current_view, View::KindList, "no edit view");
+        let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+        assert!(is_error);
+        assert!(message.contains("Editing IPAddressPool isn't supported yet"));
+        assert!(
+            message.contains("kubectl edit ipaddresspool.metallb.io/main-pool -n metallb-system")
+        );
+    }
+
+    #[test]
+    fn edit_on_unwatched_flux_object_points_at_namespace_switch() {
+        let target = ObjectRef::native(
+            "kustomize.toolkit.fluxcd.io/v1",
+            "Kustomization",
+            "team-a",
+            "apps",
+        );
+        assert_eq!(
+            native_edit_message(&target),
+            "Kustomization team-a/apps isn't in the watched namespace — :ns team-a to edit it"
+        );
+    }
+
+    #[test]
+    fn live_updates_keep_the_cursor_on_the_same_object() {
+        let mut app = create_test_app(false);
+        app.open_kind_list(kind("apps", "Deployment", "deployments"));
+        with_rows(&mut app, &[("apps", "api"), ("apps", "web")]);
+        app.handle_key(make_key(KeyCode::Char('j'))); // on "web"
+
+        // A new object sorts above the cursor.
+        let row = |name: &str| crate::kube::kind_list::KindRow {
+            namespace: "apps".into(),
+            name: name.into(),
+            health: crate::kube::object_status::ObjectHealth::Current,
+            cells: vec![],
+            created: None,
+            ownership: crate::kube::ownership::Ownership::Unmanaged,
+        };
+        app.on_kind_list_snapshot(crate::kube::kind_list::KindListSnapshot {
+            columns: vec![],
+            rows: vec![row("aaa"), row("api"), row("web")],
+            total: 3,
+        });
+        assert_eq!(app.view_state.selected_index, 2, "still on web");
+
+        // The selected object disappears: clamp instead of pointing past the end.
+        app.on_kind_list_snapshot(crate::kube::kind_list::KindListSnapshot {
+            columns: vec![],
+            rows: vec![row("aaa")],
+            total: 1,
+        });
+        assert_eq!(app.view_state.selected_index, 0);
+    }
+
+    #[test]
+    fn esc_clears_an_applied_kind_filter_before_leaving() {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = View::ResourceList;
+        app.open_kind_list(kind("apps", "Deployment", "deployments"));
+        with_rows(&mut app, &[("apps", "api"), ("apps", "web")]);
+
+        app.handle_key(make_key(KeyCode::Char('/')));
+        for c in "web".chars() {
+            app.handle_key(make_key(KeyCode::Char(c)));
+        }
+        app.handle_key(make_key(KeyCode::Enter));
+        assert_eq!(app.view_state.filter, "web");
+        assert_eq!(app.filtered_kind_rows().len(), 1);
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(
+            app.view_state.current_view,
+            View::KindList,
+            "first Esc clears"
+        );
+        assert!(app.view_state.filter.is_empty());
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+    }
+
+    #[test]
+    fn native_edit_message_handles_core_and_cluster_scoped_kinds() {
+        let pod = ObjectRef::native("v1", "Pod", "apps", "web-1");
+        assert!(native_edit_message(&pod).ends_with("kubectl edit pod/web-1 -n apps"));
+        let node = ObjectRef::native("v1", "Node", "", "worker-1");
+        assert!(native_edit_message(&node).ends_with("kubectl edit node/worker-1"));
+    }
+
+    #[test]
+    fn ns_picker_lists_every_namespace_with_flux_ones_first_and_marked() {
+        let mut app = create_test_app(false);
+        app.update_namespace_hotkeys(vec!["apps".into(), "infra".into()]);
+        app.all_namespaces = vec![
+            "zeta".into(),
+            "apps".into(),
+            "default".into(),
+            "flux-system".into(),
+            "infra".into(),
+            "kube-system".into(),
+        ];
+        let options = app.namespace_picker_options();
+        assert_eq!(
+            options,
+            [
+                "all",
+                "flux-system",
+                "apps",
+                "infra",
+                "default",
+                "kube-system",
+                "zeta"
+            ],
+            "hotkeys/Flux namespaces first, the rest alphabetically, no duplicates"
+        );
+
+        app.ui_state.command_buffer = "ns".to_string();
+        app.execute_command();
+        let submenu = app.view_state.submenu_state.as_ref().unwrap();
+        let apps = submenu.items.iter().find(|i| i.value == "apps").unwrap();
+        assert!(
+            apps.display_text.contains("flux"),
+            "Flux namespaces are marked"
+        );
+        let zeta = submenu.items.iter().find(|i| i.value == "zeta").unwrap();
+        assert_eq!(zeta.display_text, "zeta");
+    }
+
+    #[test]
+    fn ns_picker_is_unchanged_when_native_resources_are_off() {
+        let mut app = create_test_app(false);
+        app.config.native_resources = false;
+        app.update_namespace_hotkeys(vec!["apps".into()]);
+        app.request_namespace_list();
+        assert!(
+            !app.async_state.namespace_list.is_loading(),
+            "no extra call"
+        );
+        assert_eq!(
+            app.namespace_picker_options(),
+            ["all", "flux-system", "apps"]
+        );
+    }
+
+    fn open_list(app: &mut App, group: &str, kind_name: &str, plural: &str, rows: &[(&str, &str)]) {
+        app.view_state.current_view = View::ResourceList;
+        app.open_kind_list(kind(group, kind_name, plural));
+        with_rows(app, rows);
+    }
+
+    fn footer_keys(app: &App) -> Vec<(&'static str, &'static str)> {
+        app.footer_commands()
+            .into_iter()
+            .map(|c| (c.key, c.label))
+            .collect()
+    }
+
+    #[test]
+    fn deploy_list_enter_opens_the_shared_workload_detail_and_back_returns() {
+        let mut app = create_test_app(false);
+        open_list(
+            &mut app,
+            "apps",
+            "Deployment",
+            "deployments",
+            &[("apps", "web")],
+        );
+
+        app.handle_key(make_key(KeyCode::Enter));
+
+        assert_eq!(app.view_state.current_view, View::WorkloadDetail);
+        assert_eq!(
+            app.async_state
+                .workload
+                .pending()
+                .map(|k| k.to_key_string()),
+            Some("Deployment:apps:web".to_string())
+        );
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(
+            app.view_state.current_view,
+            View::KindList,
+            "back to :deploy, not the graph"
+        );
+        assert!(
+            app.async_state.kind_list.key().is_some(),
+            "list kept live meanwhile"
+        );
+    }
+
+    #[test]
+    fn deploy_list_r_confirms_a_restart_like_the_workload_views() {
+        use crate::kube::workloads::WorkloadAction;
+        let mut app = create_test_app(false);
+        open_list(
+            &mut app,
+            "apps",
+            "Deployment",
+            "deployments",
+            &[("apps", "web")],
+        );
+        assert!(footer_keys(&app).contains(&("r", "Restart")));
+
+        app.handle_key(make_key(KeyCode::Char('r')));
+
+        assert_eq!(
+            pending_workload_action(&app),
+            Some(WorkloadAction::Restart {
+                kind: "Deployment".into(),
+                namespace: "apps".into(),
+                name: "web".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn pod_list_offers_logs_and_delete_but_not_restart() {
+        use crate::kube::workloads::WorkloadAction;
+        let mut app = create_test_app(false);
+        open_list(&mut app, "", "Pod", "pods", &[("apps", "web-abc")]);
+        let footer = footer_keys(&app);
+        assert!(footer.contains(&("l", "Logs")));
+        assert!(footer.contains(&("^d", "Delete pod")));
+        assert!(!footer.iter().any(|(k, _)| *k == "r"));
+
+        app.handle_key(make_ctrl_key(KeyCode::Char('d')));
+        assert_eq!(
+            pending_workload_action(&app),
+            Some(WorkloadAction::DeletePod {
+                namespace: "apps".into(),
+                name: "web-abc".into(),
+            })
+        );
+        app.handle_key(make_key(KeyCode::Char('n'))); // cancel
+
+        app.handle_key(make_key(KeyCode::Char('l')));
+        assert_eq!(app.view_state.current_view, View::Logs);
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(
+            app.view_state.current_view,
+            View::KindList,
+            "logs return to :po"
+        );
+    }
+
+    #[test]
+    fn kind_list_actions_respect_read_only() {
+        let mut app = create_test_app(false);
+        app.config.read_only = true;
+        open_list(&mut app, "", "Pod", "pods", &[("apps", "web-abc")]);
+        app.handle_key(make_ctrl_key(KeyCode::Char('d')));
+        assert!(app.async_state.confirmation_pending.is_none());
+    }
+
+    #[test]
+    fn view_only_kinds_offer_no_actions() {
+        let mut app = create_test_app(false);
+        open_list(&mut app, "", "ConfigMap", "configmaps", &[("apps", "cfg")]);
+        let footer = footer_keys(&app);
+        assert!(!footer.iter().any(|(k, _)| ["r", "l", "^d"].contains(k)));
+        app.handle_key(make_key(KeyCode::Char('r')));
+        app.handle_key(make_ctrl_key(KeyCode::Char('d')));
+        assert!(app.async_state.confirmation_pending.is_none());
+        app.handle_key(make_key(KeyCode::Enter));
+        assert_eq!(
+            app.view_state.current_view,
+            View::ResourceDescribe,
+            "Enter describes"
+        );
+    }
+
+    #[test]
+    fn namespace_hotkeys_follow_into_kind_lists() {
+        let mut app = create_test_app(false);
+        app.update_namespace_hotkeys(vec!["apps".into()]);
+        open_list(&mut app, "apps", "Deployment", "deployments", &[]);
+        app.handle_key(make_key(KeyCode::Char('2'))); // hotkeys: all, flux-system, apps
+        assert_eq!(app.namespace.as_deref(), Some("apps"));
+        let request = app.async_state.kind_list.pending().cloned().unwrap();
+        assert_eq!(
+            request.namespace.as_deref(),
+            Some("apps"),
+            "list restarted in the new namespace"
+        );
+    }
+
+    #[test]
+    fn kind_typed_during_discovery_is_held_not_rejected() {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = View::ResourceList;
+        app.request_kind_discovery();
+        assert!(app.async_state.kind_discovery.is_loading());
+
+        app.ui_state.command_buffer = "zzznotakind".to_string();
+        app.execute_command();
+
+        assert_eq!(app.pending_kind_command.as_deref(), Some("zzznotakind"));
+        let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+        assert!(!is_error && message.contains("opens when ready"));
+
+        // Discovery lands without it: now it's reported as unknown.
+        app.on_kind_discovery_complete();
+        assert!(app.pending_kind_command.is_none());
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(m, err)| *err && m.contains("Unknown command: 'zzznotakind'"))
+        );
+    }
+
+    #[test]
+    fn native_resources_opt_out_blocks_flux_crd_discovery_everywhere() {
+        let mut app = create_test_app(false);
+        app.config.native_resources = false;
+        app.config.discover_flux_resources = true;
+        assert!(!app.config.flux_crd_discovery_enabled());
+
+        // :discover can't turn it back on.
+        app.ui_state.command_buffer = "discover".to_string();
+        app.execute_command();
+        assert!(app.config.discover_flux_resources, "flag untouched");
+        assert!(!app.config.flux_crd_discovery_enabled());
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(m, err)| *err && m.contains("turn them on with :native"))
+        );
+
+        // Queued discovery events are ignored: no kind registered.
+        let extra = crate::models::extra_kinds::ExtraKind {
+            kind: "OptOutWidget".into(),
+            group: "optout.example.com".into(),
+            version: "v1".into(),
+            plural: "optoutwidgets".into(),
+            short_names: vec![],
+        };
+        app.apply_extra_kind_event(crate::watcher::WatchEvent::ExtraKindDiscovered(extra));
+        assert!(
+            crate::models::extra_kinds::global()
+                .get("OptOutWidget")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn crd_discovery_events_apply_when_both_flags_are_on() {
+        let mut app = create_test_app(false);
+        app.config.native_resources = true;
+        app.config.discover_flux_resources = true;
+        let extra = crate::models::extra_kinds::ExtraKind {
+            kind: "OptInWidget".into(),
+            group: "optin.example.com".into(),
+            version: "v1".into(),
+            plural: "optinwidgets".into(),
+            short_names: vec![],
+        };
+        app.apply_extra_kind_event(crate::watcher::WatchEvent::ExtraKindDiscovered(extra));
+        assert!(
+            crate::models::extra_kinds::global()
+                .get("OptInWidget")
+                .is_some()
+        );
+        app.apply_extra_kind_event(crate::watcher::WatchEvent::ExtraKindRemoved(
+            "OptInWidget".into(),
+        ));
+        assert!(
+            crate::models::extra_kinds::global()
+                .get("OptInWidget")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native_toggle_turns_the_preview_on_and_off_for_the_session() {
+        let mut app = create_test_app(false);
+        app.config.native_resources = false;
+        app.view_state.current_view = View::ResourceList;
+
+        app.ui_state.command_buffer = "native".to_string();
+        app.execute_command();
+        assert!(app.config.native_resources);
+        assert!(
+            app.async_state.kind_discovery.is_loading(),
+            "discovers kinds"
+        );
+        assert!(
+            app.async_state.namespace_list.is_loading(),
+            "lists namespaces"
+        );
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(m, err)| !err && m.contains("preview"))
+        );
+
+        app.open_kind_list(kind("apps", "Deployment", "deployments"));
+        assert_eq!(app.view_state.current_view, View::KindList);
+
+        app.ui_state.command_buffer = "native".to_string();
+        app.execute_command();
+        assert!(!app.config.native_resources);
+        assert_eq!(
+            app.view_state.current_view,
+            View::ResourceList,
+            "back to Flux"
+        );
+        assert!(
+            app.async_state.kind_list.key().is_none(),
+            "kind watch stopped"
+        );
+        assert!(!app.async_state.kind_discovery.is_loading());
+    }
+
+    #[test]
+    fn native_toggle_carries_flux_crd_discovery_with_it() {
+        let mut app = create_test_app(false);
+        app.config.native_resources = false;
+        app.config.discover_flux_resources = true;
+        assert!(!app.config.flux_crd_discovery_enabled());
+        app.ui_state.command_buffer = "native".to_string();
+        app.execute_command();
+        assert!(app.config.flux_crd_discovery_enabled(), "both flags on now");
+        app.ui_state.command_buffer = "native".to_string();
+        app.execute_command();
+        assert!(!app.config.flux_crd_discovery_enabled());
+        assert!(
+            app.config.discover_flux_resources,
+            "the discovery preference is kept"
+        );
+    }
+
+    #[test]
+    fn kind_commands_while_off_point_at_native() {
+        let mut app = create_test_app(false);
+        app.config.native_resources = false;
+        for (command, expect) in [
+            ("deploy", ":deploy is a Kubernetes kind"),
+            ("ipaddresspools.metallb.io", "is a Kubernetes kind"),
+            ("nosuchthing", ":native turns it on"),
+        ] {
+            app.ui_state.command_buffer = command.to_string();
+            app.execute_command();
+            let (message, _) = app.ui_state.status_message.clone().unwrap();
+            assert!(message.contains(expect), "{command}: {message}");
+            assert_eq!(app.view_state.current_view, View::ResourceList);
+        }
     }
 
     fn pending_workload_action(app: &App) -> Option<crate::kube::workloads::WorkloadAction> {

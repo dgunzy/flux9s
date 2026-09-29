@@ -51,6 +51,17 @@ pub fn render_loading_state(f: &mut Frame, area: Rect, title: &str, message: &st
     f.render_widget(paragraph, area);
 }
 
+/// `(kind, name)` from a `kind:namespace:name` selection key, for view
+/// titles. Unlike `ResourceKey::parse` it keeps `:` inside names (native
+/// objects such as `system:controller:...` ClusterRoles) and never logs.
+pub fn key_kind_and_name(key: &str) -> Option<(&str, &str)> {
+    let mut parts = key.splitn(3, ':');
+    let kind = parts.next().filter(|k| !k.is_empty())?;
+    let _namespace = parts.next()?;
+    let name = parts.next().filter(|n| !n.is_empty())?;
+    Some((kind, name))
+}
+
 /// Clean a JSON object by removing Kubernetes-managed fields that add noise in text views.
 pub fn clean_resource_json(obj: &serde_json::Value) -> serde_json::Value {
     match obj {
@@ -259,5 +270,18 @@ mod tests {
     fn test_format_age_future_timestamp_clamps_to_zero() {
         // Clock skew between client and API server should not render negative ages
         assert_eq!(format_age(Some(Utc::now() + Duration::seconds(30))), "0s");
+    }
+
+    #[test]
+    fn key_kind_and_name_keeps_colons_in_names() {
+        assert_eq!(
+            key_kind_and_name("Deployment:apps:web"),
+            Some(("Deployment", "web"))
+        );
+        assert_eq!(
+            key_kind_and_name("ClusterRole::system:controller:job-controller"),
+            Some(("ClusterRole", "system:controller:job-controller"))
+        );
+        assert_eq!(key_kind_and_name("garbage"), None);
     }
 }

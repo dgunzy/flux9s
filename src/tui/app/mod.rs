@@ -12,6 +12,7 @@ pub mod logs;
 mod async_ops;
 mod core;
 mod events;
+mod kind_browser;
 mod rendering;
 
 pub use core::*;
