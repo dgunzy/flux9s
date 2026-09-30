@@ -183,6 +183,7 @@ impl App {
             let health_filter_status = match self.view_state.health_filter {
                 HealthFilter::Healthy => Some("healthy"),
                 HealthFilter::Unhealthy => Some("unhealthy"),
+                HealthFilter::Suspended => Some("suspended"),
                 HealthFilter::All => None,
             };
 
@@ -359,6 +360,7 @@ impl App {
                         &self.resource_objects,
                         self.async_state.describe.result(),
                         self.async_state.describe.is_loading(),
+                        self.describe_manager_pending(),
                         &mut self.view_state.describe_scroll_offset,
                         &mut self.view_state.text_search,
                         &self.theme,

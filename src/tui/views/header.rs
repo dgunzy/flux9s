@@ -24,7 +24,7 @@ pub fn render_header(
     selected_resource_type: &Option<String>,
     filtered_count: usize,       // Count of resources after filtering
     health_percentage: f64,      // Health percentage (0-100)
-    health_filter: Option<&str>, // Health filter status ("healthy", "unhealthy", or None)
+    health_filter: Option<&str>, // Health filter status ("healthy", "unhealthy", "suspended", or None)
     read_only: bool,             // Readonly mode status
     theme: &Theme,
     no_icons: bool,

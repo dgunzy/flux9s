@@ -228,6 +228,8 @@ pub enum HealthFilter {
     Healthy,
     /// Show only unhealthy resources (ready=false or suspended=true)
     Unhealthy,
+    /// Show only suspended resources (suspended=true)
+    Suspended,
     /// Show all resources (no health filter)
     All,
 }
@@ -243,7 +245,7 @@ pub struct ViewState {
     pub filter: String,
     /// Whether filter mode is active (user is typing)
     pub filter_mode: bool,
-    /// Health filter (All, Healthy, Unhealthy)
+    /// Health filter (All, Healthy, Unhealthy, Suspended)
     pub health_filter: HealthFilter,
     /// Selected index in current list
     pub selected_index: usize,
@@ -415,12 +417,23 @@ impl UIState {
 
 /// Async operation state: one [`AsyncTask`] slot per view fetch, plus the
 /// mutation-operation flow (which carries confirmation state alongside).
+/// A resolved Managed By for the object with `uid`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManagerResolution {
+    pub uid: String,
+    pub text: String,
+}
+
 #[derive(Debug)]
 pub struct AsyncOperationState {
     /// Full-object fetch backing the YAML view (Flux or native object).
     pub yaml: AsyncTask<ObjectRef, serde_json::Value>,
     /// Object + events fetch backing the describe view (Flux or native object).
     pub describe: AsyncTask<ObjectRef, crate::kube::fetch::DescribeData>,
+    /// Owner-chain resolution filling the describe view's Managed By after
+    /// the object is shown. Keyed by the object; the result carries its UID
+    /// so a late answer for a previous describe is dropped.
+    pub describe_manager: AsyncTask<serde_json::Value, ManagerResolution>,
     /// Ownership-chain trace backing the trace view.
     pub trace: AsyncTask<ResourceKey, crate::trace::TraceResult>,
     /// Relationship graph backing the graph view.
@@ -483,6 +496,7 @@ impl Default for AsyncOperationState {
         Self {
             yaml: Default::default(),
             describe: Default::default(),
+            describe_manager: Default::default(),
             trace: Default::default(),
             graph: Default::default(),
             workload: Default::default(),
@@ -512,6 +526,7 @@ impl AsyncOperationState {
     pub fn clear_pending(&mut self) {
         self.yaml.clear();
         self.describe.clear();
+        self.describe_manager.clear();
         self.trace.clear();
         self.graph.clear();
         self.workload.clear();

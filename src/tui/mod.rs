@@ -399,6 +399,22 @@ pub async fn run_tui_with_async_init(
                         });
                     }
 
+                    if let Some((object, tx)) = app.async_state.describe_manager.dispatch() {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            // Bounded by MANAGER_TIMEOUT: always answers.
+                            let text =
+                                crate::kube::ownership::describe_manager(&client, &object).await;
+                            let uid = object
+                                .pointer("/metadata/uid")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default()
+                                .to_string();
+                            let _ = tx
+                                .send(Ok(crate::tui::app::state::ManagerResolution { uid, text }));
+                        });
+                    }
+
                     if let Some((entries, tx)) = app.async_state.inventory_status.dispatch() {
                         let handle = tokio::spawn(crate::kube::live::watch_object_statuses(
                             client.clone(),
@@ -561,7 +577,7 @@ pub async fn run_tui_with_async_init(
 
             if let Some(result) = app.async_state.describe.try_recv() {
                 match result {
-                    Ok(describe) => app.async_state.describe.set_result(describe),
+                    Ok(describe) => app.set_describe_result(describe),
                     Err(e) => {
                         app.async_state.describe.set_error();
                         app.set_status_message((
@@ -569,6 +585,13 @@ pub async fn run_tui_with_async_init(
                             true,
                         ));
                     }
+                }
+            }
+
+            if let Some(result) = app.async_state.describe_manager.try_recv() {
+                match result {
+                    Ok(resolution) => app.set_manager_resolution(resolution),
+                    Err(e) => tracing::debug!("Managed By resolution dropped: {}", e),
                 }
             }
 

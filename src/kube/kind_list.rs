@@ -470,6 +470,17 @@ impl KindStore {
 
 impl KindStore {
     /// Distinct owners still to resolve, with the namespace to look in.
+    /// UIDs of the direct owners of the rows currently listed.
+    fn owner_uids(&self) -> std::collections::HashSet<String> {
+        self.rows
+            .values()
+            .filter_map(|row| match &row.ownership {
+                Ownership::Owned(owner) => Some(owner.uid.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn pending_owners(
         &self,
         owners: &OwnerResolver,
@@ -569,8 +580,11 @@ pub async fn watch_kind(
             {
                 return; // List closed
             }
-            // Resolve owner chains in chunks (cached, capped), publishing
-            // progress and folding in any watch events that arrived.
+            // Resolve owner chains in chunks (cached, budgeted per pass),
+            // publishing progress and folding in any watch events that
+            // arrived. Owners over this pass's budget resolve on the next.
+            owners.retain_owners(&store.owner_uids());
+            owners.begin_pass();
             loop {
                 let pending = store.pending_owners(&owners);
                 if pending.is_empty() {
@@ -897,5 +911,49 @@ mod tests {
         let after = store.snapshot(&s.columns, now, &owners);
         assert_eq!(after.rows[0].cells[1], "Flux ks");
         assert!(store.pending_owners(&owners).is_empty());
+    }
+
+    #[test]
+    fn owners_over_budget_resolve_on_a_later_pass_and_departed_owners_are_pruned() {
+        use crate::kube::ownership::Resolved;
+        let s = spec();
+        let mut store = KindStore::default();
+        let pod = |name: &str, uid: &str| -> DynamicObject {
+            serde_json::from_value(json!({
+                "metadata": {"name": name, "namespace": "apps", "ownerReferences": [
+                    {"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": format!("rs-{uid}"), "uid": uid, "controller": true}
+                ]}
+            }))
+            .unwrap()
+        };
+        store.apply(&s, &s.columns, watcher::Event::Apply(pod("a", "rs-a")));
+        store.listed = true;
+        let mut owners = OwnerResolver::default();
+        owners.seed(
+            "rs-a",
+            Resolved::Owner {
+                kind: "Deployment".into(),
+                name: "a".into(),
+            },
+        );
+
+        // A long-open list whose budget ran out: a new owner appears...
+        owners.exhaust_budget();
+        store.apply(&s, &s.columns, watcher::Event::Apply(pod("b", "rs-b")));
+        assert!(
+            store.pending_owners(&owners).is_empty(),
+            "no budget this pass"
+        );
+        // ...and the next batch's pass picks it up rather than giving up.
+        owners.retain_owners(&store.owner_uids());
+        owners.begin_pass();
+        let pending = store.pending_owners(&owners);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0.uid, "rs-b");
+
+        // Rolled-out owners are forgotten once no row references them.
+        store.apply(&s, &s.columns, watcher::Event::Delete(pod("a", "rs-a")));
+        owners.retain_owners(&store.owner_uids());
+        assert!(owners.get("rs-a").is_none());
     }
 }

@@ -59,7 +59,9 @@ pub struct DescribeData {
     pub events_error: Option<String>,
     /// Who manages the object, in full (e.g. `Flux Kustomization
     /// flux-system/apps (via ReplicaSet/web-7b5)`) — the detail behind the
-    /// kind lists' short MANAGED-BY column.
+    /// kind lists' short MANAGED-BY column. `None` while an owner chain is
+    /// still being resolved in the background, so a slow cluster never holds
+    /// up the object and its events.
     pub managed_by: Option<String>,
 }
 
@@ -109,7 +111,7 @@ pub async fn fetch_object_describe_data(
             (Vec::new(), Some(format!("{}", e)))
         }
     };
-    let managed_by = Some(crate::kube::ownership::describe_manager(client, &object).await);
+    let managed_by = crate::kube::ownership::immediate_manager(&object);
     Ok(DescribeData {
         object,
         events,

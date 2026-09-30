@@ -38,6 +38,10 @@ pub const APP_COMMANDS: &[Command] = &[
         takes_args: false,
     },
     Command {
+        name: "suspended",
+        takes_args: false,
+    },
+    Command {
         name: "readonly",
         takes_args: false,
     },
@@ -258,6 +262,11 @@ pub fn is_healthy_command(cmd: &str) -> bool {
 /// Check if command is unhealthy filter
 pub fn is_unhealthy_command(cmd: &str) -> bool {
     cmd.to_lowercase() == "unhealthy"
+}
+
+/// Check if command is suspended filter
+pub fn is_suspended_command(cmd: &str) -> bool {
+    cmd.to_lowercase() == "suspended"
 }
 
 /// Check if command is "all" or "clear"

@@ -29,9 +29,13 @@ use kube::core::{DynamicObject, GroupVersionKind};
 use kube::discovery::{ApiResource, Scope};
 use serde_json::Value;
 
-/// Distinct owners resolved per list — bounds the API calls one big list can
-/// cause. Beyond it, rows show their direct owner.
+/// Owner lookups per resolution pass (one pass per batch of watch events)
+/// — bounds the API calls a big list or a burst of churn can cause. Owners
+/// left over wait for the next pass; they are not marked failed.
 pub const MAX_OWNER_LOOKUPS: usize = 300;
+/// Overall cap on one object's Managed By resolution (describe / workload
+/// detail), across every hop — per-hop timeouts alone could add up.
+pub const MANAGER_TIMEOUT: Duration = Duration::from_secs(3);
 /// How far up an owner chain to walk (Pod → RS → Deployment is 2).
 const MAX_OWNER_DEPTH: usize = 4;
 /// Per-lookup cap.
@@ -262,12 +266,30 @@ pub fn managed_by_text(own: &Ownership, resolved: Option<&Resolved>) -> String {
     }
 }
 
+/// Managed By text that needs no API calls — `None` when the object has an
+/// owner chain to walk (see [`describe_manager`]). Lets describe render at
+/// once and fill the chain in afterwards.
+pub fn immediate_manager(obj: &Value) -> Option<String> {
+    match ownership(obj) {
+        Ownership::Managed(manager) => Some(manager.describe()),
+        Ownership::Unmanaged => Some(UNMANAGED_TEXT.to_string()),
+        Ownership::Owned(_) => None,
+    }
+}
+
+const UNMANAGED_TEXT: &str = "not managed (no Flux, Argo CD, Helm, or owner)";
+
 /// Full Managed By text for one object (describe, workload detail),
-/// resolving its owner chain if it has one — a handful of lookups at most.
+/// resolving its owner chain if it has one, bounded by [`MANAGER_TIMEOUT`]
+/// overall so a slow API server can't stall the caller.
 pub async fn describe_manager(client: &kube::Client, obj: &Value) -> String {
+    describe_manager_within(client, obj, MANAGER_TIMEOUT).await
+}
+
+async fn describe_manager_within(client: &kube::Client, obj: &Value, limit: Duration) -> String {
     match ownership(obj) {
         Ownership::Managed(manager) => manager.describe(),
-        Ownership::Unmanaged => "not managed (no Flux, Argo CD, Helm, or owner)".to_string(),
+        Ownership::Unmanaged => UNMANAGED_TEXT.to_string(),
         Ownership::Owned(owner) => {
             let namespace = obj
                 .pointer("/metadata/namespace")
@@ -275,9 +297,13 @@ pub async fn describe_manager(client: &kube::Client, obj: &Value) -> String {
                 .unwrap_or_default()
                 .to_string();
             let mut resolver = OwnerResolver::default();
-            resolver
-                .resolve_many(client, vec![(owner.clone(), namespace)])
-                .await;
+            let resolve = resolver.resolve_many(client, vec![(owner.clone(), namespace)]);
+            if tokio::time::timeout(limit, resolve).await.is_err() {
+                return format!(
+                    "owned by {}/{} (manager lookup timed out)",
+                    owner.kind, owner.name
+                );
+            }
             describe_resolution(&owner, resolver.get(&owner.uid))
         }
     }
@@ -296,14 +322,81 @@ fn describe_resolution(owner: &OwnerRef, resolved: Option<&Resolved>) -> String 
     }
 }
 
+/// API resources for owner kinds, shared by every resolver (all kind lists,
+/// every describe) so kinds aren't re-discovered per call. Only successful
+/// lookups are cached — a transient timeout is retried next time. Cleared
+/// on context switch.
+fn api_cache() -> &'static std::sync::Mutex<HashMap<(String, String), (ApiResource, Scope)>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<(String, String), (ApiResource, Scope)>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Forget cached owner kinds (context switch: they belong to one cluster).
+pub fn clear_api_cache() {
+    if let Ok(mut cache) = api_cache().lock() {
+        cache.clear();
+    }
+}
+
+/// Resolve an owner's kind to an API resource: the shared cache, then the
+/// discovered-kind catalog (no request), then one discovery call.
+async fn api_resource_for(
+    client: &kube::Client,
+    api_version: &str,
+    kind: &str,
+) -> Option<(ApiResource, Scope)> {
+    let key = (api_version.to_string(), kind.to_string());
+    if let Some(found) = api_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return Some(found);
+    }
+    let (group, version) = api_version.split_once('/').unwrap_or(("", api_version));
+    let from_catalog = crate::models::kinds::catalog()
+        .find_by_group_kind(group, kind)
+        .map(|spec| {
+            let resource = ApiResource {
+                group: group.to_string(),
+                version: version.to_string(),
+                api_version: api_version.to_string(),
+                kind: kind.to_string(),
+                plural: spec.names.plural.clone(),
+            };
+            let scope = if spec.is_namespaced() {
+                Scope::Namespaced
+            } else {
+                Scope::Cluster
+            };
+            (resource, scope)
+        });
+    let found = match from_catalog {
+        Some(found) => found,
+        None => {
+            let gvk = GroupVersionKind::gvk(group, version, kind);
+            let (resource, caps) =
+                tokio::time::timeout(LOOKUP_TIMEOUT, kube::discovery::pinned_kind(client, &gvk))
+                    .await
+                    .ok()?
+                    .ok()?;
+            (resource, caps.scope)
+        }
+    };
+    if let Ok(mut cache) = api_cache().lock() {
+        cache.insert(key, found.clone());
+    }
+    Some(found)
+}
+
 /// Walks owner chains for one list, caching by owner UID so a Deployment's
 /// many pods cost one lookup per ReplicaSet (and one for the Deployment).
 #[derive(Default)]
 pub struct OwnerResolver {
     resolved: HashMap<String, Resolved>,
-    /// UIDs that failed (RBAC, gone) — not retried for this list.
+    /// UIDs whose lookup really failed (RBAC, gone, too deep) — not retried
+    /// while they're still in the list. Running out of budget is not a
+    /// failure: those owners just wait for the next pass.
     failed: HashSet<String>,
-    apis: HashMap<(String, String), Option<(ApiResource, Scope)>>,
+    /// Lookups spent in the current pass (see [`Self::begin_pass`]).
     lookups: usize,
 }
 
@@ -312,17 +405,38 @@ impl OwnerResolver {
         self.resolved.get(uid)
     }
 
+    /// Spend this pass's whole lookup budget (tests).
+    #[cfg(test)]
+    pub(crate) fn exhaust_budget(&mut self) {
+        self.lookups = MAX_OWNER_LOOKUPS;
+    }
+
     /// Record a resolution directly (tests).
     #[cfg(test)]
     pub(crate) fn seed(&mut self, uid: &str, resolved: Resolved) {
         self.resolved.insert(uid.to_string(), resolved);
     }
 
-    /// Whether `uid` still needs resolving (and the lookup budget allows).
+    /// Whether `uid` still needs resolving (and this pass's budget allows).
     pub fn wants(&self, uid: &str) -> bool {
         !self.resolved.contains_key(uid)
             && !self.failed.contains(uid)
             && self.lookups < MAX_OWNER_LOOKUPS
+    }
+
+    /// Start a resolution pass: the lookup budget is per pass (per batch of
+    /// watch events), so a list left open through churn keeps resolving new
+    /// owners instead of exhausting a lifetime budget.
+    pub fn begin_pass(&mut self) {
+        self.lookups = 0;
+    }
+
+    /// Forget owners no longer referenced by the list, so long-lived lists
+    /// through churn (rollouts, CronJobs) don't grow without bound, and a
+    /// failure recorded for an owner that has since gone is dropped.
+    pub fn retain_owners(&mut self, current: &HashSet<String>) {
+        self.resolved.retain(|uid, _| current.contains(uid));
+        self.failed.retain(|uid| current.contains(uid));
     }
 
     async fn api_for(
@@ -331,25 +445,10 @@ impl OwnerResolver {
         owner: &OwnerRef,
         namespace: &str,
     ) -> Option<Api<DynamicObject>> {
-        let key = (owner.api_version.clone(), owner.kind.clone());
-        if !self.apis.contains_key(&key) {
-            let (group, version) = owner
-                .api_version
-                .split_once('/')
-                .unwrap_or(("", owner.api_version.as_str()));
-            let gvk = GroupVersionKind::gvk(group, version, &owner.kind);
-            let found =
-                tokio::time::timeout(LOOKUP_TIMEOUT, kube::discovery::pinned_kind(client, &gvk))
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .map(|(resource, caps)| (resource, caps.scope));
-            self.apis.insert(key.clone(), found);
-        }
-        let (resource, scope) = self.apis.get(&key)?.as_ref()?;
+        let (resource, scope) = api_resource_for(client, &owner.api_version, &owner.kind).await?;
         Some(match scope {
-            Scope::Namespaced => Api::namespaced_with(client.clone(), namespace, resource),
-            Scope::Cluster => Api::all_with(client.clone(), resource),
+            Scope::Namespaced => Api::namespaced_with(client.clone(), namespace, &resource),
+            Scope::Cluster => Api::all_with(client.clone(), &resource),
         })
     }
 
@@ -390,15 +489,25 @@ impl OwnerResolver {
                 return;
             }
 
-            // Distinct lookups this level, within the budget.
+            // Distinct lookups this level, within the pass budget. Chains
+            // that don't fit wait for the next pass — not a failure.
             let mut targets: Vec<(OwnerRef, String)> = Vec::new();
             for chain in &open {
-                if !targets.iter().any(|(o, _)| o.uid == chain.next.uid)
-                    && self.lookups < MAX_OWNER_LOOKUPS
-                {
-                    self.lookups += 1;
-                    targets.push((chain.next.clone(), chain.namespace.clone()));
+                if targets.iter().any(|(o, _)| o.uid == chain.next.uid) {
+                    continue;
                 }
+                if self.lookups >= MAX_OWNER_LOOKUPS {
+                    break;
+                }
+                self.lookups += 1;
+                targets.push((chain.next.clone(), chain.namespace.clone()));
+            }
+            let open: Vec<Chain> = open
+                .into_iter()
+                .filter(|chain| targets.iter().any(|(o, _)| o.uid == chain.next.uid))
+                .collect();
+            if open.is_empty() {
+                return;
             }
             let mut apis = Vec::new();
             for (owner, namespace) in &targets {
@@ -442,7 +551,7 @@ impl OwnerResolver {
                             self.finish(&chain.uids, Some(top));
                         }
                     },
-                    // Lookup failed or over budget: degrade.
+                    // Lookup failed (RBAC, gone, timeout): degrade.
                     _ => self.finish(&chain.uids, None),
                 }
             }
@@ -610,13 +719,88 @@ mod tests {
     }
 
     #[test]
-    fn resolver_budget_stops_new_lookups() {
+    fn resolver_budget_is_per_pass_and_never_permanent() {
         let mut resolver = OwnerResolver::default();
         assert!(resolver.wants("a"));
         resolver.lookups = MAX_OWNER_LOOKUPS;
-        assert!(!resolver.wants("a"));
-        resolver.lookups = 0;
+        assert!(!resolver.wants("a"), "this pass is spent");
+        resolver.begin_pass();
+        assert!(resolver.wants("a"), "a new pass has a fresh budget");
         resolver.failed.insert("gone".into());
-        assert!(!resolver.wants("gone"), "failures aren't retried");
+        assert!(!resolver.wants("gone"), "real failures aren't retried");
+    }
+
+    #[test]
+    fn retain_owners_drops_owners_no_longer_listed() {
+        let mut resolver = OwnerResolver::default();
+        resolver.seed(
+            "rs-old",
+            Resolved::Owner {
+                kind: "ReplicaSet".into(),
+                name: "a".into(),
+            },
+        );
+        resolver.seed(
+            "rs-new",
+            Resolved::Owner {
+                kind: "ReplicaSet".into(),
+                name: "b".into(),
+            },
+        );
+        resolver.failed.insert("rs-gone".into());
+        resolver.retain_owners(&HashSet::from(["rs-new".to_string()]));
+        assert!(resolver.get("rs-old").is_none());
+        assert!(resolver.get("rs-new").is_some());
+        assert!(
+            resolver.wants("rs-gone"),
+            "a failure for a departed owner is forgotten"
+        );
+    }
+
+    /// A server that accepts connections and never answers — the slowest
+    /// possible API server.
+    async fn black_hole_client() -> kube::Client {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let config = kube::Config::new(format!("http://{addr}").parse().unwrap());
+        kube::Client::try_from(config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn describe_manager_is_bounded_on_a_hanging_api_server() {
+        let client = black_hole_client().await;
+        let pod = json!({"metadata": {"name": "web-abc", "namespace": "apps", "ownerReferences": [
+            {"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "web-7b5", "uid": "hang-1", "controller": true}
+        ]}});
+        let started = std::time::Instant::now();
+        let text = describe_manager_within(&client, &pod, Duration::from_millis(300)).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            text,
+            "owned by ReplicaSet/web-7b5 (manager lookup timed out)"
+        );
+    }
+
+    #[tokio::test]
+    async fn describe_manager_needs_no_calls_for_labelled_objects() {
+        // Flux-labelled objects resolve from metadata alone — instant even
+        // against a server that never answers.
+        let client = black_hole_client().await;
+        let obj = meta(
+            json!({"kustomize.toolkit.fluxcd.io/name": "apps", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}),
+            json!({}),
+        );
+        let text = describe_manager_within(&client, &obj, Duration::from_millis(300)).await;
+        assert_eq!(text, "Flux Kustomization flux-system/apps");
     }
 }

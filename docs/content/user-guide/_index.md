@@ -96,6 +96,7 @@ Type these commands in command mode (press `:`):
 | `:all`             | Show all resources (clear filters)       |
 | `:healthy`         | Show only healthy resources              |
 | `:unhealthy`       | Show only unhealthy resources            |
+| `:suspended`       | Show only suspended resources            |
 | `:favorites`       | View favorite resources                  |
 | `:fav`             | Alias for `:favorites`                   |
 | `:events`          | Live Kubernetes events feed              |
@@ -193,12 +194,15 @@ qualified `plural.group` form (`:clusters.postgresql.cnpg.io`).
   5. Any other `app.kubernetes.io/managed-by` value, else `-` (unmanaged)
 
   Owner chains resolve in the background (cached per owner, at most 300
-  lookups per list) — rows show their direct owner's kind until then.
+  lookups per batch of changes, so long-open lists keep resolving new
+  owners) — rows show their direct owner's kind until then.
 - **Managed By** — `Enter` (describe or workload detail) shows the full
   answer, e.g. `Flux HelmRelease cert-manager/cert-manager (via
   ReplicaSet/cert-manager-857cf84654)` or `not managed — top owner
-  Deployment/coredns`. The cursor stays on the same object as the list
-  updates live.
+  Deployment/coredns`. Describe shows the object and its events at once and
+  fills Managed By in when the owner chain resolves (`resolving…` until
+  then, `manager lookup timed out` after 3s on a slow API server). The
+  cursor stays on the same object as the list updates live.
 - Very large lists show the first 5,000 rows (sorted by namespace/name) and
   say so in the title — narrow with `:ns` or `/`. Only the displayed text of
   each object is kept in memory (listing Secrets holds no secret data).
@@ -279,6 +283,7 @@ Filter resources by health status:
 
 - **`:healthy`** - Show only healthy resources (ready=true, not suspended, or null status)
 - **`:unhealthy`** - Show only unhealthy resources (ready=false or suspended=true)
+- **`:suspended`** - Show only suspended resources (suspended=true)
 - **`:all`** - Clear health filter and show all resources
 
 The header displays a health percentage indicator showing the overall health of your resources. The indicator uses color coding:

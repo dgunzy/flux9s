@@ -547,6 +547,7 @@ impl App {
         self.async_state.clear_pending();
         // Kind lists and discovered kinds belong to the old cluster.
         crate::models::kinds::catalog().clear();
+        crate::kube::ownership::clear_api_cache();
         self.async_state.kind_discovery_at = None;
         self.all_namespaces.clear();
         self.pending_kind_command = None;
@@ -899,6 +900,9 @@ impl App {
             }
             HealthFilter::Unhealthy => {
                 resources.retain(|r| !r.is_healthy());
+            }
+            HealthFilter::Suspended => {
+                resources.retain(crate::watcher::ResourceInfo::effective_suspended);
             }
             HealthFilter::All => {}
         }

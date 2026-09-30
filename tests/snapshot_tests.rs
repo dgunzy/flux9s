@@ -605,6 +605,7 @@ fn test_render_resource_describe_with_data() {
                 &resource_objects,
                 Some(&describe_data),
                 false,
+                false,
                 &mut describe_scroll_offset,
                 &mut TextSearchState::default(),
                 &theme,

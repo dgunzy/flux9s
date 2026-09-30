@@ -347,6 +347,16 @@ impl KindCatalog {
         kinds.iter().find(|spec| spec.names.matches(token)).cloned()
     }
 
+    /// A discovered kind by API group and kind name.
+    pub fn find_by_group_kind(&self, group: &str, kind: &str) -> Option<KindSpec> {
+        self.kinds
+            .read()
+            .expect("kind catalog poisoned")
+            .iter()
+            .find(|spec| spec.gvk.group == group && spec.gvk.kind == kind)
+            .cloned()
+    }
+
     /// Command tokens of every discovered kind (plural + short names — the
     /// forms people type).
     fn tokens(&self) -> Vec<String> {

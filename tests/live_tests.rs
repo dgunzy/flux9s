@@ -474,3 +474,47 @@ async fn aggregated_and_legacy_discovery_agree() {
         assert_eq!(aggregated, legacy, "{context}: discovery paths disagree");
     }
 }
+
+/// Describe's Managed By (#278 review): the object renders without waiting
+/// for the owner chain, and the chain (Pod → ReplicaSet → Deployment) then
+/// resolves within the overall bound, reusing cached kind lookups.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn describe_resolves_managed_by_separately_and_within_bound() {
+    use k8s_openapi::api::core::v1::Pod;
+    use kube::api::ListParams;
+
+    let client = client_for(&simple_context()).await;
+    let pods: kube::Api<Pod> = kube::Api::namespaced(client.clone(), "flux-system");
+    let pod = pods
+        .list(&ListParams::default().labels("app=source-controller"))
+        .await
+        .unwrap_or_else(|e| panic!("listing pods failed: {e:#}"))
+        .items
+        .into_iter()
+        .next()
+        .expect("a source-controller pod");
+    let name = pod.metadata.name.clone().unwrap_or_default();
+    let target = flux9s::kube::objects::ObjectRef::native("v1", "Pod", "flux-system", &name);
+
+    let describe = flux9s::kube::fetch::fetch_object_describe_data(&client, &target)
+        .await
+        .unwrap_or_else(|e| panic!("describe failed: {e:#}"));
+    assert_eq!(
+        describe.managed_by, None,
+        "an owned pod leaves Managed By to the background resolution"
+    );
+
+    flux9s::kube::ownership::clear_api_cache();
+    for _ in 0..2 {
+        let started = Instant::now();
+        let text = flux9s::kube::ownership::describe_manager(&client, &describe.object).await;
+        assert!(
+            started.elapsed() <= flux9s::kube::ownership::MANAGER_TIMEOUT + Duration::from_secs(1),
+            "took {:?}",
+            started.elapsed()
+        );
+        assert!(text.starts_with("Flux"), "{name}: {text}");
+        assert!(text.contains("via ReplicaSet/"), "{name}: {text}");
+    }
+}

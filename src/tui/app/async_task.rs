@@ -92,6 +92,11 @@ impl<K, T> AsyncTask<K, T> {
         self.result.as_ref()
     }
 
+    /// The latest stored result, mutably (to fill in late-arriving parts).
+    pub fn result_mut(&mut self) -> Option<&mut T> {
+        self.result.as_mut()
+    }
+
     /// The queued (not yet dispatched) request key, if any.
     pub fn pending(&self) -> Option<&K> {
         self.pending.as_ref()

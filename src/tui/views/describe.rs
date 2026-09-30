@@ -299,6 +299,7 @@ pub fn render_resource_describe(
     resource_objects: &HashMap<String, serde_json::Value>,
     describe_fetched: Option<&crate::kube::fetch::DescribeData>,
     describe_loading: bool,
+    managed_by_pending: bool,
     describe_scroll_offset: &mut usize,
     search: &mut TextSearchState,
     theme: &Theme,
@@ -364,7 +365,11 @@ pub fn render_resource_describe(
         (None, None) => "Describe".to_string(),
     };
 
-    let managed_by = describe_fetched.and_then(|d| d.managed_by.as_deref());
+    let managed_by = describe_fetched.and_then(|d| {
+        d.managed_by
+            .as_deref()
+            .or(managed_by_pending.then_some("resolving…"))
+    });
     let all_lines =
         build_describe_lines(resource.as_ref(), &cleaned_json, events, managed_by, theme);
     let visible_height = area.height.saturating_sub(2) as usize;
@@ -528,5 +533,48 @@ mod tests {
         assert!(with.contains("Flux Kustomization flux-system/apps (via ReplicaSet/web-7b5)"));
         let without = text(build_describe_lines(None, &obj, None, None, &theme));
         assert!(!without.contains("Managed By"));
+    }
+
+    #[test]
+    fn describe_renders_before_managed_by_resolves() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let data = crate::kube::fetch::DescribeData {
+            object: serde_json::json!({"kind": "Pod", "apiVersion": "v1",
+                "metadata": {"name": "web-abc", "namespace": "apps"}}),
+            events: Vec::new(),
+            events_error: None,
+            managed_by: None,
+        };
+        let draw = |pending: bool| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+            terminal
+                .draw(|f| {
+                    render_resource_describe(
+                        f,
+                        f.area(),
+                        &Some("Pod:apps:web-abc".to_string()),
+                        &ResourceState::new(),
+                        &HashMap::new(),
+                        Some(&data),
+                        false,
+                        pending,
+                        &mut 0,
+                        &mut TextSearchState::default(),
+                        &Theme::default(),
+                    )
+                })
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>()
+        };
+        let pending = draw(true);
+        assert!(pending.contains("web-abc"), "the object is shown already");
+        assert!(pending.contains("resolving…"));
+        assert!(!draw(false).contains("resolving…"));
     }
 }
