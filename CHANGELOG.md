@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-30
+
+# Version 1.2.0 Changelog
+
+**Added**
+- View of Kubernetes resources and CRDs (#278)
+- Workload metrics (#275)
+- Helm chart values support (#272)
+
+**Changed**
+- Suspended view enhancement (#280)
+
+**Fixed**
+- Logs display for multi-container pods (#271)
+
 ### Added
 
 - **Preview (opt-in, off by default):** native resource browsing. Turn it on per session with `:native` or permanently with `flux9s config set nativeResources true`; while off, `:deploy` and other Kubernetes kinds explain how. Everything below marked (preview) needs it (#267)
