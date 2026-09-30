@@ -96,6 +96,7 @@ Type these commands in command mode (press `:`):
 | `:all`             | Show all resources (clear filters)       |
 | `:healthy`         | Show only healthy resources              |
 | `:unhealthy`       | Show only unhealthy resources            |
+| `:suspended`       | Show only suspended resources            |
 | `:favorites`       | View favorite resources                  |
 | `:fav`             | Alias for `:favorites`                   |
 | `:events`          | Live Kubernetes events feed              |
@@ -187,6 +188,7 @@ Filter resources by health status:
 
 - **`:healthy`** - Show only healthy resources (ready=true, not suspended, or null status)
 - **`:unhealthy`** - Show only unhealthy resources (ready=false or suspended=true)
+- **`:suspended`** - Show only suspended resources (suspended=true)
 - **`:all`** - Clear health filter and show all resources
 
 The header displays a health percentage indicator showing the overall health of your resources. The indicator uses color coding:

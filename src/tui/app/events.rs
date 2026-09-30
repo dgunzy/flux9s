@@ -26,6 +26,7 @@ const COMMAND_TABLE: &[(fn(&str) -> bool, CommandHandler)] = &[
     (commands::is_namespace_command, App::cmd_switch_namespace),
     (commands::is_healthy_command, App::cmd_filter_healthy),
     (commands::is_unhealthy_command, App::cmd_filter_unhealthy),
+    (commands::is_suspended_command, App::cmd_filter_suspended),
     (commands::is_favorites_command, App::cmd_show_favorites),
     (commands::is_events_command, App::cmd_show_events),
     (commands::is_pulse_command, App::cmd_show_pulse),
@@ -2187,6 +2188,13 @@ impl App {
         self.set_status_message(("Showing unhealthy resources only".to_string(), false));
     }
 
+    /// `:suspended` — filter the list to suspended resources.
+    fn cmd_filter_suspended(&mut self, _cmd: &str) {
+        self.view_state.health_filter = HealthFilter::Suspended;
+        self.reset_list_position();
+        self.set_status_message(("Showing suspended resources only".to_string(), false));
+    }
+
     /// `:favorites` — switch to the favorites view.
     fn cmd_show_favorites(&mut self, _cmd: &str) {
         self.view_state.current_view = View::ResourceFavorites;
@@ -2519,6 +2527,49 @@ mod tests {
 
         assert_eq!(app.execute_command(), None);
         assert_eq!(app.view_state.health_filter, HealthFilter::Healthy);
+    }
+
+    #[test]
+    fn table_command_suspended_filters_to_suspended_resources() {
+        let mut app = create_test_app(false);
+        add_resource(&mut app);
+        let suspended = ResourceInfo {
+            name: "paused".to_string(),
+            namespace: "flux-system".to_string(),
+            resource_type: "Kustomization".to_string(),
+            age: None,
+            suspended: Some(true),
+            ready: Some(true),
+            message: None,
+            revision: None,
+            labels: HashMap::new(),
+            annotations: HashMap::new(),
+            last_reconciled: None,
+            reconciliation_history: vec![],
+        };
+        app.state.upsert(
+            resource_key(
+                &suspended.namespace,
+                &suspended.name,
+                &suspended.resource_type,
+            ),
+            suspended,
+        );
+        app.ui_state.command_buffer = "suspended".to_string();
+
+        assert_eq!(app.execute_command(), None);
+        assert_eq!(app.view_state.health_filter, HealthFilter::Suspended);
+        let names: Vec<String> = app
+            .get_filtered_resources()
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        assert_eq!(names, vec!["paused".to_string()]);
+
+        app.ui_state.command_buffer = "all".to_string();
+        assert_eq!(app.execute_command(), None);
+        assert_eq!(app.view_state.health_filter, HealthFilter::All);
+        assert_eq!(app.get_filtered_resources().len(), 2);
     }
 
     #[test]

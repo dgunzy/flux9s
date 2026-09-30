@@ -232,10 +232,8 @@ fn parse_sample(line: &str) -> Option<Sample> {
     if line.is_empty() || line.starts_with('#') {
         return None;
     }
-    let (name, rest) = match line.find(['{', ' ']) {
-        Some(i) => (&line[..i], &line[i..]),
-        None => return None,
-    };
+    let i = line.find(['{', ' '])?;
+    let (name, rest) = (&line[..i], &line[i..]);
     let mut labels = HashMap::new();
     let rest = if let Some(body) = rest.strip_prefix('{') {
         // Walk key="value" pairs, honouring \" escapes inside values.

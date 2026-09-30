@@ -183,6 +183,7 @@ impl App {
             let health_filter_status = match self.view_state.health_filter {
                 HealthFilter::Healthy => Some("healthy"),
                 HealthFilter::Unhealthy => Some("unhealthy"),
+                HealthFilter::Suspended => Some("suspended"),
                 HealthFilter::All => None,
             };
 

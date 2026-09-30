@@ -859,6 +859,9 @@ impl App {
             HealthFilter::Unhealthy => {
                 resources.retain(|r| !r.is_healthy());
             }
+            HealthFilter::Suspended => {
+                resources.retain(crate::watcher::ResourceInfo::effective_suspended);
+            }
             HealthFilter::All => {}
         }
 
