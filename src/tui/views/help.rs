@@ -56,6 +56,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         (":all", "Show all resources"),
         (":healthy", "Show healthy resources"),
         (":unhealthy", "Show unhealthy resources"),
+        (":suspended", "Show suspended resources"),
         (":favorites", "View favorites"),
         (":fav", "View favorites"),
         (":events", "Live Kubernetes events feed"),

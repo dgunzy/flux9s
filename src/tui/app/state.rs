@@ -224,6 +224,8 @@ pub enum HealthFilter {
     Healthy,
     /// Show only unhealthy resources (ready=false or suspended=true)
     Unhealthy,
+    /// Show only suspended resources (suspended=true)
+    Suspended,
     /// Show all resources (no health filter)
     All,
 }
@@ -239,7 +241,7 @@ pub struct ViewState {
     pub filter: String,
     /// Whether filter mode is active (user is typing)
     pub filter_mode: bool,
-    /// Health filter (All, Healthy, Unhealthy)
+    /// Health filter (All, Healthy, Unhealthy, Suspended)
     pub health_filter: HealthFilter,
     /// Selected index in current list
     pub selected_index: usize,
