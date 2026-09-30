@@ -57,6 +57,12 @@ pub struct DescribeData {
     /// Set when the events lookup failed (e.g. RBAC) — the describe view
     /// degrades to a notice instead of failing entirely.
     pub events_error: Option<String>,
+    /// Who manages the object, in full (e.g. `Flux Kustomization
+    /// flux-system/apps (via ReplicaSet/web-7b5)`) — the detail behind the
+    /// kind lists' short MANAGED-BY column. `None` while an owner chain is
+    /// still being resolved in the background, so a slow cluster never holds
+    /// up the object and its events.
+    pub managed_by: Option<String>,
 }
 
 /// Fetch a resource and its Events for the describe view.
@@ -105,9 +111,11 @@ pub async fn fetch_object_describe_data(
             (Vec::new(), Some(format!("{}", e)))
         }
     };
+    let managed_by = crate::kube::ownership::immediate_manager(&object);
     Ok(DescribeData {
         object,
         events,
         events_error,
+        managed_by,
     })
 }

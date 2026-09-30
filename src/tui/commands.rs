@@ -90,6 +90,14 @@ pub const APP_COMMANDS: &[Command] = &[
         takes_args: false,
     },
     Command {
+        name: "flux",
+        takes_args: false,
+    },
+    Command {
+        name: "native",
+        takes_args: false,
+    },
+    Command {
         name: "all",
         takes_args: false,
     },
@@ -104,6 +112,24 @@ pub const APP_COMMANDS: &[Command] = &[
 /// Returns commands sorted by priority (CRD commands first, then App commands)
 /// and then alphabetically within each category.
 /// Commands that take arguments are returned with a trailing space (e.g., "skin ").
+/// Discovered-kind completions for `prefix`: sorted, deduplicated, and never
+/// repeating a Flux kind or app command already offered.
+fn native_kind_matches(
+    prefix: &str,
+    tokens: Vec<String>,
+    flux: &[String],
+    app: &[String],
+) -> Vec<String> {
+    let mut matches: Vec<String> = tokens
+        .into_iter()
+        .filter(|token| token.starts_with(prefix))
+        .filter(|token| !flux.contains(token) && !app.contains(token))
+        .collect();
+    matches.sort();
+    matches.dedup();
+    matches
+}
+
 pub fn find_matching_commands(prefix: &str) -> Vec<String> {
     let prefix_lower = prefix.to_lowercase();
     let mut crd_matches: Vec<String> = Vec::new();
@@ -162,9 +188,21 @@ pub fn find_matching_commands(prefix: &str) -> Vec<String> {
     crd_matches.sort();
     app_matches.sort();
 
-    // Combine: CRD commands first (higher priority), then app commands
+    // Kinds from API discovery (#267): plurals and short names, after Flux
+    // kinds and app commands so they never displace them. Empty unless
+    // `nativeResources` is on and discovery has run.
+    let native_matches = native_kind_matches(
+        &prefix_lower,
+        crate::models::kinds::discovered_command_tokens(),
+        &crd_matches,
+        &app_matches,
+    );
+
+    // Combine: CRD commands first (higher priority), then app commands,
+    // then discovered native kinds
     let mut all_matches = crd_matches;
     all_matches.extend(app_matches);
+    all_matches.extend(native_matches);
     all_matches
 }
 
@@ -232,6 +270,16 @@ pub fn is_suspended_command(cmd: &str) -> bool {
 }
 
 /// Check if command is "all" or "clear"
+/// `:native` — toggle native resource browsing (preview) for the session.
+pub fn is_native_command(cmd: &str) -> bool {
+    cmd.eq_ignore_ascii_case("native")
+}
+
+/// `:flux` — return to the Flux resource list from any kind list (#267).
+pub fn is_flux_command(cmd: &str) -> bool {
+    cmd.eq_ignore_ascii_case("flux")
+}
+
 pub fn is_all_command(cmd: &str) -> bool {
     let cmd_lower = cmd.to_lowercase();
     cmd_lower == "all" || cmd_lower == "clear"
@@ -429,15 +477,19 @@ pub fn logs_submenu(
     )
 }
 
-/// Build the namespace picker submenu for `:ns` / `:namespace` (no argument).
-///
-/// Lists the selectable namespaces, with `all` for the cluster-wide scope, and
-/// marks the currently watched one. Returns None when there is nothing to pick
-/// from. Uses the same reusable, searchable submenu as `:ctx` and `:skin`.
-pub fn namespace_submenu(namespaces: &[String], current: &Option<String>) -> Option<SubmenuState> {
+/// The `:ns` picker. `namespaces` arrive in display order (see
+/// `App::namespace_picker_options`); namespaces in `flux_namespaces` get a
+/// marker so it's clear where Flux resources live.
+pub fn namespace_submenu(
+    namespaces: &[String],
+    current: &Option<String>,
+    flux_namespaces: &std::collections::HashSet<String>,
+    no_icons: bool,
+) -> Option<SubmenuState> {
     if namespaces.is_empty() {
         return None;
     }
+    let marker = if no_icons { "[flux]" } else { "◆ flux" };
 
     let items: Vec<SubmenuItem> = namespaces
         .iter()
@@ -447,11 +499,13 @@ pub fn namespace_submenu(namespaces: &[String], current: &Option<String>) -> Opt
             } else {
                 current.as_deref() == Some(ns.as_str())
             };
-            let display = if is_current {
-                format!("{} (current)", ns)
-            } else {
-                ns.clone()
-            };
+            let mut display = ns.clone();
+            if flux_namespaces.contains(ns) {
+                display.push_str(&format!("  {marker}"));
+            }
+            if is_current {
+                display.push_str(" (current)");
+            }
             SubmenuItem::with_display(ns.clone(), display)
         })
         .collect();
@@ -669,7 +723,7 @@ mod tests {
     #[test]
     fn test_namespace_submenu_marks_current_and_all() {
         assert!(
-            namespace_submenu(&[], &None).is_none(),
+            namespace_submenu(&[], &None, &Default::default(), false).is_none(),
             "no namespaces means no submenu"
         );
 
@@ -681,7 +735,8 @@ mod tests {
 
         // A specific namespace is current: it is marked, "all" is not.
         let current = Some("flux-system".to_string());
-        let submenu = namespace_submenu(&namespaces, &current).expect("namespaces make a submenu");
+        let submenu = namespace_submenu(&namespaces, &current, &Default::default(), false)
+            .expect("namespaces make a submenu");
         assert_eq!(submenu.command, "ns");
         assert_eq!(submenu.title, Some("Select Namespace".to_string()));
         // Values stay the bare namespace names for the :ns dispatch.
@@ -691,9 +746,28 @@ mod tests {
         assert!(submenu.items[1].display_text.contains("(current)"));
 
         // Cluster-wide scope (None) marks "all" as current.
-        let submenu = namespace_submenu(&namespaces, &None).unwrap();
+        let submenu = namespace_submenu(&namespaces, &None, &Default::default(), false).unwrap();
         assert!(submenu.items[0].display_text.contains("(current)"));
         assert!(!submenu.items[1].display_text.contains("(current)"));
+    }
+
+    #[test]
+    fn test_namespace_submenu_marks_flux_namespaces() {
+        let namespaces = vec![
+            "all".to_string(),
+            "flux-system".to_string(),
+            "kube-system".to_string(),
+        ];
+        let flux = std::collections::HashSet::from(["flux-system".to_string()]);
+        let submenu = namespace_submenu(&namespaces, &None, &flux, false).unwrap();
+        assert_eq!(submenu.items[1].display_text, "flux-system  ◆ flux");
+        assert_eq!(submenu.items[2].display_text, "kube-system");
+        assert_eq!(
+            submenu.items[1].value, "flux-system",
+            "value stays the bare name"
+        );
+        let plain = namespace_submenu(&namespaces, &None, &flux, true).unwrap();
+        assert_eq!(plain.items[1].display_text, "flux-system  [flux]");
     }
 
     #[test]
@@ -719,5 +793,25 @@ mod tests {
         let submenu = logs_submenu(&pods, true).unwrap();
         assert!(submenu.items[0].display_text.starts_with("ERR"));
         assert!(submenu.items[1].display_text.starts_with("OK"));
+    }
+
+    #[test]
+    fn native_kind_completions_follow_flux_and_app_commands() {
+        let tokens = vec![
+            "deployments".to_string(),
+            "deploy".to_string(),
+            "deploy".to_string(), // same short name from two groups
+            "daemonsets".to_string(),
+            "ks".to_string(),   // shadowed by the Flux alias
+            "flux".to_string(), // shadowed by the app command
+        ];
+        let flux = vec!["ks".to_string()];
+        let app = vec!["flux".to_string()];
+        assert_eq!(
+            native_kind_matches("de", tokens.clone(), &flux, &app),
+            ["deploy", "deployments"]
+        );
+        assert!(native_kind_matches("k", tokens.clone(), &flux, &app).is_empty());
+        assert!(native_kind_matches("fl", tokens, &flux, &app).is_empty());
     }
 }

@@ -90,10 +90,42 @@ pub fn compute_object_status(obj: &Value) -> ObjectStatus {
     }
 
     let kind = obj.get("kind").and_then(Value::as_str).unwrap_or_default();
-    if let Some(status) = kind_status(kind, obj) {
+    if is_builtin(kind, obj)
+        && let Some(status) = kind_status(kind, obj)
+    {
         return status;
     }
     conditions_status(obj).unwrap_or_else(|| ObjectStatus::new(ObjectHealth::Current, ""))
+}
+
+/// The API group each kind-specific rule was written for.
+fn builtin_group(kind: &str) -> Option<&'static str> {
+    match kind {
+        "Deployment" | "StatefulSet" | "DaemonSet" | "ReplicaSet" => Some("apps"),
+        "Pod" | "PersistentVolumeClaim" | "Service" => Some(""),
+        "Job" => Some("batch"),
+        "CustomResourceDefinition" => Some("apiextensions.k8s.io"),
+        _ => None,
+    }
+}
+
+/// Whether the kind-specific rules apply: the kind must come from its
+/// built-in API group. A same-named CRD (`services.serving.knative.dev`,
+/// `example.com/Deployment`) is judged by the generic condition rules
+/// instead — otherwise e.g. a Knative Service would always read Current.
+/// Objects without `apiVersion` (none of flux9s's own fetch paths produce
+/// these; they stamp it) keep the kind-only behaviour.
+fn is_builtin(kind: &str, obj: &Value) -> bool {
+    let Some(expected) = builtin_group(kind) else {
+        return false;
+    };
+    match obj.get("apiVersion").and_then(Value::as_str) {
+        Some(api_version) => {
+            let group = api_version.split_once('/').map_or("", |(group, _)| group);
+            group == expected
+        }
+        None => true,
+    }
 }
 
 fn int_at(obj: &Value, pointer: &str) -> i64 {
@@ -430,5 +462,34 @@ mod tests {
             ]))),
             ObjectHealth::Failed
         );
+    }
+
+    #[test]
+    fn kind_rules_only_apply_to_their_builtin_group() {
+        // Knative Service: a CRD named Service, not the core one. The core
+        // rule would say Current; its Ready=False condition must win.
+        let knative = json!({
+            "apiVersion": "serving.knative.dev/v1",
+            "kind": "Service",
+            "spec": {"type": "ClusterIP"},
+            "status": {"conditions": [{"type": "Ready", "status": "False", "message": "RevisionFailed"}]}
+        });
+        let status = compute_object_status(&knative);
+        assert_eq!(status.health, ObjectHealth::Failed);
+        assert_eq!(status.message, "RevisionFailed");
+
+        // A same-named CRD with no conditions isn't judged by apps rules.
+        let fake =
+            json!({"apiVersion": "example.com/v1", "kind": "Deployment", "spec": {"replicas": 3}});
+        assert_eq!(health(fake), ObjectHealth::Current);
+
+        // The real kinds still get their rules.
+        let core_lb = json!({"apiVersion": "v1", "kind": "Service", "spec": {"type": "LoadBalancer"}, "status": {}});
+        assert_eq!(health(core_lb), ObjectHealth::InProgress);
+        let apps = json!({"apiVersion": "apps/v1", "kind": "Deployment", "spec": {"replicas": 2},
+            "status": {"replicas": 2, "updatedReplicas": 2, "readyReplicas": 1, "availableReplicas": 1}});
+        assert_eq!(health(apps), ObjectHealth::InProgress);
+        let job = json!({"apiVersion": "batch/v1", "kind": "Job", "status": {}});
+        assert_eq!(health(job), ObjectHealth::InProgress);
     }
 }

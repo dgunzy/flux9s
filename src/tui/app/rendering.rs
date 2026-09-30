@@ -187,6 +187,7 @@ impl App {
                 HealthFilter::All => None,
             };
 
+            let browsing = self.browsing_label();
             render_header(
                 f,
                 chunks[0],
@@ -202,6 +203,7 @@ impl App {
                 self.config.read_only,
                 &self.theme,
                 self.config.ui.no_icons,
+                browsing.as_deref(),
             );
         }
         self.render_main(f, chunks[1]);
@@ -358,6 +360,7 @@ impl App {
                         &self.resource_objects,
                         self.async_state.describe.result(),
                         self.async_state.describe.is_loading(),
+                        self.describe_manager_pending(),
                         &mut self.view_state.describe_scroll_offset,
                         &mut self.view_state.text_search,
                         &self.theme,
@@ -376,6 +379,26 @@ impl App {
                         &mut self.view_state.text_search,
                         &self.theme,
                     );
+                }
+                View::KindList => {
+                    // Rows borrow `self`; the scroll offset is written back after.
+                    let mut scroll_offset = self.view_state.scroll_offset;
+                    let rows = self.filtered_kind_rows();
+                    let request = self.async_state.kind_list.key();
+                    views::render_kind_list(
+                        f,
+                        area,
+                        request.map(|r| &r.spec),
+                        &request.and_then(|r| r.namespace.clone()),
+                        self.async_state.kind_list.result(),
+                        &rows,
+                        self.view_state.kind_list_error.as_deref(),
+                        self.async_state.kind_list.is_loading(),
+                        self.view_state.selected_index,
+                        &mut scroll_offset,
+                        &self.theme,
+                    );
+                    self.view_state.scroll_offset = scroll_offset;
                 }
                 View::HelmValues => {
                     views::render_helm_values(

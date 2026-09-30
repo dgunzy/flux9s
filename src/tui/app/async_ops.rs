@@ -209,6 +209,44 @@ impl App {
         self.view_state.graph_focus_index = result.object_node_index();
         self.async_state.graph.set_result(result);
     }
+
+    /// Store a describe result. When Managed By needs an owner chain walked,
+    /// queue that separately so the object and events render right away.
+    pub fn set_describe_result(&mut self, describe: crate::kube::fetch::DescribeData) {
+        if describe.managed_by.is_none() {
+            self.async_state
+                .describe_manager
+                .request(describe.object.clone());
+        } else {
+            self.async_state.describe_manager.clear();
+        }
+        self.async_state.describe.set_result(describe);
+    }
+
+    /// Fill the describe view's Managed By — only if it is still showing the
+    /// object that was resolved (a late answer for an earlier describe is
+    /// dropped).
+    pub fn set_manager_resolution(&mut self, resolution: super::state::ManagerResolution) {
+        if let Some(describe) = self.async_state.describe.result_mut()
+            && describe
+                .object
+                .pointer("/metadata/uid")
+                .and_then(serde_json::Value::as_str)
+                == Some(resolution.uid.as_str())
+        {
+            describe.managed_by = Some(resolution.text);
+        }
+    }
+
+    /// Whether the describe view's Managed By is still being resolved.
+    pub fn describe_manager_pending(&self) -> bool {
+        self.async_state.describe_manager.is_loading()
+            && self
+                .async_state
+                .describe
+                .result()
+                .is_some_and(|d| d.managed_by.is_none())
+    }
 }
 
 #[cfg(test)]
@@ -242,6 +280,7 @@ mod tests {
             default_resource_filter: None,
             connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
             discover_flux_resources: false,
+            native_resources: true,
             metrics_source: crate::kube::metrics::MetricsSourceSetting::Auto,
             editor: None,
         };
@@ -352,6 +391,7 @@ mod tests {
             events: Vec::new(),
             events_error: None,
             pod_selector: None,
+            managed_by: None,
         });
 
         app.set_workload_action_result(Ok(WorkloadAction::Restart {
@@ -376,5 +416,59 @@ mod tests {
                 .as_ref()
                 .is_some_and(|(msg, is_error)| *is_error && msg.contains("forbidden"))
         );
+    }
+
+    fn describe_of(uid: &str, managed_by: Option<&str>) -> crate::kube::fetch::DescribeData {
+        crate::kube::fetch::DescribeData {
+            object: serde_json::json!({"metadata": {"name": "web-abc", "uid": uid}}),
+            events: Vec::new(),
+            events_error: None,
+            managed_by: managed_by.map(String::from),
+        }
+    }
+
+    #[test]
+    fn describe_shows_first_and_fills_managed_by_later() {
+        use super::super::state::ManagerResolution;
+        let mut app = create_test_app();
+        app.set_describe_result(describe_of("pod-1", None));
+        assert!(
+            app.async_state.describe.result().is_some(),
+            "the object renders without waiting for the owner chain"
+        );
+        assert!(app.describe_manager_pending());
+        let (object, _tx) = app.async_state.describe_manager.dispatch().unwrap();
+        assert_eq!(object["metadata"]["uid"], "pod-1");
+
+        app.set_manager_resolution(ManagerResolution {
+            uid: "pod-1".into(),
+            text: "Flux Kustomization flux-system/apps (via ReplicaSet/web-7b5)".into(),
+        });
+        let describe = app.async_state.describe.result().unwrap();
+        assert_eq!(
+            describe.managed_by.as_deref(),
+            Some("Flux Kustomization flux-system/apps (via ReplicaSet/web-7b5)")
+        );
+        assert!(!app.describe_manager_pending());
+    }
+
+    #[test]
+    fn late_manager_answers_for_another_object_are_dropped() {
+        use super::super::state::ManagerResolution;
+        let mut app = create_test_app();
+        app.set_describe_result(describe_of("pod-2", None));
+        app.set_manager_resolution(ManagerResolution {
+            uid: "pod-1".into(),
+            text: "stale".into(),
+        });
+        assert_eq!(app.async_state.describe.result().unwrap().managed_by, None);
+    }
+
+    #[test]
+    fn describe_with_immediate_manager_queues_no_lookup() {
+        let mut app = create_test_app();
+        app.set_describe_result(describe_of("pod-3", Some("Helm release apps/web")));
+        assert!(app.async_state.describe_manager.dispatch().is_none());
+        assert!(!app.describe_manager_pending());
     }
 }

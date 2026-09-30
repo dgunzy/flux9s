@@ -12,16 +12,19 @@
 //! to prevent proxy issues with corporate environments.
 
 pub mod api;
+pub mod discovery;
 pub mod events;
 pub mod fetch;
 pub mod health;
 pub mod helm_values;
 pub mod inventory;
+pub mod kind_list;
 pub mod live;
 pub mod logs;
 pub mod metrics;
 pub mod object_status;
 pub mod objects;
+pub mod ownership;
 pub mod workloads;
 
 #[allow(unused_imports)] // Public API re-exports used by lib consumers
@@ -511,6 +514,30 @@ pub async fn resolve_configured_namespace(configured: &str) -> Option<String> {
 ///
 /// Uses FluxResourceKind enum to query all Flux resource types dynamically,
 /// avoiding hardcoded resource types and API versions.
+/// Every namespace name in the cluster, sorted — for the `:ns` picker.
+/// Metadata-only and bounded by a timeout; errors (typically RBAC) are
+/// returned so the caller can fall back to the Flux namespaces.
+pub async fn list_all_namespaces(client: &Client) -> Result<Vec<String>> {
+    use anyhow::Context;
+    use k8s_openapi::api::core::v1::Namespace;
+    use kube::api::{Api, ListParams};
+    let api: Api<Namespace> = Api::all(client.clone());
+    let list = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        api.list_metadata(&ListParams::default()),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Listing namespaces timed out"))?
+    .context("Failed to list namespaces")?;
+    let mut names: Vec<String> = list
+        .items
+        .into_iter()
+        .filter_map(|n| n.metadata.name)
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
 pub async fn discover_namespaces_with_flux_resources(client: &Client) -> Result<Vec<String>> {
     use crate::kube::api::get_gvk_for_resource_type;
     use crate::models::FluxResourceKind;

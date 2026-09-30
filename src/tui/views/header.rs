@@ -28,6 +28,9 @@ pub fn render_header(
     read_only: bool,             // Readonly mode status
     theme: &Theme,
     no_icons: bool,
+    // Set while browsing a non-Flux kind (#267): replaces the Flux resource
+    // summary with what's being browsed, keeping the Flux total as the anchor.
+    browsing: Option<&str>,
 ) {
     // Split header into left (info), middle (controller status), and right (ASCII art)
     let header_chunks = Layout::default()
@@ -182,6 +185,31 @@ pub fn render_header(
     }
 
     let mut header_lines = vec![Line::from(context_line_spans)];
+
+    if let Some(browsing) = browsing {
+        header_lines.push(Line::from(vec![
+            Span::styled("Browsing: ", Style::default().fg(theme.header_resources)),
+            Span::styled(
+                browsing.to_string(),
+                Style::default()
+                    .fg(theme.header_total)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        header_lines.push(Line::from(vec![
+            Span::styled("Flux: ", Style::default().fg(theme.header_resources)),
+            Span::raw(format!("{total} resources  ")),
+            Span::styled(":flux to return", Style::default().fg(theme.text_secondary)),
+        ]));
+        while header_lines.len() < 5 {
+            header_lines.push(Line::from(""));
+        }
+        let header = Paragraph::new(header_lines).block(Block::default().borders(Borders::ALL));
+        f.render_widget(header, left_area);
+        render_controller_status(f, middle_area, controller_pods, theme, no_icons);
+        render_header_ascii(f, right_area, controller_pods, theme);
+        return;
+    }
 
     // Add filter status line if filtering is active - make it prominent and informative
     if !filter_parts.is_empty() {
@@ -412,5 +440,59 @@ fn abbreviate_controller_name(name: &str) -> &str {
         "source-watcher" => "SrcW",
         "flux-operator" => "Oper",
         _ => "?",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn render(browsing: Option<&str>) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(160, 8)).unwrap();
+        terminal
+            .draw(|f| {
+                render_header(
+                    f,
+                    f.area(),
+                    &ResourceState::default(),
+                    &ControllerPodState::default(),
+                    "ctx",
+                    &Some("apps".to_string()),
+                    "",
+                    &None,
+                    0,
+                    100.0,
+                    None,
+                    false,
+                    &Theme::default(),
+                    false,
+                    browsing,
+                )
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn browsing_replaces_the_flux_summary_but_keeps_the_way_home() {
+        let out = render(Some("Cluster › deployments (27)"));
+        assert!(out.contains("Browsing: Cluster › deployments (27)"));
+        assert!(out.contains(":flux to return"));
+        assert!(out.contains("Namespace: apps"), "context line unchanged");
+        assert!(!out.contains("Total Resources"));
+    }
+
+    #[test]
+    fn flux_mode_header_is_unchanged() {
+        let out = render(None);
+        assert!(out.contains("Total Resources"));
+        assert!(!out.contains("Browsing:"));
     }
 }

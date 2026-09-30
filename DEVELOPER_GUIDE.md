@@ -603,6 +603,46 @@ When adding support for a new Flux resource type:
     ];
     ```
 
+## The Kind Registry (`:<kind>`)
+
+Every `:<kind>` command resolves to a `KindSpec` (`src/models/kinds.rs`) —
+kinds are **data**, not code paths. Providers are consulted in precedence
+order and the first match wins:
+
+1. **Flux** — built-in `FluxResourceKind`s (static, full capabilities)
+2. **Flux-adjacent** — CRDs labeled `part-of=flux` (`models/extra_kinds.rs`)
+3. **Discovered** — every other served kind, from API discovery
+   (`kube/discovery.rs`, aggregated first, legacy walk as fallback) into the
+   global `kinds::catalog()`, refreshed on connect / context switch
+
+Flux and Flux-adjacent specs filter the always-watched Flux list; native
+specs open `View::KindList`, backed by `kube/kind_list.rs::watch_kind` (a
+`LiveTask` watch that runs only while the list is shown) and rendered as
+generic rows from the spec's `Column`s. CRDs get `additionalPrinterColumns`.
+
+Design rules:
+
+- Columns (`Column`), health (`HealthRule`), and capabilities are plain data
+  so a config provider can overlay specs later (#277) — don't add fn pointers.
+- Capabilities are deny-by-default; only the Flux family grants operations.
+  `Capabilities::curated` grants workload/pod actions to well-known native
+  kinds (matched on group **and** kind). Kind-list keys and footer both come
+  from `KIND_ACTIONS` in `tui/app/kind_browser.rs` — add an action there, never
+  as a separate key arm, so keys and footer can't drift.
+- Ownership (`kube/ownership.rs`): Flux/Argo labels are decisive; otherwise
+  the controller owner chain wins over Helm annotations (ReplicaSets inherit
+  their Deployment's annotations but not its labels) and over the generic
+  `managed-by` label (pods inherit it from templates).
+- `nativeResources` is an **opt-in preview** (default `false`; `:native`
+  toggles it per session). While off it must leave flux9s exactly Flux-only: no discovery
+  (`request_kind_discovery` returns early), empty catalog, no kind watches.
+- The catalog belongs to one cluster: it's cleared before every rediscovery.
+- Watched objects lack `apiVersion`/`kind` — stamp them before computing
+  health (`kind_list::row_for`), or kind-specific kstatus rules are skipped.
+- Live coverage: `tests/live_tests.rs` checks discovery (aggregated and legacy
+  paths must agree) and a real kind-list watch against the dev clusters
+  (`./scripts/dev-clusters.sh ci && just test-live`).
+
 ## Adding Submenu Commands
 
 The submenu system allows commands to present interactive selection menus when executed without arguments. This provides a more user-friendly way to select from available options.

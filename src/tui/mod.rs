@@ -172,7 +172,7 @@ pub async fn run_tui_with_async_init(
     let kubeconfig_path_clone = kubeconfig_path.map(|p| p.to_path_buf());
     let controller_namespace = config.default_controller_namespace.clone();
     let controller_namespace_for_init = controller_namespace.clone();
-    let discovery_enabled = config.discover_flux_resources;
+    let discovery_enabled = config.flux_crd_discovery_enabled();
     let (kube_init_tx, mut kube_init_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         tracing::debug!("Starting async Kubernetes initialization");
@@ -399,6 +399,22 @@ pub async fn run_tui_with_async_init(
                         });
                     }
 
+                    if let Some((object, tx)) = app.async_state.describe_manager.dispatch() {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            // Bounded by MANAGER_TIMEOUT: always answers.
+                            let text =
+                                crate::kube::ownership::describe_manager(&client, &object).await;
+                            let uid = object
+                                .pointer("/metadata/uid")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default()
+                                .to_string();
+                            let _ = tx
+                                .send(Ok(crate::tui::app::state::ManagerResolution { uid, text }));
+                        });
+                    }
+
                     if let Some((entries, tx)) = app.async_state.inventory_status.dispatch() {
                         let handle = tokio::spawn(crate::kube::live::watch_object_statuses(
                             client.clone(),
@@ -406,6 +422,29 @@ pub async fn run_tui_with_async_init(
                             tx,
                         ));
                         app.async_state.inventory_status.set_handle(handle);
+                    }
+
+                    if let Some(((), tx)) = app.async_state.kind_discovery.dispatch() {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            let _ = tx.send(crate::kube::discovery::discover_kinds(&client).await);
+                        });
+                    }
+
+                    if let Some(((), tx)) = app.async_state.namespace_list.dispatch() {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            let _ = tx.send(crate::kube::list_all_namespaces(&client).await);
+                        });
+                    }
+
+                    if let Some((request, tx)) = app.async_state.kind_list.dispatch() {
+                        let handle = tokio::spawn(crate::kube::kind_list::watch_kind(
+                            client.clone(),
+                            request,
+                            tx,
+                        ));
+                        app.async_state.kind_list.set_handle(handle);
                     }
 
                     if let Some((request, tx)) = app.async_state.workload_metrics.dispatch() {
@@ -538,7 +577,7 @@ pub async fn run_tui_with_async_init(
 
             if let Some(result) = app.async_state.describe.try_recv() {
                 match result {
-                    Ok(describe) => app.async_state.describe.set_result(describe),
+                    Ok(describe) => app.set_describe_result(describe),
                     Err(e) => {
                         app.async_state.describe.set_error();
                         app.set_status_message((
@@ -549,10 +588,44 @@ pub async fn run_tui_with_async_init(
                 }
             }
 
+            if let Some(result) = app.async_state.describe_manager.try_recv() {
+                match result {
+                    Ok(resolution) => app.set_manager_resolution(resolution),
+                    Err(e) => tracing::debug!("Managed By resolution dropped: {}", e),
+                }
+            }
+
             if let Some(result) = app.async_state.inventory_status.poll() {
                 match result {
                     Ok(statuses) => app.async_state.inventory_status.set_result(statuses),
                     Err(e) => tracing::warn!("Inventory status lookup failed: {}", e),
+                }
+            }
+
+            if let Some(result) = app.async_state.kind_discovery.try_recv() {
+                match result {
+                    Ok(kinds) => {
+                        tracing::debug!("Discovered {} kinds", kinds.len());
+                        crate::models::kinds::catalog().replace(kinds);
+                        app.on_kind_discovery_complete();
+                    }
+                    Err(e) => tracing::warn!("Kind discovery failed: {:#}", e),
+                }
+            }
+
+            if let Some(result) = app.async_state.namespace_list.try_recv() {
+                match result {
+                    Ok(names) => app.all_namespaces = names,
+                    // RBAC often forbids listing namespaces: the picker keeps
+                    // the Flux namespaces, as before.
+                    Err(e) => tracing::debug!("Namespace list unavailable: {:#}", e),
+                }
+            }
+
+            if let Some(result) = app.async_state.kind_list.poll() {
+                match result {
+                    Ok(snapshot) => app.on_kind_list_snapshot(snapshot),
+                    Err(e) => app.view_state.kind_list_error = Some(format!("{:#}", e)),
                 }
             }
 
@@ -832,7 +905,7 @@ pub async fn run_tui_with_async_init(
                                         new_client.clone(),
                                         new_default_namespace.clone(),
                                         controller_namespace.clone(),
-                                        app.config.discover_flux_resources,
+                                        app.config.flux_crd_discovery_enabled(),
                                     );
 
                                 // Start watching all resources with the new watcher
@@ -1071,35 +1144,9 @@ pub async fn run_tui_with_async_init(
                         crate::watcher::WatchEvent::KubeEventDeleted(uid) => {
                             app.kube_events.remove(&uid);
                         }
-                        // Discovery events already queued when `:discover` turned
-                        // discovery off (#245) must not resurrect the kinds.
-                        crate::watcher::WatchEvent::ExtraKindDiscovered(_)
-                        | crate::watcher::WatchEvent::ExtraKindRemoved(_)
-                            if !app.config.discover_flux_resources => {}
-                        crate::watcher::WatchEvent::ExtraKindDiscovered(extra) => {
-                            // Register (idempotent) and (re)start the dynamic
-                            // watcher — a no-op when it is already running,
-                            // which self-heals after namespace/context restarts.
-                            if crate::models::extra_kinds::global().insert(extra.clone()) {
-                                tracing::info!(
-                                    "Discovered Flux-labeled kind {} ({}/{})",
-                                    extra.kind,
-                                    extra.group,
-                                    extra.version
-                                );
-                            }
-                            if let Some(ref mut w) = app.watcher {
-                                w.watch_extra(&extra);
-                            }
-                        }
-                        crate::watcher::WatchEvent::ExtraKindRemoved(kind) => {
-                            if crate::models::extra_kinds::global().remove(&kind).is_some() {
-                                tracing::info!("Discovered kind {} removed (CRD deleted)", kind);
-                                if let Some(ref mut w) = app.watcher {
-                                    w.stop_extra(&kind);
-                                }
-                                app.purge_kind(&kind);
-                            }
+                        event @ (crate::watcher::WatchEvent::ExtraKindDiscovered(_)
+                        | crate::watcher::WatchEvent::ExtraKindRemoved(_)) => {
+                            app.apply_extra_kind_event(event);
                         }
                     }
                 }

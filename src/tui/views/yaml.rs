@@ -145,10 +145,14 @@ pub fn render_resource_yaml(
     };
 
     let resource = state.get(key);
-    let mut title = if let Some(ref r) = resource {
-        format!("YAML - {} - {}", r.resource_type, r.name)
-    } else {
-        "YAML".to_string()
+    // Native objects aren't in the watched state; title them from the key.
+    let mut title = match (
+        &resource,
+        crate::tui::views::helpers::key_kind_and_name(key),
+    ) {
+        (Some(r), _) => format!("YAML - {} - {}", r.resource_type, r.name),
+        (None, Some((kind, name))) => format!("YAML - {kind} - {name}"),
+        (None, None) => "YAML".to_string(),
     };
 
     // Split YAML into lines and apply scrolling

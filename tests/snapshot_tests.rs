@@ -27,6 +27,7 @@ fn create_test_config() -> Config {
         default_namespace: "".to_string(),
         default_controller_namespace: "".to_string(),
         discover_flux_resources: false,
+        native_resources: true,
         metrics_source: flux9s::kube::metrics::MetricsSourceSetting::Auto,
         namespace_hotkeys: vec![],
         ui: UiConfig {
@@ -135,6 +136,7 @@ fn test_render_header() {
                 false,
                 &theme,
                 config.ui.no_icons,
+                None,
             );
         })
         .unwrap();
@@ -169,6 +171,7 @@ fn test_render_header_with_namespace() {
                 false,
                 &theme,
                 config.ui.no_icons,
+                None,
             );
         })
         .unwrap();
@@ -203,6 +206,7 @@ fn test_render_header_with_filter() {
                 false,
                 &theme,
                 config.ui.no_icons,
+                None,
             );
         })
         .unwrap();
@@ -583,6 +587,7 @@ fn test_render_resource_describe_with_data() {
             .unwrap(),
         ],
         events_error: None,
+        managed_by: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
@@ -599,6 +604,7 @@ fn test_render_resource_describe_with_data() {
                 &state,
                 &resource_objects,
                 Some(&describe_data),
+                false,
                 false,
                 &mut describe_scroll_offset,
                 &mut TextSearchState::default(),

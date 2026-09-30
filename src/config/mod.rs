@@ -90,6 +90,11 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
                 .parse()
                 .context("discoverFluxResources must be 'true' or 'false'")?;
         }
+        "nativeResources" => {
+            config.native_resources = value
+                .parse()
+                .context("nativeResources must be 'true' or 'false'")?;
+        }
         "metricsSource" => {
             config.metrics_source = crate::kube::metrics::MetricsSourceSetting::parse(value)
                 .context("metricsSource must be one of: auto, kubelet, metrics-server, none")?;

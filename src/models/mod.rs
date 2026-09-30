@@ -19,6 +19,9 @@ pub mod extra_kinds;
 // Flux resource kind definitions
 pub mod flux_resource_kind;
 
+/// Kind registry: every `:<kind>` resolves to a data-driven KindSpec (#267)
+pub mod kinds;
+
 // Resource field extraction
 pub mod resource_fields;
 

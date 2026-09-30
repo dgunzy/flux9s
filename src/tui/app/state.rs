@@ -43,6 +43,9 @@ pub enum View {
     /// A HelmRelease's effective values (#264): valuesFrom sources merged
     /// with spec.values, kept live. Opened with `v`.
     HelmValues,
+    /// Live list of any non-Flux kind (#267), opened with `:<kind>`. Back
+    /// walks the list history; `:flux` returns home.
+    KindList,
     /// Waiting for external editor / SSA apply
     ResourceEdit,
     #[allow(dead_code)] // Reserved for future alternative help view implementation
@@ -83,6 +86,7 @@ impl View {
             View::EventList => kb::get_events_commands(),
             View::Pulse => kb::get_pulse_commands(),
             View::HelmValues => kb::get_helm_values_commands(),
+            View::KindList => kb::get_kind_list_commands(),
             View::ResourceList
             | View::ResourceDetail
             | View::ResourceDescribe
@@ -257,6 +261,13 @@ pub struct ViewState {
     pub history_scroll_offset: usize,
     /// Scroll offset for the HelmRelease values view
     pub helm_values_scroll_offset: usize,
+    /// Where Back from the workload detail returns (the graph's workload
+    /// list or a `:<kind>` list).
+    pub workload_back_view: Option<View>,
+    /// Lists visited before the current one; `Esc` in a kind list pops it.
+    pub list_history: Vec<ListTarget>,
+    /// Why the current kind list can't be shown (e.g. RBAC), if it can't.
+    pub kind_list_error: Option<String>,
     /// Scroll offset for the controller log view
     pub log_scroll_offset: usize,
     /// Scroll offset for the workload detail view
@@ -313,6 +324,9 @@ impl Default for ViewState {
             trace_scroll_offset: 0,
             history_scroll_offset: 0,
             helm_values_scroll_offset: 0,
+            workload_back_view: None,
+            list_history: Vec::new(),
+            kind_list_error: None,
             log_scroll_offset: 0,
             workload_scroll_offset: 0,
             pulse_scroll_offset: 0,
@@ -403,12 +417,23 @@ impl UIState {
 
 /// Async operation state: one [`AsyncTask`] slot per view fetch, plus the
 /// mutation-operation flow (which carries confirmation state alongside).
+/// A resolved Managed By for the object with `uid`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManagerResolution {
+    pub uid: String,
+    pub text: String,
+}
+
 #[derive(Debug)]
 pub struct AsyncOperationState {
     /// Full-object fetch backing the YAML view (Flux or native object).
     pub yaml: AsyncTask<ObjectRef, serde_json::Value>,
     /// Object + events fetch backing the describe view (Flux or native object).
     pub describe: AsyncTask<ObjectRef, crate::kube::fetch::DescribeData>,
+    /// Owner-chain resolution filling the describe view's Managed By after
+    /// the object is shown. Keyed by the object; the result carries its UID
+    /// so a late answer for a previous describe is dropped.
+    pub describe_manager: AsyncTask<serde_json::Value, ManagerResolution>,
     /// Ownership-chain trace backing the trace view.
     pub trace: AsyncTask<ResourceKey, crate::trace::TraceResult>,
     /// Relationship graph backing the graph view.
@@ -433,6 +458,15 @@ pub struct AsyncOperationState {
     /// Live pod CPU/memory for the workload detail view (#265).
     pub workload_metrics:
         LiveTask<crate::kube::metrics::MetricsRequest, crate::kube::metrics::MetricsSnapshot>,
+    /// Live list for the `:<kind>` browser (#267).
+    pub kind_list:
+        LiveTask<crate::kube::kind_list::KindListRequest, crate::kube::kind_list::KindListSnapshot>,
+    /// API discovery feeding the kind registry, run on connect (#267).
+    pub kind_discovery: AsyncTask<(), Vec<crate::models::kinds::KindSpec>>,
+    /// Every namespace in the cluster, for the `:ns` picker (#267).
+    pub namespace_list: AsyncTask<(), Vec<String>>,
+    /// When discovery last started — throttles re-checks for unknown kinds.
+    pub kind_discovery_at: Option<std::time::Instant>,
     /// Live effective values for the HelmRelease values view (#264).
     pub helm_values: LiveTask<HelmValuesRequest, crate::kube::helm_values::HelmValues>,
     /// Confirmed workload restart / pod delete in flight (#263).
@@ -462,6 +496,7 @@ impl Default for AsyncOperationState {
         Self {
             yaml: Default::default(),
             describe: Default::default(),
+            describe_manager: Default::default(),
             trace: Default::default(),
             graph: Default::default(),
             workload: Default::default(),
@@ -472,6 +507,10 @@ impl Default for AsyncOperationState {
             workload_action: Default::default(),
             helm_values: Default::default(),
             workload_metrics: Default::default(),
+            kind_list: Default::default(),
+            kind_discovery: Default::default(),
+            kind_discovery_at: None,
+            namespace_list: Default::default(),
             edit_pending: None,
             edit_full_yaml: None,
             edit_save_pending: None,
@@ -487,6 +526,7 @@ impl AsyncOperationState {
     pub fn clear_pending(&mut self) {
         self.yaml.clear();
         self.describe.clear();
+        self.describe_manager.clear();
         self.trace.clear();
         self.graph.clear();
         self.workload.clear();
@@ -497,6 +537,9 @@ impl AsyncOperationState {
         self.workload_action.clear();
         self.helm_values.clear();
         self.workload_metrics.clear();
+        self.kind_list.clear();
+        self.kind_discovery.clear();
+        self.namespace_list.clear();
 
         self.edit_pending = None;
         self.edit_full_yaml = None;
@@ -509,6 +552,15 @@ impl AsyncOperationState {
 }
 
 /// Pending operation awaiting confirmation
+/// A list the user can return to with `Esc` (#267).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListTarget {
+    /// The Flux resource list (with whatever type filter it had).
+    Flux,
+    /// A kind list.
+    Kind(crate::models::kinds::KindSpec),
+}
+
 /// Which HelmRelease's values to show, and whether Secret-sourced values are
 /// revealed (`x` toggles).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -685,6 +737,7 @@ mod tests {
             View::InventoryList,
             View::Pulse,
             View::HelmValues,
+            View::KindList,
             View::ResourceEdit,
             View::Help,
         ];
