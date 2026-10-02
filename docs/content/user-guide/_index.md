@@ -239,6 +239,11 @@ Some commands open interactive selection menus when used without arguments, prov
 
 When you type `:ctx` and press Enter without specifying a context name, flux9s displays an interactive menu of available Kubernetes contexts. The current context is marked with "(current)".
 
+Switching context starts fresh on the new cluster: watchers restart, namespace
+hotkeys and the `:ns` picker's Flux namespaces are re-discovered, and any view
+showing an object from the old cluster (describe, workload detail, logs,
+events, graph, kind lists) returns to the Flux list.
+
 **Navigation:**
 
 - `j` / `k` or `↓` / `↑` - Navigate through options
@@ -271,11 +276,14 @@ When you type `:skin` and press Enter without specifying a theme name, flux9s di
 
 The submenu saves themes to `ui.skin` in normal mode, or `ui.skinReadOnly` when readonly mode is enabled.
 
-With native resources on (`:native`), the `:ns` picker lists every namespace in the cluster: `all` first, then your
-hotkey namespaces and any namespace holding Flux resources (marked `◆ flux`,
-or `[flux]` with `ui.noIcons`), then the rest alphabetically. If your RBAC
-can't list namespaces, it shows the Flux namespaces as before. With
-`nativeResources: false` it keeps its original Flux-only list.
+With native resources on (`:native`), the `:ns` picker lists every namespace in the cluster: `all` first, then
+every namespace holding Flux resources (marked `◆ flux`, or `[flux]` with
+`ui.noIcons`), then any other hotkey namespaces and the rest alphabetically.
+If the picker opens before the cluster's namespaces have loaded, its title
+says `loading all namespaces…` and the list fills in place, keeping your
+selection and filter. If your RBAC can't list namespaces, it shows the Flux
+namespaces as before. With `nativeResources: false` it lists only the Flux
+namespaces (plus any configured hotkeys and the current namespace).
 
 ## Health Filtering
 

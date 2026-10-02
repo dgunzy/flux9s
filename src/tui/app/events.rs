@@ -2314,15 +2314,9 @@ impl App {
                 // No argument: open the searchable picker (same reusable submenu
                 // as :ctx / :skin) instead of listing options in the bars.
                 // Keep the cluster-wide list fresh for the next open.
+                // An open picker updates in place when the list arrives.
                 self.request_namespace_list();
-                let options = self.namespace_picker_options();
-                let flux = self.flux_namespace_set();
-                match commands::namespace_submenu(
-                    &options,
-                    &self.namespace,
-                    &flux,
-                    self.config.ui.no_icons,
-                ) {
+                match self.build_namespace_picker() {
                     Some(submenu) => self.view_state.submenu_state = Some(submenu),
                     None => {
                         self.set_status_message(("No namespaces discovered yet".to_string(), true))
@@ -4167,6 +4161,146 @@ mod tests {
             app.namespace_picker_options(),
             ["all", "flux-system", "apps"]
         );
+    }
+
+    #[test]
+    fn ns_picker_opened_before_the_list_arrives_fills_in_place() {
+        // The reported bug: :deploy then :ns showed only the Flux namespaces
+        // until the picker was reopened, because it was built before the
+        // cluster-wide list arrived.
+        let mut app = create_test_app(false);
+        app.update_namespace_hotkeys(vec!["apps".into()]);
+        app.ui_state.command_buffer = "ns".to_string();
+        app.execute_command();
+        let picker = app.view_state.submenu_state.as_ref().unwrap();
+        assert!(picker.title.as_deref().unwrap().contains("loading"));
+        let values = |app: &App| -> Vec<String> {
+            let picker = app.view_state.submenu_state.as_ref().unwrap();
+            picker.items.iter().map(|i| i.value.clone()).collect()
+        };
+        assert_eq!(values(&app), ["all", "flux-system", "apps"]);
+
+        // Pick "apps" and type a filter while it loads.
+        let picker = app.view_state.submenu_state.as_mut().unwrap();
+        picker.selected_index = 2;
+        picker.filter_mode = true;
+
+        let _ = app.async_state.namespace_list.dispatch();
+        let _ = app.async_state.namespace_list.try_recv();
+        app.set_all_namespaces(vec![
+            "apps".into(),
+            "default".into(),
+            "flux-system".into(),
+            "kube-system".into(),
+        ]);
+        assert_eq!(
+            values(&app),
+            ["all", "flux-system", "apps", "default", "kube-system"],
+            "the open picker now lists every namespace, Flux ones first"
+        );
+        let picker = app.view_state.submenu_state.as_ref().unwrap();
+        assert_eq!(
+            picker.selected_value().as_deref(),
+            Some("apps"),
+            "selection kept"
+        );
+        assert!(picker.filter_mode, "filter state kept");
+        assert_eq!(picker.title.as_deref(), Some("Select Namespace"));
+    }
+
+    #[test]
+    fn ns_picker_marks_and_lifts_namespaces_seen_with_flux_resources() {
+        let mut app = create_test_app(false);
+        // Discovery at connect time only found flux-system...
+        app.update_namespace_hotkeys(vec![]);
+        app.all_namespaces = vec!["apps".into(), "default".into(), "flux-system".into()];
+        // ...but the watchers have since seen a HelmRelease in "apps".
+        add_helm_release(&mut app);
+        assert_eq!(
+            app.namespace_picker_options(),
+            ["all", "flux-system", "apps", "default"]
+        );
+        let picker = app.build_namespace_picker().unwrap();
+        let apps = picker.items.iter().find(|i| i.value == "apps").unwrap();
+        assert!(apps.display_text.contains("flux"));
+        let default = picker.items.iter().find(|i| i.value == "default").unwrap();
+        assert_eq!(default.display_text, "default");
+    }
+
+    #[test]
+    fn ns_picker_puts_non_flux_hotkeys_after_flux_namespaces() {
+        let mut app = create_test_app(false);
+        app.config.namespace_hotkeys = vec!["all".into(), "scratch".into(), "apps".into()];
+        app.update_namespace_hotkeys(vec!["apps".into()]);
+        app.all_namespaces = vec!["apps".into(), "scratch".into(), "zeta".into()];
+        assert_eq!(
+            app.namespace_picker_options(),
+            ["all", "apps", "scratch", "zeta"]
+        );
+    }
+
+    #[test]
+    fn context_switch_rediscovers_flux_namespaces_and_hotkeys() {
+        let mut app = create_test_app(false);
+        app.update_namespace_hotkeys(vec!["old-apps".into(), "old-infra".into()]);
+        app.all_namespaces = vec!["old-apps".into(), "old-infra".into(), "default".into()];
+
+        app.complete_context_switch("other".into(), Some("flux-system".into()));
+        assert_eq!(
+            app.namespace_hotkeys(),
+            ["all", "flux-system"],
+            "the old cluster's hotkeys are gone at once"
+        );
+        assert!(app.flux_namespaces.is_empty());
+        assert!(app.all_namespaces.is_empty());
+        assert!(app.async_state.flux_namespace_discovery.is_loading());
+        assert_eq!(app.namespace_picker_options(), ["all", "flux-system"]);
+
+        // The new cluster's discovery lands while the picker is open.
+        app.ui_state.command_buffer = "ns".to_string();
+        app.execute_command();
+        let _ = app.async_state.flux_namespace_discovery.dispatch();
+        let _ = app.async_state.flux_namespace_discovery.try_recv();
+        app.set_flux_namespaces(vec!["new-apps".into()]);
+        assert_eq!(app.namespace_hotkeys(), ["all", "flux-system", "new-apps"]);
+        let picker = app.view_state.submenu_state.as_ref().unwrap();
+        let new_apps = picker.items.iter().find(|i| i.value == "new-apps").unwrap();
+        assert!(new_apps.display_text.contains("flux"));
+        assert!(!picker.items.iter().any(|i| i.value.starts_with("old-")));
+    }
+
+    #[test]
+    fn context_switch_with_configured_hotkeys_skips_rediscovery() {
+        let mut app = create_test_app(false);
+        app.config.namespace_hotkeys = vec!["all".into(), "team".into()];
+        app.complete_context_switch("other".into(), None);
+        assert_eq!(app.namespace_hotkeys(), ["all", "team"]);
+        assert!(!app.async_state.flux_namespace_discovery.is_loading());
+    }
+
+    #[test]
+    fn context_switch_leaves_views_tied_to_the_old_cluster() {
+        for (view, stays) in [
+            (View::WorkloadDetail, false),
+            (View::ResourceDescribe, false),
+            (View::Logs, false),
+            (View::EventList, false),
+            (View::ResourceGraph, false),
+            (View::KindList, false),
+            (View::ResourceFavorites, true),
+            (View::Pulse, true),
+        ] {
+            let mut app = create_test_app(false);
+            app.view_state.current_view = view;
+            app.selection_state.selected_resource_key =
+                Some("Kustomization:flux-system:apps".into());
+            app.selection_state.native_object = Some(ObjectRef::native("v1", "Pod", "a", "b"));
+            app.complete_context_switch("other".into(), None);
+            let expected = if stays { view } else { View::ResourceList };
+            assert_eq!(app.view_state.current_view, expected, "{view:?}");
+            assert!(app.selection_state.selected_resource_key.is_none());
+            assert!(app.selection_state.native_object.is_none());
+        }
     }
 
     fn open_list(app: &mut App, group: &str, kind_name: &str, plural: &str, rows: &[(&str, &str)]) {

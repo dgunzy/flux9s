@@ -431,6 +431,22 @@ pub async fn run_tui_with_async_init(
                         });
                     }
 
+                    if let Some(((), tx)) = app.async_state.flux_namespace_discovery.dispatch() {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            // Bounded like the startup discovery.
+                            let result = tokio::time::timeout(
+                                connect_timeout,
+                                crate::kube::discover_namespaces_with_flux_resources(&client),
+                            )
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(anyhow::anyhow!("Flux namespace discovery timed out"))
+                            });
+                            let _ = tx.send(result);
+                        });
+                    }
+
                     if let Some(((), tx)) = app.async_state.namespace_list.dispatch() {
                         let client = client.clone();
                         tokio::spawn(async move {
@@ -613,12 +629,24 @@ pub async fn run_tui_with_async_init(
                 }
             }
 
+            if let Some(result) = app.async_state.flux_namespace_discovery.try_recv() {
+                match result {
+                    Ok(namespaces) => app.set_flux_namespaces(namespaces),
+                    // Hotkeys keep their defaults; the picker still marks
+                    // namespaces the watchers see.
+                    Err(e) => tracing::warn!("Flux namespace discovery failed: {:#}", e),
+                }
+            }
+
             if let Some(result) = app.async_state.namespace_list.try_recv() {
                 match result {
-                    Ok(names) => app.all_namespaces = names,
+                    Ok(names) => app.set_all_namespaces(names),
                     // RBAC often forbids listing namespaces: the picker keeps
-                    // the Flux namespaces, as before.
-                    Err(e) => tracing::debug!("Namespace list unavailable: {:#}", e),
+                    // the Flux namespaces, as before (dropping "loading…").
+                    Err(e) => {
+                        tracing::debug!("Namespace list unavailable: {:#}", e);
+                        app.refresh_namespace_picker();
+                    }
                 }
             }
 

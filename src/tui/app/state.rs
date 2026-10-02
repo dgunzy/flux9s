@@ -465,6 +465,9 @@ pub struct AsyncOperationState {
     pub kind_discovery: AsyncTask<(), Vec<crate::models::kinds::KindSpec>>,
     /// Every namespace in the cluster, for the `:ns` picker (#267).
     pub namespace_list: AsyncTask<(), Vec<String>>,
+    /// Re-discovery of the namespaces holding Flux resources (hotkeys and
+    /// the `:ns` picker's Flux marker) after a context switch.
+    pub flux_namespace_discovery: AsyncTask<(), Vec<String>>,
     /// When discovery last started — throttles re-checks for unknown kinds.
     pub kind_discovery_at: Option<std::time::Instant>,
     /// Live effective values for the HelmRelease values view (#264).
@@ -511,6 +514,7 @@ impl Default for AsyncOperationState {
             kind_discovery: Default::default(),
             kind_discovery_at: None,
             namespace_list: Default::default(),
+            flux_namespace_discovery: Default::default(),
             edit_pending: None,
             edit_full_yaml: None,
             edit_save_pending: None,
@@ -540,6 +544,7 @@ impl AsyncOperationState {
         self.kind_list.clear();
         self.kind_discovery.clear();
         self.namespace_list.clear();
+        self.flux_namespace_discovery.clear();
 
         self.edit_pending = None;
         self.edit_full_yaml = None;

@@ -274,25 +274,35 @@ impl App {
         &self.namespace_hotkeys
     }
 
-    /// Namespace options for the `:ns` picker submenu.
+    /// Namespace options for the `:ns` picker submenu, in display order:
     ///
-    /// Always offers `all` (cluster-wide) first, followed by the discovered /
-    /// configured hotkey namespaces, and guarantees the currently watched
-    /// namespace is selectable even when it is not among the hotkeys.
-    ///
-    /// Order: `all`, the hotkey namespaces, the other namespaces with Flux
-    /// resources, the current one, then every other namespace alphabetically
-    /// (#267 — the cluster-wide list is empty when `nativeResources` is off,
-    /// which keeps the picker exactly as it was).
+    /// 1. `all` (cluster-wide)
+    /// 2. namespaces with Flux resources (hotkey order, then discovery order,
+    ///    then any seen in the watched state)
+    /// 3. configured hotkeys and the current namespace, so both stay selectable
+    /// 4. with `nativeResources` on (#267), every other namespace in the
+    ///    cluster, alphabetically — the cluster-wide list is never fetched
+    ///    while it's off, so Flux-only mode offers Flux namespaces only.
     pub fn namespace_picker_options(&self) -> Vec<String> {
+        let flux = self.flux_namespace_set();
         let mut options = vec!["all".to_string()];
         let mut push = |ns: &String| {
-            if ns != "all" && !options.contains(ns) {
+            if ns != "all" && !ns.is_empty() && !options.contains(ns) {
                 options.push(ns.clone());
             }
         };
-        self.namespace_hotkeys.iter().for_each(&mut push);
+        // Auto-built hotkeys were derived from Flux discovery; configured
+        // ones lead only if they actually hold Flux resources.
+        let auto_hotkeys = self.config.namespace_hotkeys.is_empty();
+        self.namespace_hotkeys
+            .iter()
+            .filter(|ns| auto_hotkeys || flux.contains(*ns))
+            .for_each(&mut push);
         self.flux_namespaces.iter().for_each(&mut push);
+        let mut observed: Vec<&String> = flux.iter().collect();
+        observed.sort();
+        observed.into_iter().for_each(&mut push);
+        self.namespace_hotkeys.iter().for_each(&mut push);
         if let Some(current) = &self.namespace {
             push(current);
         }
@@ -302,9 +312,74 @@ impl App {
         options
     }
 
-    /// Namespaces that hold Flux resources, for the picker's marker.
+    /// Namespaces that hold Flux resources, for the picker's order and
+    /// marker: those discovered at connect time plus any the watchers have
+    /// since seen (e.g. after switching to all namespaces).
     pub(crate) fn flux_namespace_set(&self) -> std::collections::HashSet<String> {
-        self.flux_namespaces.iter().cloned().collect()
+        let mut set: std::collections::HashSet<String> =
+            self.flux_namespaces.iter().cloned().collect();
+        set.extend(
+            self.state
+                .all()
+                .into_iter()
+                .map(|r| r.namespace)
+                .filter(|ns| !ns.is_empty()),
+        );
+        set
+    }
+
+    /// Build the `:ns` picker from the current namespace knowledge. The title
+    /// says so while the cluster-wide list is still loading.
+    pub(crate) fn build_namespace_picker(&self) -> Option<crate::tui::submenu::SubmenuState> {
+        let options = self.namespace_picker_options();
+        let flux = self.flux_namespace_set();
+        let submenu = crate::tui::commands::namespace_submenu(
+            &options,
+            &self.namespace,
+            &flux,
+            self.config.ui.no_icons,
+        )?;
+        Some(if self.async_state.namespace_list.is_loading() {
+            submenu.with_title("Select Namespace (loading all namespaces…)".to_string())
+        } else {
+            submenu
+        })
+    }
+
+    /// Store the cluster-wide namespace list and refresh an open `:ns`
+    /// picker in place, so it never shows a partial list just because it was
+    /// opened before the list arrived. Filter and selection are kept.
+    pub fn set_all_namespaces(&mut self, names: Vec<String>) {
+        self.all_namespaces = names;
+        self.refresh_namespace_picker();
+    }
+
+    /// Rebuild an open `:ns` picker (keeps its filter and selected namespace).
+    pub(crate) fn refresh_namespace_picker(&mut self) {
+        let Some(open) = self
+            .view_state
+            .submenu_state
+            .as_ref()
+            .filter(|s| s.command == "ns")
+        else {
+            return;
+        };
+        let (filter, filter_mode, selected) =
+            (open.filter.clone(), open.filter_mode, open.selected_value());
+        let Some(mut fresh) = self.build_namespace_picker() else {
+            return;
+        };
+        fresh.filter = filter;
+        fresh.filter_mode = filter_mode;
+        if let Some(selected) = selected
+            && let Some(index) = fresh
+                .filtered_items()
+                .iter()
+                .position(|item| item.value == selected)
+        {
+            fresh.selected_index = index;
+        }
+        self.view_state.submenu_state = Some(fresh);
     }
 
     /// Invalidate the cached layout dimensions, forcing recalculation on next render.
@@ -553,9 +628,41 @@ impl App {
         self.pending_kind_command = None;
         self.view_state.list_history.clear();
         self.view_state.kind_list_error = None;
-        if self.view_state.current_view == View::KindList {
+        // Namespaces and hotkeys belong to the old cluster: fall back to the
+        // defaults now and re-discover the new cluster's Flux namespaces.
+        self.update_namespace_hotkeys(Vec::new());
+        if self.config.namespace_hotkeys.is_empty() {
+            self.async_state.flux_namespace_discovery.request(());
+        }
+        // Views showing one object or a stream from the old cluster have
+        // nothing left to show (their fetches and watches were just
+        // dropped): go back to the Flux list. Lists and the pulse rebuild
+        // from the new watchers by themselves.
+        if !matches!(
+            self.view_state.current_view,
+            View::ResourceList | View::ResourceFavorites | View::Pulse
+        ) {
             self.view_state.current_view = View::ResourceList;
         }
+        self.view_state.submenu_state = None;
+        self.selection_state.selected_resource_key = None;
+        self.selection_state.native_object = None;
+        self.view_state.workload_rows.clear();
+        self.view_state.inventory_rows.clear();
+        self.view_state.workload_back_view = None;
+        self.view_state.logs_back_view = None;
+        self.view_state.detail_back_view = None;
+        self.view_state.previous_list_view = View::ResourceList;
+        self.logs_after_workload_load = false;
+        self.invalidate_layout_cache();
+    }
+
+    /// Store re-discovered Flux namespaces: rebuild the hotkeys and refresh
+    /// an open `:ns` picker.
+    pub fn set_flux_namespaces(&mut self, namespaces: Vec<String>) {
+        self.update_namespace_hotkeys(namespaces);
+        self.refresh_namespace_picker();
+        self.invalidate_layout_cache();
     }
 
     /// Cycle the sort for the resource list: ascending → descending → default.
