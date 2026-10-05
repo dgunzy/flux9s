@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-09-07T15:03:46Z",
+  "generated_at": "2026-10-05T17:33:53Z",
   "flux_versions": {
-    "source-controller": "v1.9.5",
-    "kustomize-controller": "v1.9.5",
-    "helm-controller": "v1.6.4",
+    "source-controller": "v1.9.6",
+    "kustomize-controller": "v1.9.6",
+    "helm-controller": "v1.6.5",
     "notification-controller": "v1.9.4",
     "image-reflector-controller": "v1.2.5",
     "image-automation-controller": "v1.2.5",
