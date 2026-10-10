@@ -626,7 +626,6 @@ impl App {
         self.async_state.kind_discovery_at = None;
         self.all_namespaces.clear();
         self.pending_kind_command = None;
-        self.view_state.list_history.clear();
         self.view_state.kind_list_error = None;
         // Namespaces and hotkeys belong to the old cluster: fall back to the
         // defaults now and re-discover the new cluster's Flux namespaces.
@@ -638,10 +637,16 @@ impl App {
         // nothing left to show (their fetches and watches were just
         // dropped): go back to the Flux list. Lists and the pulse rebuild
         // from the new watchers by themselves.
-        if !matches!(
+        // The Back history pointed into the old cluster too.
+        self.view_state.nav_stack.clear();
+        if matches!(
             self.view_state.current_view,
-            View::ResourceList | View::ResourceFavorites | View::Pulse
+            View::ResourceFavorites | View::Pulse
         ) {
+            self.view_state
+                .nav_stack
+                .push(super::state::NavEntry::View(View::ResourceList));
+        } else {
             self.view_state.current_view = View::ResourceList;
         }
         self.view_state.submenu_state = None;
@@ -649,10 +654,7 @@ impl App {
         self.selection_state.native_object = None;
         self.view_state.workload_rows.clear();
         self.view_state.inventory_rows.clear();
-        self.view_state.workload_back_view = None;
-        self.view_state.logs_back_view = None;
-        self.view_state.detail_back_view = None;
-        self.view_state.previous_list_view = View::ResourceList;
+        self.view_state.logs_replace_workload = false;
         self.logs_after_workload_load = false;
         self.invalidate_layout_cache();
     }
@@ -703,36 +705,26 @@ impl App {
         &mut self.state
     }
 
-    #[allow(dead_code)] // May be used by external code or future features
     pub fn resource_objects(&self) -> &HashMap<String, serde_json::Value> {
         &self.resource_objects
     }
 
-    #[allow(dead_code)] // Used in tests
+    /// Open the graph view (Back returns to where it was opened from).
     pub fn set_view_graph(&mut self) {
-        self.view_state.current_view = View::ResourceGraph;
+        self.navigate_to(View::ResourceGraph);
     }
 
+    /// Set the current view directly, without touching the Back history
+    /// (tests and initial state). Navigation uses `navigate_to` /
+    /// `navigate_root` / `navigate_back`.
     pub fn set_view(&mut self, view: View) {
         self.view_state.current_view = view;
     }
 
-    pub fn previous_list_view(&self) -> View {
-        self.view_state.previous_list_view
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub fn set_previous_list_view(&mut self, view: View) {
-        self.view_state.previous_list_view = view;
-    }
-
-    #[allow(dead_code)] // Used in tests
     pub fn current_view(&self) -> View {
         self.view_state.current_view
     }
 
-    #[allow(dead_code)] // Used in tests
     pub fn show_quit_confirm(&self) -> bool {
         self.ui_state.show_quit_confirm
     }
@@ -849,20 +841,13 @@ impl App {
     /// comes from the controller pod watch, so the namespace is the
     /// configured controller namespace.
     pub(crate) fn open_log_view(&mut self, pod_name: &str) {
-        // Remember the root view we came from so Back returns there (and a
-        // live events feed keeps its watcher).
-        if matches!(
-            self.view_state.current_view,
-            View::ResourceList | View::ResourceFavorites | View::EventList
-        ) {
-            self.view_state.previous_list_view = self.view_state.current_view;
-        }
+        // Back returns to where logs were opened (a live events feed keeps
+        // its watcher meanwhile).
+        self.navigate_to(View::Logs);
         let namespace = self.config.default_controller_namespace.clone();
-        self.view_state.logs_back_view = None;
         self.logs.request(namespace, pod_name.to_string());
         self.view_state.log_scroll_offset = 0;
         self.view_state.text_search.clear();
-        self.view_state.current_view = View::Logs;
     }
 
     /// Store a loaded workload; when the load was initiated by `l` on the
@@ -889,14 +874,22 @@ impl App {
     }
 
     /// Open the log view for an arbitrary pod (e.g. a workload's pod from the
-    /// drill-down). The Back target (`logs_back_view`) is recorded where the
-    /// flow started — the `l` keypress — so it survives the pod submenu.
+    /// drill-down). When `l` on a list fetched the workload only to get here,
+    /// the logs replace the workload detail so Back returns to the list —
+    /// decided at the keypress, so it survives the pod submenu.
     pub(crate) fn open_pod_logs(&mut self, namespace: &str, pod_name: &str) {
+        let replace = self.view_state.current_view == View::WorkloadDetail
+            && std::mem::take(&mut self.view_state.logs_replace_workload);
+        if replace {
+            self.replace_view(View::Logs);
+        } else {
+            self.navigate_to(View::Logs);
+        }
+        // Start the stream after leaving the old view (leaving stops logs).
         self.logs
             .request(namespace.to_string(), pod_name.to_string());
         self.view_state.log_scroll_offset = 0;
         self.view_state.text_search.clear();
-        self.view_state.current_view = View::Logs;
     }
 
     /// The watched Flux resource the current view points at, when the
@@ -907,7 +900,7 @@ impl App {
     }
 
     pub fn set_view_trace(&mut self) {
-        self.view_state.current_view = View::ResourceTrace;
+        self.navigate_to(View::ResourceTrace);
         self.view_state.trace_scroll_offset = 0;
         self.view_state.text_search.clear();
     }
@@ -930,7 +923,6 @@ impl App {
     }
 
     /// Get all favorite resource keys
-    #[allow(dead_code)] // Public API method
     pub fn favorites(&self) -> &HashSet<String> {
         &self.selection_state.favorites
     }
@@ -1153,7 +1145,7 @@ impl std::fmt::Debug for App {
             )
             .field("graph_scroll_offset", &self.view_state.graph_scroll_offset)
             .field("graph_task", &self.async_state.graph)
-            .field("previous_list_view", &self.view_state.previous_list_view)
+            .field("nav_stack", &self.view_state.nav_stack)
             .finish()
     }
 }

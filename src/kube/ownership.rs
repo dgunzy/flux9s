@@ -21,6 +21,7 @@
 //!    template (`managed-by: Helm` on a Flux HelmRelease's pods), so it's
 //!    weaker evidence than the owner chain.
 
+use crate::models::FluxResourceKind;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -69,12 +70,12 @@ impl Manager {
     /// full name is one keypress away in describe / workload detail).
     pub fn short_label(&self) -> String {
         match self {
-            Manager::Flux { kind, .. } => match kind.as_str() {
-                "Kustomization" => "Flux ks".to_string(),
-                "HelmRelease" => "Flux hr".to_string(),
-                "ResourceSet" => "Flux rset".to_string(),
-                "FluxInstance" => "Flux instance".to_string(),
-                other => format!("Flux {other}"),
+            Manager::Flux { kind, .. } => match FluxResourceKind::parse_optional(kind) {
+                Some(FluxResourceKind::Kustomization) => "Flux ks".to_string(),
+                Some(FluxResourceKind::HelmRelease) => "Flux hr".to_string(),
+                Some(FluxResourceKind::ResourceSet) => "Flux rset".to_string(),
+                Some(FluxResourceKind::FluxInstance) => "Flux instance".to_string(),
+                _ => format!("Flux {kind}"),
             },
             Manager::ArgoCd { .. } => "Argo CD".to_string(),
             Manager::Helm { .. } => "Helm".to_string(),
@@ -95,8 +96,8 @@ impl Manager {
                 } else {
                     format!("{namespace}/{name}")
                 };
-                if kind == "FluxInstance" {
-                    format!("FluxInstance {target}")
+                if kind == FluxResourceKind::FluxInstance.as_str() {
+                    format!("{kind} {target}")
                 } else {
                     format!("Flux {kind} {target}")
                 }
@@ -141,14 +142,22 @@ pub fn detect_manager(obj: &Value) -> Option<Manager> {
     let label = string_map(obj, "labels");
     let annotation = string_map(obj, "annotations");
 
+    // Ownership label prefixes (labels, not API groups — ResourceSet's
+    // differs from its group).
     for (prefix, kind) in [
-        ("kustomize.toolkit.fluxcd.io", "Kustomization"),
-        ("helm.toolkit.fluxcd.io", "HelmRelease"),
-        ("resourceset.fluxcd.controlplane.io", "ResourceSet"),
+        (
+            "kustomize.toolkit.fluxcd.io",
+            FluxResourceKind::Kustomization,
+        ),
+        ("helm.toolkit.fluxcd.io", FluxResourceKind::HelmRelease),
+        (
+            "resourceset.fluxcd.controlplane.io",
+            FluxResourceKind::ResourceSet,
+        ),
     ] {
         if let Some(name) = label(&format!("{prefix}/name")) {
             return Some(Manager::Flux {
-                kind: kind.to_string(),
+                kind: kind.as_str().to_string(),
                 namespace: label(&format!("{prefix}/namespace"))
                     .unwrap_or_default()
                     .to_string(),
@@ -158,7 +167,7 @@ pub fn detect_manager(obj: &Value) -> Option<Manager> {
     }
     if label("app.kubernetes.io/managed-by") == Some("flux-operator") {
         return Some(Manager::Flux {
-            kind: "FluxInstance".to_string(),
+            kind: FluxResourceKind::FluxInstance.as_str().to_string(),
             namespace: label("fluxcd.controlplane.io/namespace")
                 .unwrap_or_default()
                 .to_string(),

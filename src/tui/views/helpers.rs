@@ -146,18 +146,6 @@ pub fn render_empty_state(
     f.render_widget(paragraph, area);
 }
 
-/// Format a boolean option as a string
-///
-/// Converts `Option<bool>` to "True", "False", or "?".
-#[allow(dead_code)] // Reserved for future use
-pub fn format_bool_option(value: Option<bool>) -> &'static str {
-    match value {
-        Some(true) => "True",
-        Some(false) => "False",
-        None => "?",
-    }
-}
-
 /// Truncate a message to a maximum length
 ///
 /// If the message exceeds max_len, truncates and adds "...".

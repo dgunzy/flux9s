@@ -37,6 +37,24 @@ const COMMAND_TABLE: &[(fn(&str) -> bool, CommandHandler)] = &[
     (commands::is_native_command, App::cmd_toggle_native),
 ];
 
+/// The kind name `:trace <kind>/…` refers to, resolved through the kind
+/// registry like `:<kind>` — Flux aliases (`ks`, `hr`), Flux-adjacent kinds,
+/// and (with `nativeResources`) any discovered kind by plural or short name.
+/// An exact kind name passes through unchanged. `None` when the token is a
+/// Kubernetes short name that needs discovery, which is off.
+fn trace_kind(token: &str, native_resources: bool) -> Option<String> {
+    if let Some(spec) = crate::models::kinds::resolve(token) {
+        return Some(spec.names.kind);
+    }
+    if !native_resources && crate::models::kinds::looks_like_kubernetes_kind(token) {
+        // An exact built-in kind name ("Deployment") still works without
+        // discovery; aliases ("deploy") need it.
+        let exact = token.chars().next().is_some_and(char::is_uppercase);
+        return exact.then(|| token.to_string());
+    }
+    Some(token.to_string())
+}
+
 /// Status message for `e` on a native object: editing isn't supported yet,
 /// here's the kubectl command that does it. A Flux kind only lands here when
 /// it's outside the watched namespace scope (e.g. from the events feed).
@@ -470,8 +488,6 @@ impl App {
                         true,
                     ));
                 } else if let Some(resource) = self.get_current_resource() {
-                    // Remember the exact view we came from so cancel/save returns there
-                    self.async_state.edit_return_view = self.view_state.current_view;
                     // Trigger YAML fetch for the full resource object (via AsyncTask)
                     let rk = ResourceKey::new(
                         resource.resource_type.clone(),
@@ -483,7 +499,8 @@ impl App {
                     self.async_state.edit_full_yaml = None;
                     self.async_state.edit_editor_launched = false;
                     self.async_state.edit_error_message = None;
-                    self.view_state.current_view = View::ResourceEdit;
+                    // Back (cancel/save) returns to the exact view `e` came from.
+                    self.navigate_to(View::ResourceEdit);
                 } else {
                     self.set_status_message(("No resource selected for editing".to_string(), true));
                 }
@@ -517,13 +534,7 @@ impl App {
                     .get(self.view_state.selected_index)
                     .cloned()
                 {
-                    self.open_workload_detail(
-                        row.kind,
-                        row.namespace,
-                        row.name,
-                        View::WorkloadList,
-                        false,
-                    );
+                    self.open_workload_detail(row.kind, row.namespace, row.name, false);
                 }
             }
             // HelmRelease effective values (#264).
@@ -542,7 +553,6 @@ impl App {
             crossterm::event::KeyCode::Char('l')
                 if self.view_state.current_view == View::WorkloadDetail =>
             {
-                self.view_state.logs_back_view = Some(View::WorkloadDetail);
                 self.open_workload_pod_logs();
             }
             // `l` straight from the workload list: fetch the workload and
@@ -556,18 +566,10 @@ impl App {
                     .get(self.view_state.selected_index)
                     .cloned()
                 {
-                    self.open_workload_detail(
-                        row.kind,
-                        row.namespace,
-                        row.name,
-                        View::WorkloadList,
-                        true,
-                    );
+                    self.open_workload_detail(row.kind, row.namespace, row.name, true);
                 }
             }
             crossterm::event::KeyCode::Enter if self.view_state.current_view.is_list_view() => {
-                // Save current view as previous list view before navigating
-                self.view_state.previous_list_view = self.view_state.current_view;
                 let resources = self.get_filtered_resources();
                 if let Some(resource) = resources.get(self.view_state.selected_index) {
                     let key = crate::watcher::resource_key(
@@ -576,9 +578,7 @@ impl App {
                         &resource.resource_type,
                     );
                     self.selection_state.selected_resource_key = Some(key);
-                    // Opened from the list, so Back returns to the list.
-                    self.view_state.detail_back_view = None;
-                    self.view_state.current_view = View::ResourceDetail;
+                    self.navigate_to(View::ResourceDetail);
                 }
             }
             // Toggle favorite - works from list view
@@ -626,10 +626,8 @@ impl App {
                     );
 
                     if has_history {
-                        // Save current view as previous list view before navigating
-                        self.view_state.previous_list_view = self.view_state.current_view;
                         self.selection_state.selected_resource_key = Some(key);
-                        self.view_state.current_view = View::ResourceHistory;
+                        self.navigate_to(View::ResourceHistory);
                         self.view_state.history_scroll_offset = 0;
                     } else {
                         // Show error message immediately
@@ -671,13 +669,6 @@ impl App {
                         return None;
                     }
 
-                    // Save current view as previous list view before navigating
-                    if self.view_state.current_view.is_list_view()
-                        || self.view_state.current_view == View::EventList
-                    {
-                        self.view_state.previous_list_view = self.view_state.current_view;
-                    }
-
                     // Trigger graph building
                     let key = crate::watcher::resource_key(
                         &resource.namespace,
@@ -693,65 +684,17 @@ impl App {
                     });
                     self.view_state.graph_scroll_offset = 0; // Reset scroll
                     self.view_state.graph_focus_index = None; // Reset focus (set when graph loads)
-                    self.view_state.current_view = View::ResourceGraph;
+                    self.navigate_to(View::ResourceGraph);
                 } else {
                     self.set_status_message(("No resource selected".to_string(), true));
                 }
             }
             crossterm::event::KeyCode::Backspace => {
-                // Backspace goes back (same as Escape for detail view)
-                if self.view_state.current_view == View::ResourceEdit {
-                    // Cancel edit — clear all edit state
-                    self.async_state.edit_pending = None;
-                    self.async_state.edit_full_yaml = None;
-                    self.async_state.edit_save_pending = None;
-                    self.async_state.edit_save_result_rx = None;
-                    self.async_state.edit_error_message = None;
-                    self.async_state.edit_editor_launched = false;
-                    self.view_state.current_view = self.async_state.edit_return_view;
-                    self.async_state.edit_return_view = View::ResourceList;
-                } else if self.view_state.current_view.is_nested_view() {
-                    // Mirror Esc: return to the graph if we came from there,
-                    // otherwise to the previous list view.
-                    if let Some(back) = self.detail_graph_back() {
-                        self.view_state.current_view = back;
-                    } else {
-                        self.view_state.current_view = self.view_state.previous_list_view;
-                        self.selection_state.selected_resource_key = None;
-                        self.view_state.text_search.clear();
-                    }
-                } else if self.view_state.current_view == View::ResourceFavorites {
-                    self.view_state.current_view = View::ResourceList;
-                    self.selection_state.selected_resource_key = None;
-                } else if self.view_state.current_view == View::EventList {
-                    self.stop_kube_events_watch();
-                    self.view_state.current_view = View::ResourceList;
-                    self.selection_state.selected_resource_key = None;
-                } else if self.view_state.current_view == View::Logs {
-                    self.logs.stop();
-                    self.view_state.text_search.clear();
-                    self.view_state.current_view = self
-                        .view_state
-                        .logs_back_view
-                        .take()
-                        .unwrap_or(self.view_state.previous_list_view);
-                } else if self.view_state.current_view == View::WorkloadList
-                    || self.view_state.current_view == View::InventoryList
-                {
-                    self.view_state.current_view = View::ResourceGraph;
-                } else if self.view_state.current_view == View::WorkloadDetail {
-                    self.async_state.workload.clear();
-                    self.async_state.workload_metrics.clear();
-                    self.logs_after_workload_load = false;
-                    self.view_state.text_search.clear();
-                    self.view_state.current_view = self
-                        .view_state
-                        .workload_back_view
-                        .take()
-                        .unwrap_or(View::WorkloadList);
-                } else if self.view_state.current_view == View::Pulse {
-                    self.view_state.text_search.clear();
-                    self.view_state.current_view = View::ResourceList;
+                // Backspace mirrors Esc, minus the quit prompt at the top.
+                if self.view_state.current_view == View::KindList {
+                    self.kind_list_escape();
+                } else {
+                    self.navigate_back();
                 }
             }
             _ => {}
@@ -1141,7 +1084,7 @@ impl App {
                     self.view_state.workload_rows = rows;
                     self.view_state.selected_index = 0;
                     self.view_state.scroll_offset = 0;
-                    self.view_state.current_view = View::WorkloadList;
+                    self.navigate_to(View::WorkloadList);
                 }
                 // The resource group drills into the inventory breakdown
                 // (#245): its description carries one encoded InventoryEntry
@@ -1161,7 +1104,7 @@ impl App {
                     self.view_state.inventory_rows = rows;
                     self.view_state.selected_index = 0;
                     self.view_state.scroll_offset = 0;
-                    self.view_state.current_view = View::InventoryList;
+                    self.navigate_to(View::InventoryList);
                 }
                 Some(_) => {
                     self.set_status_message((
@@ -1178,10 +1121,8 @@ impl App {
         let key = rk.to_key_string();
         if self.state.get(&key).is_some() {
             self.selection_state.selected_resource_key = Some(key);
-            // Remember to return to the graph (not the list) when the user backs
-            // out of the detail view.
-            self.view_state.detail_back_view = Some(View::ResourceGraph);
-            self.view_state.current_view = View::ResourceDetail;
+            // Back returns to the graph (not the list).
+            self.navigate_to(View::ResourceDetail);
         } else {
             self.set_status_message((
                 format!(
@@ -1193,120 +1134,26 @@ impl App {
         }
     }
 
-    /// If the current nested view was entered by drilling into a graph node
-    /// (detail via Enter, or YAML/describe/etc. directly on the focused node),
-    /// consume and return the stored back target (the graph). Returns `None`
-    /// for any other entry path, leaving normal back-to-list behaviour in place.
-    fn detail_graph_back(&mut self) -> Option<View> {
-        if self.view_state.current_view.is_nested_view()
-            && self.view_state.current_view != View::ResourceGraph
-        {
-            self.view_state.detail_back_view.take()
-        } else {
-            None
-        }
-    }
-
     fn navigate_back_or_confirm_quit(&mut self) -> Option<bool> {
         if self.ui_state.show_help {
             self.ui_state.show_help = false;
             return None;
         }
-        match self.view_state.current_view {
-            View::ResourceList => {
+        // A kind list's Esc clears its filter first.
+        if self.view_state.current_view == View::KindList {
+            self.kind_list_escape();
+            return None;
+        }
+        if !self.navigate_back() {
+            if self.view_state.current_view == View::ResourceList {
                 // At the top-level view there is nowhere to go back to, so ask
                 // for confirmation rather than exiting immediately (k9s convention).
                 self.ui_state.show_quit_confirm = true;
-                None
-            }
-            View::ResourceDetail
-            | View::ResourceDescribe
-            | View::ResourceYAML
-            | View::ResourceTrace
-            | View::ResourceHistory
-            | View::ResourceGraph
-            | View::HelmValues => {
-                // Leaving the values view stops its live watch.
-                if self.view_state.current_view == View::HelmValues {
-                    self.async_state.helm_values.clear();
-                }
-                // If we drilled into this detail view from the graph, return to
-                // the graph; otherwise go back to the previous list view
-                // (favourites if we came from there, else the main resource list).
-                self.selection_state.native_object = None;
-                if let Some(back) = self.detail_graph_back() {
-                    self.view_state.current_view = back;
-                } else {
-                    self.view_state.current_view = self.view_state.previous_list_view;
-                    self.selection_state.selected_resource_key = None;
-                    self.view_state.text_search.clear();
-                }
-                None
-            }
-            View::ResourceEdit => {
-                // Cancel edit — clear all edit state and return to origin view
-                self.async_state.edit_pending = None;
-                self.async_state.edit_full_yaml = None;
-                self.async_state.edit_save_pending = None;
-                self.async_state.edit_save_result_rx = None;
-                self.async_state.edit_error_message = None;
-                self.async_state.edit_editor_launched = false;
-                self.view_state.current_view = self.async_state.edit_return_view;
-                self.async_state.edit_return_view = View::ResourceList;
-                None
-            }
-            View::ResourceFavorites => {
-                self.view_state.current_view = View::ResourceList;
-                None
-            }
-            View::EventList => {
-                self.stop_kube_events_watch();
-                self.view_state.current_view = View::ResourceList;
-                None
-            }
-            View::Logs => {
-                // Stop the stream; return to wherever logs were opened from.
-                self.logs.stop();
-                self.view_state.text_search.clear();
-                self.view_state.current_view = self
-                    .view_state
-                    .logs_back_view
-                    .take()
-                    .unwrap_or(self.view_state.previous_list_view);
-                None
-            }
-            View::KindList => {
-                self.kind_list_escape();
-                None
-            }
-            View::WorkloadList | View::InventoryList => {
-                // Entered from a graph inventory group — return to the graph.
-                self.async_state.inventory_status.clear();
-                self.view_state.current_view = View::ResourceGraph;
-                None
-            }
-            View::WorkloadDetail => {
-                self.async_state.workload.clear();
-                self.async_state.workload_metrics.clear();
-                self.logs_after_workload_load = false;
-                self.view_state.text_search.clear();
-                self.view_state.current_view = self
-                    .view_state
-                    .workload_back_view
-                    .take()
-                    .unwrap_or(View::WorkloadList);
-                None
-            }
-            View::Pulse => {
-                self.view_state.text_search.clear();
-                self.view_state.current_view = View::ResourceList;
-                None
-            }
-            View::Help => {
-                self.view_state.current_view = View::ResourceList;
-                None
+            } else {
+                self.navigate_root(View::ResourceList);
             }
         }
+        None
     }
 
     /// Handle a key press while the quit confirmation dialog is visible.
@@ -1364,10 +1211,8 @@ impl App {
             return;
         }
 
-        self.view_state.previous_list_view = View::EventList;
-        self.view_state.detail_back_view = None;
         self.selection_state.selected_resource_key = Some(key);
-        self.view_state.current_view = View::ResourceDetail;
+        self.navigate_to(View::ResourceDetail);
     }
 
     /// Stream logs for the detailed workload's pods: directly when there is
@@ -1438,7 +1283,7 @@ impl App {
             });
         self.view_state.helm_values_scroll_offset = 0;
         self.view_state.text_search.clear();
-        self.view_state.current_view = View::HelmValues;
+        self.navigate_to(View::HelmValues);
     }
 
     /// `x` in the values view: re-resolve with Secret values shown / hidden.
@@ -1505,29 +1350,26 @@ impl App {
         self.view_state.text_search.clear();
     }
 
-    /// Open the shared workload detail view for a workload, remembering
-    /// where Back returns (the graph's workload list or a `:<kind>` list).
-    /// With `then_logs`, continue into pod logs once the data arrives.
+    /// Open the shared workload detail view for a workload; Back returns to
+    /// where it was opened from (the graph's workload list or a `:<kind>`
+    /// list). With `then_logs`, continue into pod logs once the data arrives
+    /// — the logs then replace the detail, so Back skips it.
     pub(crate) fn open_workload_detail(
         &mut self,
         kind: String,
         namespace: String,
         name: String,
-        back: View,
         then_logs: bool,
     ) {
         self.async_state.workload_metrics.clear();
         self.async_state
             .workload
             .request(ResourceKey::new(kind, namespace, name));
-        self.logs_after_workload_load = then_logs;
-        if then_logs {
-            self.view_state.logs_back_view = Some(back);
-        }
-        self.view_state.workload_back_view = Some(back);
         self.view_state.workload_scroll_offset = 0;
         self.view_state.text_search.clear();
-        self.view_state.current_view = View::WorkloadDetail;
+        self.navigate_to(View::WorkloadDetail);
+        self.logs_after_workload_load = then_logs;
+        self.view_state.logs_replace_workload = then_logs;
     }
 
     /// Queue a workload action for confirmation, unless read-only (#263).
@@ -1628,7 +1470,7 @@ impl App {
             self.async_state.yaml.request(target);
             self.view_state.yaml_scroll_offset = 0;
             self.view_state.text_search.clear();
-            self.view_state.current_view = View::ResourceYAML;
+            self.navigate_to(View::ResourceYAML);
         }
     }
 
@@ -1638,7 +1480,7 @@ impl App {
             self.async_state.describe.request(target);
             self.view_state.describe_scroll_offset = 0;
             self.view_state.text_search.clear();
-            self.view_state.current_view = View::ResourceDescribe;
+            self.navigate_to(View::ResourceDescribe);
         }
     }
 
@@ -1697,19 +1539,6 @@ impl App {
             self.selection_state.native_object = None;
             return Some(rk.into());
         };
-        match self.view_state.current_view {
-            View::InventoryList => {
-                self.view_state.detail_back_view = Some(View::InventoryList);
-            }
-            View::KindList => {
-                self.view_state.detail_back_view = Some(View::KindList);
-            }
-            View::EventList => {
-                self.view_state.previous_list_view = View::EventList;
-                self.view_state.detail_back_view = None;
-            }
-            _ => {}
-        }
         self.selection_state.selected_resource_key = Some(native.to_resource_key().to_key_string());
         self.selection_state.native_object = Some(native.clone());
         Some(native)
@@ -1717,19 +1546,6 @@ impl App {
 
     fn prepare_selected_resource_key_for_nested_view(&mut self) -> Option<ResourceKey> {
         let rk = self.view_target()?;
-        match self.view_state.current_view {
-            // Root list-style views: remember where Back should return to and
-            // drop any stale graph back-target from an earlier drill-down.
-            View::ResourceList | View::ResourceFavorites | View::EventList => {
-                self.view_state.previous_list_view = self.view_state.current_view;
-                self.view_state.detail_back_view = None;
-            }
-            // Drilling out of the graph: Back returns to the graph.
-            View::ResourceGraph => {
-                self.view_state.detail_back_view = Some(View::ResourceGraph);
-            }
-            _ => {}
-        }
         self.selection_state.selected_resource_key = Some(rk.to_key_string());
         Some(rk)
     }
@@ -2147,7 +1963,13 @@ impl App {
                 false,
             ));
         } else {
-            if self.view_state.current_view == View::KindList {
+            let in_kind_lists = self.view_state.current_view == View::KindList
+                || self
+                    .view_state
+                    .nav_stack
+                    .iter()
+                    .any(|entry| entry.view() == View::KindList);
+            if in_kind_lists {
                 self.go_home_flux();
             }
             self.async_state.kind_list.clear();
@@ -2234,36 +2056,33 @@ impl App {
             return;
         };
 
-        // Parse "<type>/<name>" (e.g. "kustomization/cabot-book").
-        let parts: Vec<&str> = trace_arg.split('/').collect();
-        if parts.len() == 2 {
-            use crate::models::FluxResourceKind;
-            // Normalize the resource type to its canonical kind name.
-            let lowered = parts[0].to_lowercase();
-            let resource_type = match FluxResourceKind::from_str_case_insensitive(parts[0]) {
-                Some(kind) => kind.as_str(),
-                None => match lowered.as_str() {
-                    "deployment" | "deploy" => "Deployment",
-                    "service" => "Service",
-                    "pod" => "Pod",
-                    _ => parts[0],
-                },
-            };
-            let namespace = self
-                .namespace()
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            self.async_state.trace.request(ResourceKey::new(
-                resource_type.to_string(),
-                namespace,
-                parts[1].to_string(),
-            ));
-        } else {
+        // Parse "<kind>/<name>" (e.g. "ks/apps", "deploy/web").
+        let Some((kind_token, name)) = trace_arg
+            .split_once('/')
+            .filter(|(kind, name)| !kind.is_empty() && !name.is_empty() && !name.contains('/'))
+        else {
             self.set_status_message((
-                "Usage: :trace <resource-type>/<name> or :trace (for selected)".to_string(),
+                "Usage: :trace <kind>/<name> or :trace (for selected)".to_string(),
                 true,
             ));
-        }
+            return;
+        };
+        let Some(resource_type) = trace_kind(kind_token, self.config.native_resources) else {
+            self.set_status_message((
+                format!(":trace {kind_token}/… needs kind lookup — :native turns it on"),
+                true,
+            ));
+            return;
+        };
+        let namespace = self
+            .namespace()
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        self.async_state.trace.request(ResourceKey::new(
+            resource_type,
+            namespace,
+            name.to_string(),
+        ));
     }
 
     /// `:ctx [name]` — switch kube context, or open the context submenu / list
@@ -2377,23 +2196,22 @@ impl App {
 
     /// `:favorites` — switch to the favorites view.
     fn cmd_show_favorites(&mut self, _cmd: &str) {
-        self.view_state.current_view = View::ResourceFavorites;
+        self.navigate_root(View::ResourceFavorites);
         self.reset_list_position();
     }
 
     /// `:events` — open the live Kubernetes events feed for the current
     /// namespace scope, lazily starting the events watcher.
     fn cmd_show_events(&mut self, _cmd: &str) {
+        self.navigate_root(View::EventList);
         self.start_kube_events_watch();
-        self.view_state.current_view = View::EventList;
         self.reset_list_position();
     }
 
     /// `:pulse` — open the cluster pulse dashboard.
     fn cmd_show_pulse(&mut self, _cmd: &str) {
         self.view_state.pulse_scroll_offset = 0;
-        self.view_state.text_search.clear();
-        self.view_state.current_view = View::Pulse;
+        self.navigate_root(View::Pulse);
     }
 
     /// `:logs [pod]` — stream a Flux controller pod's logs. Without an
@@ -2437,22 +2255,15 @@ impl App {
     /// resource list (also from the favorites and events views).
     /// `:flux` — back to the Flux resource list, as it was left.
     fn cmd_show_flux(&mut self, _cmd: &str) {
-        if self.view_state.current_view == View::EventList {
-            self.stop_kube_events_watch();
-        }
         self.go_home_flux();
     }
 
     fn cmd_show_all(&mut self, _cmd: &str) {
-        if self.view_state.current_view == View::KindList {
+        if matches!(
+            self.view_state.current_view,
+            View::KindList | View::ResourceFavorites | View::EventList
+        ) {
             self.go_home_flux();
-        }
-        if self.view_state.current_view == View::ResourceFavorites {
-            self.view_state.current_view = View::ResourceList;
-        }
-        if self.view_state.current_view == View::EventList {
-            self.stop_kube_events_watch();
-            self.view_state.current_view = View::ResourceList;
         }
         if self.view_state.selected_resource_type.is_some() {
             self.view_state.selected_resource_type = None;
@@ -2471,6 +2282,7 @@ mod tests {
     use super::*;
     use crate::config::{Config, UiConfig};
     use crate::tui::Theme;
+    use crate::tui::app::state::NavEntry;
     use crate::watcher::{ResourceInfo, ResourceState, resource_key};
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     use std::collections::HashMap;
@@ -2993,12 +2805,11 @@ mod tests {
             app.selection_state.selected_resource_key.as_deref(),
             Some("Kustomization:flux-system:my-kustomization")
         );
-        assert_eq!(app.view_state.detail_back_view, Some(View::ResourceGraph));
+        assert_eq!(app.back_target(), Some(View::ResourceGraph));
 
         // Esc from the detail view returns to the graph, not the list.
         app.handle_key(make_key(KeyCode::Esc));
         assert_eq!(app.view_state.current_view, View::ResourceGraph);
-        assert_eq!(app.view_state.detail_back_view, None);
         // Focus is preserved so the user lands back where they were.
         assert_eq!(app.view_state.graph_focus_index, Some(0));
     }
@@ -3026,19 +2837,19 @@ mod tests {
     }
 
     #[test]
-    fn list_enter_clears_graph_back_target() {
+    fn list_enter_returns_to_the_list_after_a_graph_drill_down() {
         let mut app = app_on_graph();
-        // Simulate having drilled in from the graph earlier.
-        app.view_state.detail_back_view = Some(View::ResourceGraph);
+        // Drill in from the graph and back out to the list.
+        app.handle_key(make_key(KeyCode::Enter));
+        app.handle_key(make_key(KeyCode::Esc));
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
 
-        // Now go back to the list and open a resource the normal way.
-        app.view_state.current_view = View::ResourceList;
+        // Now open a resource the normal way: Esc returns to the list.
         app.view_state.selected_index = 0;
         app.handle_key(make_key(KeyCode::Enter));
-
         assert_eq!(app.view_state.current_view, View::ResourceDetail);
-        // Back target was reset, so Esc here returns to the list.
-        assert_eq!(app.view_state.detail_back_view, None);
+        assert_eq!(app.back_target(), Some(View::ResourceList));
         app.handle_key(make_key(KeyCode::Esc));
         assert_eq!(app.view_state.current_view, View::ResourceList);
     }
@@ -3103,7 +2914,7 @@ mod tests {
             Some("Kustomization:flux-system:my-kustomization")
         );
         // Back returns to the events feed, not the resource list
-        assert_eq!(app.view_state.previous_list_view, View::EventList);
+        assert_eq!(app.back_target(), Some(View::EventList));
         app.handle_key(make_key(KeyCode::Esc));
         assert_eq!(app.view_state.current_view, View::EventList);
     }
@@ -3169,7 +2980,7 @@ mod tests {
             Some("Kustomization:flux-system:my-kustomization")
         );
         // Back returns to the events feed, not the resource list
-        assert_eq!(app.view_state.previous_list_view, View::EventList);
+        assert_eq!(app.back_target(), Some(View::EventList));
         app.handle_key(make_key(KeyCode::Esc));
         assert_eq!(app.view_state.current_view, View::EventList);
 
@@ -3700,7 +3511,7 @@ mod tests {
 
         assert_eq!(app.view_state.current_view, View::Logs);
         assert_eq!(
-            app.view_state.logs_back_view,
+            app.back_target(),
             Some(View::WorkloadDetail),
             "Back from pod logs returns to the workload detail"
         );
@@ -3732,7 +3543,7 @@ mod tests {
         // Selecting a pod opens its log stream
         app.handle_key(make_key(KeyCode::Enter));
         assert_eq!(app.view_state.current_view, View::Logs);
-        assert_eq!(app.view_state.logs_back_view, Some(View::WorkloadDetail));
+        assert_eq!(app.back_target(), Some(View::WorkloadDetail));
     }
 
     fn footer_labels(app: &App) -> Vec<(&'static str, &'static str)> {
@@ -3802,7 +3613,8 @@ mod tests {
     #[test]
     fn workload_load_starts_metrics_once_and_back_stops_them() {
         let mut app = app_on_graph_with_workloads();
-        app.view_state.current_view = View::WorkloadDetail;
+        app.view_state.current_view = View::WorkloadList;
+        app.navigate_to(View::WorkloadDetail);
         let mut data = workload_data(&["podinfo-abc"]);
         data.pod_selector = Some("app=podinfo".to_string());
 
@@ -3881,8 +3693,11 @@ mod tests {
 
         app.open_kind_list(kind("", "Pod", "pods"));
         assert_eq!(
-            app.view_state.list_history.len(),
-            2,
+            app.view_state.nav_stack,
+            [
+                NavEntry::View(View::ResourceList),
+                NavEntry::Kind(kind("apps", "Deployment", "deployments"))
+            ],
             "Flux, then deployments"
         );
 
@@ -3915,7 +3730,7 @@ mod tests {
         app.execute_command();
 
         assert_eq!(app.view_state.current_view, View::ResourceList);
-        assert!(app.view_state.list_history.is_empty());
+        assert!(app.view_state.nav_stack.is_empty());
         assert!(app.async_state.kind_list.key().is_none());
     }
 
@@ -4301,6 +4116,202 @@ mod tests {
             assert!(app.selection_state.selected_resource_key.is_none());
             assert!(app.selection_state.native_object.is_none());
         }
+    }
+
+    #[test]
+    fn back_from_a_kind_row_keeps_the_live_list_and_cursor() {
+        let mut app = create_test_app(false);
+        open_list(
+            &mut app,
+            "apps",
+            "Deployment",
+            "deployments",
+            &[("apps", "a"), ("apps", "b")],
+        );
+        app.view_state.selected_index = 1;
+
+        app.handle_key(make_key(KeyCode::Char('d')));
+        assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+        app.handle_key(make_key(KeyCode::Esc));
+
+        assert_eq!(app.view_state.current_view, View::KindList);
+        assert!(
+            app.async_state.kind_list.result().is_some(),
+            "not restarted: the snapshot is still there"
+        );
+        assert_eq!(app.view_state.selected_index, 1, "cursor kept");
+    }
+
+    #[test]
+    fn back_reopens_a_kind_list_left_behind_by_a_namespace_switch() {
+        let mut app = create_test_app(false);
+        open_list(
+            &mut app,
+            "apps",
+            "Deployment",
+            "deployments",
+            &[("apps", "a")],
+        );
+        app.handle_key(make_key(KeyCode::Char('d')));
+        app.switch_namespace(Some("other".to_string()));
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::KindList);
+        let request = app.async_state.kind_list.pending().cloned().unwrap();
+        assert_eq!(request.namespace.as_deref(), Some("other"));
+    }
+
+    #[test]
+    fn list_logs_replace_the_fetched_workload_so_back_returns_to_the_list() {
+        let mut app = app_on_graph_with_workloads();
+        app.handle_key(make_key(KeyCode::Enter)); // workload list
+        app.handle_key(make_key(KeyCode::Char('l')));
+        assert_eq!(app.view_state.current_view, View::WorkloadDetail);
+
+        app.on_workload_loaded(workload_data(&["podinfo-abc"]));
+        assert_eq!(app.view_state.current_view, View::Logs);
+        assert_eq!(app.back_target(), Some(View::WorkloadList));
+        assert!(
+            app.async_state.workload.result().is_none(),
+            "detail released"
+        );
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::WorkloadList);
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceGraph);
+    }
+
+    #[test]
+    fn top_level_commands_reset_history_to_the_flux_list() {
+        let mut app = create_test_app(false);
+        open_list(
+            &mut app,
+            "apps",
+            "Deployment",
+            "deployments",
+            &[("apps", "a")],
+        );
+        app.handle_key(make_key(KeyCode::Char('d')));
+
+        app.ui_state.command_buffer = "events".to_string();
+        app.execute_command();
+        assert_eq!(app.view_state.current_view, View::EventList);
+        assert_eq!(
+            app.view_state.nav_stack,
+            [NavEntry::View(View::ResourceList)]
+        );
+        assert!(
+            app.async_state.kind_list.key().is_none(),
+            "kind list closed"
+        );
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+    }
+
+    #[test]
+    fn native_off_drops_kind_lists_from_the_back_history() {
+        let mut app = create_test_app(false);
+        open_list(
+            &mut app,
+            "apps",
+            "Deployment",
+            "deployments",
+            &[("apps", "a")],
+        );
+        app.handle_key(make_key(KeyCode::Char('d')));
+
+        app.ui_state.command_buffer = "native".to_string();
+        app.execute_command();
+        assert!(!app.config.native_resources);
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert!(app.view_state.nav_stack.is_empty());
+    }
+
+    #[test]
+    fn back_history_is_bounded() {
+        let mut app = create_test_app(false);
+        for i in 0..100 {
+            app.view_state.current_view = if i % 2 == 0 {
+                View::ResourceList
+            } else {
+                View::Pulse
+            };
+            app.push_current_view();
+        }
+        assert!(app.view_state.nav_stack.len() <= 32);
+    }
+
+    #[test]
+    fn late_async_results_dont_navigate_away_from_where_the_user_went() {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = View::ResourceList;
+        app.view_state.nav_stack = vec![NavEntry::View(View::ResourceFavorites)];
+
+        app.back_from(View::ResourceGraph);
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+
+        app.async_state.edit_pending = Some(ResourceKey::new("Kustomization", "a", "b"));
+        app.leave_edit();
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+        assert!(app.async_state.edit_pending.is_none(), "edit state cleared");
+        assert_eq!(app.view_state.nav_stack.len(), 1, "history untouched");
+    }
+
+    #[test]
+    fn edit_returns_to_the_exact_view_it_was_opened_from() {
+        let mut app = create_test_app(false);
+        add_resource(&mut app);
+        app.view_state.current_view = View::ResourceList;
+        app.handle_key(make_key(KeyCode::Char('y')));
+        app.handle_key(make_key(KeyCode::Char('e')));
+        assert_eq!(app.view_state.current_view, View::ResourceEdit);
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceYAML);
+        assert!(app.async_state.edit_pending.is_none());
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.view_state.current_view, View::ResourceList);
+    }
+
+    fn trace_command(app: &mut App, cmd: &str) -> Option<ResourceKey> {
+        app.async_state.trace.clear();
+        app.ui_state.command_buffer = cmd.to_string();
+        app.execute_command();
+        app.async_state.trace.pending().cloned()
+    }
+
+    #[test]
+    fn trace_command_resolves_kinds_through_the_registry() {
+        let mut app = create_test_app(false);
+        app.namespace = Some("apps".into());
+        assert_eq!(
+            trace_command(&mut app, "trace ks/podinfo"),
+            Some(ResourceKey::new("Kustomization", "apps", "podinfo"))
+        );
+        assert_eq!(
+            trace_command(&mut app, "trace helmrelease/podinfo"),
+            Some(ResourceKey::new("HelmRelease", "apps", "podinfo"))
+        );
+        // Exact kind names pass through (resolved when the trace runs).
+        assert_eq!(
+            trace_command(&mut app, "trace Deployment/web"),
+            Some(ResourceKey::new("Deployment", "apps", "web"))
+        );
+        assert_eq!(trace_command(&mut app, "trace ks"), None, "usage");
+        assert_eq!(trace_command(&mut app, "trace ks/a/b"), None, "usage");
+    }
+
+    #[test]
+    fn trace_aliases_for_kubernetes_kinds_need_native_resources() {
+        let mut app = create_test_app(false);
+        app.config.native_resources = false;
+        assert_eq!(trace_command(&mut app, "trace deploy/web"), None);
+        let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+        assert!(is_error && message.contains(":native"), "{message}");
+        // The exact kind name still works without discovery.
+        assert!(trace_command(&mut app, "trace Deployment/web").is_some());
     }
 
     fn open_list(app: &mut App, group: &str, kind_name: &str, plural: &str, rows: &[(&str, &str)]) {

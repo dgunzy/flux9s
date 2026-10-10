@@ -880,13 +880,6 @@ impl OperationRegistry {
             .find(|op| op.keybinding() == key)
             .map(|op| op.as_ref())
     }
-
-    /// Get all registered operations
-    /// Currently only used in tests
-    #[allow(dead_code)] // Used in tests
-    pub fn get_all(&self) -> &[Box<dyn FluxOperation>] {
-        &self.operations
-    }
 }
 
 impl Default for OperationRegistry {

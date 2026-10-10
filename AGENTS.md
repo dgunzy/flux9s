@@ -125,6 +125,11 @@ connection-error gate) and the resource-type fallback stay outside the table.
   handles; sets live in `src/tui/keybindings.rs`).
   Add a new view's scroll/back/classification there instead of scattering
   `match current_view` arms across the event handlers.
+- **Back navigation is one stack** (`src/tui/app/navigation.rs`): open views with
+  `navigate_to` (drill in) or `navigate_root` (`:` top-level switch), go back with
+  `navigate_back`. Never add a per-view "back target" field or assign
+  `current_view` directly for a user-visible transition. What a view holds
+  (streams, watches, fetches) is released in `leave_view`.
 
 ## Testing Requirements
 
@@ -237,11 +242,15 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
   binary target only; the old `--lib --tests` invocation never linted them.
 - **`unwrap()`, `expect()`, and `panic!` are denied outside tests** (`unwrap_used`,
   `expect_used`, `panic`). `clippy.toml` exempts test code, where an unwrap *is*
-  the assertion. Two deliberate exceptions carry a module-level `#![allow]` with a
-  written justification: `src/models/extra_kinds.rs` (a poisoned registry lock is
-  unrecoverable) and `tests/live_tests.rs` (`allow-panic-in-tests` does not cover
-  helpers outside `#[test]` fns). Anything new needs a real justification, not an
-  allow — degrade gracefully instead.
+  the assertion. Three deliberate exceptions carry a module-level `#![allow]` with a
+  written justification: `src/models/extra_kinds.rs` and `src/models/kinds.rs` (a
+  poisoned registry/catalog lock is unrecoverable) and `tests/live_tests.rs`
+  (`allow-panic-in-tests` does not cover helpers outside `#[test]` fns). Anything
+  new needs a real justification, not an allow — degrade gracefully instead.
+- **No `#[allow(dead_code)]` / `#[allow(unused_imports)]`.** Everything is `pub`
+  from the library crate, so rustc never reports these lints there — the allows
+  were pure noise and hid genuinely dead code. Delete unused code instead of
+  "reserving" it.
 
 ## Supply chain & dependency pinning
 

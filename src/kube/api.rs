@@ -125,11 +125,18 @@ pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String,
                     ));
                 }
                 // Networking resources - Kubernetes built-ins only
-                "Ingress" | "NetworkPolicy" => {
+                "Ingress" => {
                     return Ok((
                         "networking.k8s.io".to_string(),
                         "v1".to_string(),
-                        resource_type.to_lowercase() + "es",
+                        "ingresses".to_string(),
+                    ));
+                }
+                "NetworkPolicy" => {
+                    return Ok((
+                        "networking.k8s.io".to_string(),
+                        "v1".to_string(),
+                        "networkpolicies".to_string(),
                     ));
                 }
                 // For all other resources: consult the dynamically
@@ -138,6 +145,12 @@ pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String,
                 _ => {
                     if let Some(extra) = crate::models::extra_kinds::global().get(resource_type) {
                         return Ok(extra.gvk());
+                    }
+                    // Then any kind the cluster serves (#267 discovery; empty
+                    // while nativeResources is off).
+                    if let Some(spec) = crate::models::kinds::catalog().find_by_kind(resource_type)
+                    {
+                        return Ok((spec.gvk.group, spec.gvk.version, spec.names.plural));
                     }
                     return Err(anyhow::anyhow!(
                         "Resource type '{}' is not a Flux or Kubernetes built-in resource. \
@@ -407,6 +420,14 @@ pub fn is_forbidden_error(error: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn built_in_networking_kinds_have_real_plurals() {
+        let (_, _, plural) = get_gvk_for_resource_type("NetworkPolicy").unwrap();
+        assert_eq!(plural, "networkpolicies");
+        let (_, _, plural) = get_gvk_for_resource_type("Ingress").unwrap();
+        assert_eq!(plural, "ingresses");
+    }
+
     use super::*;
 
     #[test]

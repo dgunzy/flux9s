@@ -55,6 +55,7 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         (":ns", "Open namespace picker"),
         (":ns all", "Show all namespaces"),
         (":all", "Show all resources"),
+        (":trace <kind>/<n>", "Trace ownership chain"),
         (":<kind>", "Browse any kind (:deploy, :po)"),
         (":flux", "Back to the Flux view"),
         (":healthy", "Show healthy resources"),

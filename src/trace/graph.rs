@@ -142,7 +142,6 @@ pub enum NodeType {
     /// A Flux resource managed by this resource
     FluxResource,
     /// A workload resource (Deployment, StatefulSet, etc.) - individual
-    #[allow(dead_code)] // Used in pattern matching, not directly constructed
     Workload,
     /// An aggregate node for grouped workloads (e.g., "Workloads (2)")
     WorkloadGroup,

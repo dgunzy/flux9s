@@ -54,7 +54,6 @@ pub struct Theme {
 
     // Footer colors
     pub footer_key: Color,
-    #[allow(dead_code)] // Reserved for visual flux trace feature
     pub footer_text: Color,
 }
 

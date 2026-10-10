@@ -75,11 +75,8 @@ impl fmt::Display for ResourceKey {
 #[derive(Debug, Clone)]
 pub struct ReconciliationEvent {
     pub timestamp: chrono::DateTime<chrono::Utc>,
-    #[allow(dead_code)] // Reserved for future use
     pub revision: Option<String>,
-    #[allow(dead_code)] // Reserved for future use
     pub status: String, // "Success", "Failed", "Unknown"
-    #[allow(dead_code)] // Reserved for future use
     pub message: Option<String>,
 }
 
