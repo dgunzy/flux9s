@@ -397,6 +397,7 @@ async fn discover_inventory_resources(
                         namespace: workload_entry.namespace.clone(),
                         indicator: status_indicator.to_string(),
                         status: status_desc.unwrap_or_else(|| "Unknown".to_string()),
+                        api_version: workload_entry.api_version.clone(),
                     }
                     .to_graph_line();
                     workload_list.push(workload_info);

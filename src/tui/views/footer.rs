@@ -56,7 +56,9 @@ pub fn render_footer(
         vec![
             Span::raw("Press "),
             Span::styled("?", theme.footer_key_style()),
-            Span::raw(" to hide help"),
+            Span::raw(" to hide help · "),
+            Span::styled("j/k", theme.footer_key_style()),
+            Span::raw(" scroll"),
         ]
     } else if let Some(message) = confirmation_message {
         render_confirmation_footer_text(message, theme)

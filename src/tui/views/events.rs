@@ -32,10 +32,11 @@ pub fn render_kube_events(
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling
 
-    crate::tui::views::helpers::update_scroll_offset(
+    let viewport = crate::tui::views::scroll::Viewport::list_with_margin(
         selected_index,
-        visible_height,
         scroll_offset,
+        events.len(),
+        visible_height,
         SCROLL_BUFFER,
     );
 
@@ -130,6 +131,7 @@ pub fn render_kube_events(
     let block = crate::tui::views::helpers::create_themed_block(&title, theme);
     let table = Table::new(rows, constraints).header(header).block(block);
     f.render_widget(table, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 #[cfg(test)]

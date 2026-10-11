@@ -138,6 +138,12 @@ impl Theme {
         Style::default().fg(self.status_suspended)
     }
 
+    /// The scroll thumb drawn over a view's border: the table-header accent,
+    /// so it reads as part of the frame rather than the content.
+    pub fn scrollbar_style(&self) -> Style {
+        Style::default().fg(self.table_header)
+    }
+
     pub fn table_selected_style(&self) -> Style {
         Style::default()
             .fg(self.table_selected)

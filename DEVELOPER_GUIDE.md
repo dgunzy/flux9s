@@ -603,6 +603,46 @@ When adding support for a new Flux resource type:
     ];
     ```
 
+## Keys, Footer, and Help (`src/tui/app/actions.rs`)
+
+Input is handled in `src/tui/app/keys.rs`: modal states first (confirmation,
+quit prompt, popup, command line, filter, text search), then every other key
+goes through the **action table**, `ACTIONS`. An `Action` is data:
+
+- `keys` (Control is the only significant modifier), `when` (view and kind
+  capabilities; deny by default), `spec` (`Builtin(fn)` or
+  `Operation(key)` → the `FluxOperation` registry with its read-only gate
+  and confirmation), a `footer` hint, a `help` line, and `sets_status`.
+- Dispatch runs the first action whose key matches and whose `when` holds —
+  table order is precedence.
+- Footers are per-view layouts of action ids (`view_layout`), filtered by
+  `when`, so the footer never advertises a key that does nothing in the
+  view. `Relabel` reuses an action under a view-appropriate label ("Scroll"
+  vs "Navigate"); `Command` surfaces a `:` command.
+- The help overlay's key columns are `help_lines(column)`; its command list
+  is `command_help()` from `COMMAND_TABLE` (`command_mode.rs`).
+- Tests in `src/tui/app/tests.rs` check that every footer hint runs the
+  action it advertises in every view and kind-list context, and that help
+  covers the tables.
+
+Popup selections dispatch through `SUBMENU_TABLE` (`submenus.rs`), keyed by
+the ids in `tui::commands::submenu_ids`.
+
+## Scrolling (`src/tui/views/scroll.rs`)
+
+- **Keys**: `View::scroll_model` (exhaustive) says how each view scrolls —
+  `Offset` (free line scroll, offset from `View::scroll_offset_mut`),
+  `Selection` (moves the selected row), `Focus` (graph node focus), or
+  `Fixed`. `App::scroll_by` implements j/k, PgUp/PgDn, Ctrl+f/b from it.
+- **Rendering**: build a `Viewport` — `Viewport::text(offset, total, visible)`
+  clamps a line offset (so handlers may overshoot, e.g. `usize::MAX`);
+  `Viewport::list(selected, offset, total, visible)` keeps the selection on
+  screen with a margin. Draw `viewport.range()`, then
+  `viewport.render_scrollbar(f, area, theme)`: a thumb (`█`, theme accent)
+  over the block's right border, sized to the visible share, hidden when
+  everything fits.
+- A test checks `scroll_model` and `scroll_offset_mut` agree for every view.
+
 ## Back Navigation (`src/tui/app/navigation.rs`)
 
 `Esc` / `Backspace` use one stack, `ViewState::nav_stack` (`NavEntry::View`
@@ -648,9 +688,9 @@ Design rules:
   so a config provider can overlay specs later (#277) — don't add fn pointers.
 - Capabilities are deny-by-default; only the Flux family grants operations.
   `Capabilities::curated` grants workload/pod actions to well-known native
-  kinds (matched on group **and** kind). Kind-list keys and footer both come
-  from `KIND_ACTIONS` in `tui/app/kind_browser.rs` — add an action there, never
-  as a separate key arm, so keys and footer can't drift.
+  kinds (matched on group **and** kind). Kind-list keys are entries in the
+  action table (`tui/app/actions.rs`) gated by these capabilities — add an
+  action there, never as a separate key arm, so keys and footer can't drift.
 - Ownership (`kube/ownership.rs`): Flux/Argo labels are decisive; otherwise
   the controller owner chain wins over Helm annotations (ReplicaSets inherit
   their Deployment's annotations but not its labels) and over the generic

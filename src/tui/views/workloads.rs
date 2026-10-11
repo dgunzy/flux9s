@@ -23,16 +23,19 @@ pub fn render_workload_list(
     f: &mut Frame,
     area: Rect,
     rows: &[WorkloadRef],
+    statuses: Option<&[crate::kube::object_status::ObjectStatus]>,
     selected_index: usize,
     scroll_offset: &mut usize,
     theme: &Theme,
 ) {
+    use crate::kube::object_status::ObjectHealth;
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2;
-    crate::tui::views::helpers::update_scroll_offset(
+    let viewport = crate::tui::views::scroll::Viewport::list_with_margin(
         selected_index,
-        visible_height,
         scroll_offset,
+        rows.len(),
+        visible_height,
         SCROLL_BUFFER,
     );
 
@@ -62,17 +65,37 @@ pub fn render_workload_list(
         .take(visible_height)
         .enumerate()
         .map(|(idx, row)| {
-            let style = if *scroll_offset + idx == valid_selected {
+            let index = *scroll_offset + idx;
+            let style = if index == valid_selected {
                 theme.table_selected_style()
             } else {
                 Style::default().fg(theme.text_primary)
+            };
+            // Live status (watched) once it arrives; the graph's snapshot
+            // until then.
+            let (indicator, status) = match statuses.and_then(|s| s.get(index)) {
+                Some(live) => {
+                    let indicator = match live.health {
+                        ObjectHealth::Current => "●",
+                        ObjectHealth::Failed | ObjectHealth::NotFound => "✗",
+                        ObjectHealth::Forbidden | ObjectHealth::Unknown => "?",
+                        ObjectHealth::InProgress | ObjectHealth::Terminating => "○",
+                    };
+                    let status = if live.message.is_empty() {
+                        live.health.label().to_string()
+                    } else {
+                        live.message.clone()
+                    };
+                    (indicator.to_string(), status)
+                }
+                None => (row.indicator.clone(), row.status.clone()),
             };
             Row::new(vec![
                 row.kind.clone(),
                 row.name.clone(),
                 row.namespace.clone(),
-                row.indicator.clone(),
-                row.status.clone(),
+                indicator,
+                status,
             ])
             .style(style)
         })
@@ -91,6 +114,7 @@ pub fn render_workload_list(
         .header(header)
         .block(block);
     f.render_widget(table, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 /// Usage at or above this share of the limit is highlighted as a risk
@@ -490,8 +514,8 @@ pub fn render_workload_detail(
     let current_match_line = apply_text_search(search, &match_lines, scroll_offset, visible_height);
     decorate_title_with_search(&mut title, search);
 
-    let max_scroll = all_lines.len().saturating_sub(visible_height);
-    *scroll_offset = (*scroll_offset).min(max_scroll);
+    let viewport =
+        crate::tui::views::scroll::Viewport::text(scroll_offset, all_lines.len(), visible_height);
 
     let visible_lines: Vec<Line> = all_lines
         .iter()
@@ -515,6 +539,7 @@ pub fn render_workload_detail(
         .block(block)
         .wrap(Wrap { trim: false });
     f.render_widget(paragraph, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 #[cfg(test)]

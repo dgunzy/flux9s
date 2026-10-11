@@ -11,7 +11,9 @@
 
 1. Run `just ci` after all changes (formats, lints, tests)
 2. Large changes require accompanying tests
-3. Command/keybinding changes must update help text (`src/tui/views/help.rs` and footer)
+3. Keys and commands are data: add a key to the action table (`src/tui/app/actions.rs`)
+   and a command to `COMMAND_TABLE` (`src/tui/app/command_mode.rs`) — dispatch,
+   footer, and help all come from those entries. Never add a key arm elsewhere
 4. **Git operations**: User manages their own git workflow. Only use git to restore a single file when explicitly requested (e.g., `git restore path/to/file`). Never commit, push, create branches, or perform any other git operations
 
 ## Code Standards
@@ -93,22 +95,39 @@ source of truth and prevents inconsistencies when Flux versions change.
 
 1. Implement `FluxOperation` trait
 2. Register in `OperationRegistry::new()`
-3. Add keybinding to footer (`src/tui/views/footer.rs`)
-4. Add to help text (`src/tui/views/help.rs`)
-5. Write operation tests
+3. Add an `Action` with `ActionSpec::Operation(key)` to `ACTIONS` (`src/tui/app/actions.rs`)
+   — its `footer` and `help` fields feed the footer and help overlay — and add its id
+   to the footer layouts where it should show
+4. Write operation tests
 
 ### Adding a Command
 
 `:` commands are dispatched from a data-driven table, not a long `if`/`match` chain.
 
-1. Add a focused `cmd_<name>(&mut self, cmd: &str)` handler on `App` (`src/tui/app/events.rs`)
+1. Add a focused `cmd_<name>(&mut self, cmd: &str)` handler on `App` (`src/tui/app/command_mode.rs`)
 2. Add a predicate in `src/tui/commands.rs` (e.g. `is_<name>_command`)
-3. Register the `(predicate, handler)` pair in `COMMAND_TABLE` at the top of `events.rs`
-4. Update help text (`src/tui/views/help.rs`) and the docs site
-5. Write a test that drives `execute_command()` (see the `events.rs` test module)
+3. Register a `CommandSpec { matches, run, help }` in `COMMAND_TABLE` (`command_mode.rs`);
+   its `help` lines appear in the help overlay automatically
+4. Update the docs site
+5. Write a test that drives `execute_command()` (see `src/tui/app/tests.rs`)
 
 Special commands handled directly in `execute_command` (help/quit/readonly and the
-connection-error gate) and the resource-type fallback stay outside the table.
+connection-error gate) and the resource-type fallback stay outside the table; their
+help is `SPECIAL_COMMAND_HELP`.
+
+### Adding a Key (Action)
+
+Every key of the normal key handler is an `Action` in `ACTIONS`
+(`src/tui/app/actions.rs`): keys, `when` (view / capabilities — deny by default),
+`spec` (`Builtin` or `Operation`), footer hint, help line. Table order is
+precedence: put view-specific actions above the general ones they override. Footers
+are per-view layouts of action ids filtered by `when`, so a footer can't show a key
+that doesn't work. `every_footer_hint_runs_the_action_it_advertises` fails if an
+earlier action shadows a key a footer advertises.
+
+Popups: each popup id lives in `submenu_ids` (`src/tui/commands.rs`); its builder
+uses the id and its selection handler is registered in `SUBMENU_TABLE`
+(`src/tui/app/submenus.rs`).
 
 ### View Components
 
@@ -119,12 +138,18 @@ connection-error gate) and the resource-type fallback stay outside the table.
 - Submenu overlays render as centered popups on top of the current view
 - State management for submenus lives in `ViewState.submenu_state`
 - Event handling priority: confirmation → submenu → filter → normal commands
+  (`src/tui/app/keys.rs`; normal keys dispatch through the action table)
 - Per-view behavior is consolidated on `impl View` (`src/tui/app/state.rs`):
   `scroll_offset_mut`, `is_list_view`, `is_text_search_view`, `is_nested_view`,
-  `footer_commands` (the footer hints — each view advertises only the keys it
-  handles; sets live in `src/tui/keybindings.rs`).
+  `footer_layout` (the view's footer layout in `src/tui/app/actions.rs`).
   Add a new view's scroll/back/classification there instead of scattering
   `match current_view` arms across the event handlers.
+- **Scrolling is one mechanism.** Declare how a view scrolls in the exhaustive
+  `View::scroll_model` (`Offset` / `Selection` / `Focus` / `Fixed`; key handling in
+  `App::scroll_by` follows it). Render with `views::scroll::Viewport` — `text` for
+  line offsets, `list` for selections — draw only `viewport.range()`, then call
+  `viewport.render_scrollbar(f, area, theme)` on the bordered area. Never clamp
+  offsets by hand or draw a custom indicator.
 - **Back navigation is one stack** (`src/tui/app/navigation.rs`): open views with
   `navigate_to` (drill in) or `navigate_root` (`:` top-level switch), go back with
   `navigate_back`. Never add a per-view "back target" field or assign

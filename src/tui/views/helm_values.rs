@@ -121,8 +121,8 @@ pub fn render_helm_values(
     let current_match_line = apply_text_search(search, &match_lines, scroll_offset, visible_height);
     decorate_title_with_search(&mut title, search);
 
-    let max_scroll = lines.len().saturating_sub(visible_height);
-    *scroll_offset = (*scroll_offset).min(max_scroll);
+    let viewport =
+        crate::tui::views::scroll::Viewport::text(scroll_offset, lines.len(), visible_height);
 
     let visible: Vec<Line> = lines
         .into_iter()
@@ -145,6 +145,7 @@ pub fn render_helm_values(
         .block(block)
         .wrap(Wrap { trim: false });
     f.render_widget(paragraph, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 #[cfg(test)]

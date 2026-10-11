@@ -303,7 +303,13 @@ impl App {
             self.render_connection_error_screen(f, area);
             // If help, submenu, or quit confirm is active, render it on top!
             if self.ui_state.show_help {
-                render_help(f, area, &self.theme, self.namespace_hotkeys());
+                render_help(
+                    f,
+                    area,
+                    &self.theme,
+                    &self.namespace_hotkeys.clone(),
+                    &mut self.ui_state.help_scroll,
+                );
             } else if let Some(ref mut submenu) = self.view_state.submenu_state {
                 render_submenu(f, area, submenu, &self.theme);
             }
@@ -319,7 +325,13 @@ impl App {
         }
 
         if self.ui_state.show_help {
-            render_help(f, area, &self.theme, self.namespace_hotkeys());
+            render_help(
+                f,
+                area,
+                &self.theme,
+                &self.namespace_hotkeys.clone(),
+                &mut self.ui_state.help_scroll,
+            );
         } else {
             match self.view_state.current_view {
                 View::ResourceList => {
@@ -525,6 +537,10 @@ impl App {
                         f,
                         area,
                         &self.view_state.workload_rows,
+                        self.async_state
+                            .inventory_status
+                            .result()
+                            .map(Vec::as_slice),
                         self.view_state.selected_index,
                         &mut self.view_state.scroll_offset,
                         &self.theme,
@@ -588,7 +604,13 @@ impl App {
                     f.render_widget(paragraph, area);
                 }
                 View::Help => {
-                    render_help(f, area, &self.theme, self.namespace_hotkeys());
+                    render_help(
+                        f,
+                        area,
+                        &self.theme,
+                        &self.namespace_hotkeys.clone(),
+                        &mut self.ui_state.help_scroll,
+                    );
                 }
             }
 

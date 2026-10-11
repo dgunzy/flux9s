@@ -79,7 +79,8 @@ pub fn render_controller_logs(
     if follow && !search.is_active() {
         *scroll_offset = max_scroll;
     }
-    *scroll_offset = (*scroll_offset).min(max_scroll);
+    let viewport =
+        crate::tui::views::scroll::Viewport::text(scroll_offset, lines.len(), visible_height);
 
     let visible_lines: Vec<Line> = lines
         .iter()
@@ -110,6 +111,7 @@ pub fn render_controller_logs(
     let block = crate::tui::views::helpers::create_themed_block(&title, theme);
     let paragraph = Paragraph::new(visible_lines).block(block);
     f.render_widget(paragraph, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 #[cfg(test)]

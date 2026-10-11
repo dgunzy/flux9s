@@ -23,6 +23,7 @@ mod pulse;
 mod quit_confirm;
 pub mod resource_fields;
 mod resource_list;
+pub mod scroll;
 mod splash;
 mod submenu;
 pub mod trace;

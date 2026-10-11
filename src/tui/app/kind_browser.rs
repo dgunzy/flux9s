@@ -11,49 +11,6 @@ use super::state::View;
 use crate::kube::kind_list::{KindListRequest, KindListSnapshot, KindRow};
 use crate::kube::workloads::WorkloadAction;
 use crate::models::kinds::{Capabilities, KindSpec};
-use crate::tui::keybindings::NavigationCommand;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-/// A key a kind list offers when the selected kind has the capability.
-///
-/// This table is the single source for kind-list key dispatch **and** the
-/// footer, so the two can't drift (the first slice of #276's action table).
-struct KindAction {
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    /// Footer key label (`r`, `^d`, …).
-    footer_key: &'static str,
-    label: &'static str,
-    applies: fn(&Capabilities) -> bool,
-    run: fn(&mut App),
-}
-
-const KIND_ACTIONS: &[KindAction] = &[
-    KindAction {
-        code: KeyCode::Char('l'),
-        modifiers: KeyModifiers::NONE,
-        footer_key: "l",
-        label: "Logs",
-        applies: |caps| caps.pod_logs,
-        run: App::kind_logs_selected,
-    },
-    KindAction {
-        code: KeyCode::Char('r'),
-        modifiers: KeyModifiers::NONE,
-        footer_key: "r",
-        label: "Restart",
-        applies: |caps| caps.restart,
-        run: App::kind_restart_selected,
-    },
-    KindAction {
-        code: KeyCode::Char('d'),
-        modifiers: KeyModifiers::CONTROL,
-        footer_key: "^d",
-        label: "Delete pod",
-        applies: |caps| caps.pod_delete,
-        run: App::kind_delete_pod_selected,
-    },
-];
 
 /// Minimum gap between discovery re-checks triggered by unknown kinds.
 const REDISCOVERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
@@ -245,7 +202,7 @@ impl App {
     }
 
     /// Capabilities of the kind on screen (view-only when none).
-    fn kind_list_caps(&self) -> Capabilities {
+    pub(super) fn kind_list_caps(&self) -> Capabilities {
         self.async_state
             .kind_list
             .key()
@@ -262,51 +219,6 @@ impl App {
         Some((kind, row.0, row.1))
     }
 
-    /// Run a kind-list action for `key`, if the selected kind offers one.
-    /// Returns whether the key was handled.
-    pub(crate) fn handle_kind_list_key(&mut self, key: KeyEvent) -> bool {
-        let caps = self.kind_list_caps();
-        let Some(action) = KIND_ACTIONS
-            .iter()
-            .find(|a| a.code == key.code && a.modifiers == key.modifiers && (a.applies)(&caps))
-        else {
-            return false;
-        };
-        (action.run)(self);
-        true
-    }
-
-    /// Footer for the kind list: navigation plus the actions the kind offers.
-    pub(crate) fn kind_list_footer(&self) -> Vec<NavigationCommand> {
-        let caps = self.kind_list_caps();
-        let describe = if caps.workload_detail {
-            "Details"
-        } else {
-            "Describe"
-        };
-        let mut commands = vec![
-            NavigationCommand::new("j/k ", "Navigate"),
-            NavigationCommand::new("^f/^b", "PgDn/Up"),
-            NavigationCommand::new("Enter", describe),
-            NavigationCommand::new("d", "Describe"),
-            NavigationCommand::new("y", "YAML"),
-        ];
-        commands.extend(
-            KIND_ACTIONS
-                .iter()
-                .filter(|a| (a.applies)(&caps))
-                .map(|a| NavigationCommand::new(a.footer_key, a.label)),
-        );
-        commands.extend([
-            NavigationCommand::new("/", "Filter"),
-            NavigationCommand::new(":flux", "Flux view"),
-            NavigationCommand::new(":", "Command"),
-            NavigationCommand::new("?", "Help"),
-            NavigationCommand::new("Esc/q", "Back"),
-        ]);
-        commands
-    }
-
     /// Enter on a kind row: workload kinds open the shared workload detail
     /// view (the same one the graph drill-down uses); others are described.
     pub(crate) fn kind_enter_selected(&mut self) {
@@ -321,7 +233,7 @@ impl App {
 
     /// `l`: pods stream directly; workloads load their detail and continue
     /// into pod logs (container picker included), like the workload list.
-    fn kind_logs_selected(&mut self) {
+    pub(super) fn kind_logs_selected(&mut self) {
         let Some((kind, namespace, name)) = self.selected_kind_object() else {
             return;
         };
@@ -333,7 +245,7 @@ impl App {
     }
 
     /// `r`: confirm a rollout restart of the selected workload.
-    fn kind_restart_selected(&mut self) {
+    pub(super) fn kind_restart_selected(&mut self) {
         if let Some((kind, namespace, name)) = self.selected_kind_object() {
             self.confirm_workload_action(WorkloadAction::Restart {
                 kind,
@@ -344,7 +256,7 @@ impl App {
     }
 
     /// `Ctrl+d`: confirm deleting the selected pod.
-    fn kind_delete_pod_selected(&mut self) {
+    pub(super) fn kind_delete_pod_selected(&mut self) {
         if let Some((_, namespace, name)) = self.selected_kind_object() {
             self.confirm_workload_action(WorkloadAction::DeletePod { namespace, name });
         }

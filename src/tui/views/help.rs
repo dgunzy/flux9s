@@ -1,6 +1,6 @@
 //! Help view rendering
 
-use crate::tui::keybindings::get_resource_help_commands;
+use crate::tui::app::actions::{HelpColumn, help_lines};
 use crate::tui::theme::Theme;
 use ratatui::{
     Frame,
@@ -11,7 +11,15 @@ use ratatui::{
 };
 
 /// Render the help view with columns (K9s-style)
-pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: &[String]) {
+/// `scroll` is the shared offset of all columns, clamped here to the last
+/// page so `G` (`usize::MAX`) lands at the bottom.
+pub fn render_help(
+    f: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    namespace_hotkeys: &[String],
+    scroll: &mut usize,
+) {
     // Create inner area with padding for the border
     let inner_area = Rect {
         x: area.x + 1,
@@ -31,73 +39,26 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         ])
         .split(inner_area);
 
-    // RESOURCE column - use centralized keybindings
-    let resource_items = get_resource_help_commands();
-    render_help_column(f, column_chunks[0], "RESOURCE", &resource_items, theme);
+    // Key columns come from the action table (app/actions.rs).
+    let resource_items = help_lines(HelpColumn::Resource);
 
-    // GENERAL column
-    let general_items = vec![
-        ("<q>/<Esc>", "Back (confirm quit at root)"),
-        ("<Q>", "Quit immediately"),
-        ("<?>", "Show/hide help"),
-        ("<:>", "Command mode"),
-        ("</>", "Filter list / search text views"),
+    // GENERAL column: general keys, popup hints, then every `:` command.
+    let mut general_items = help_lines(HelpColumn::General);
+    general_items.extend([
         ("<Tab>", "Autocomplete command"),
         ("(menus)", "Type to filter, PgUp/PgDn to page"),
-        (":help", "Show/hide help"),
-        (":readonly", "Toggle readonly mode"),
-        (":discover", "Toggle CRD discovery"),
-        (":native", "Toggle kind browsing (preview)"),
-        (":skin <n>", "Change theme/skin"),
-        (":ctx <n>", "Switch context"),
-        (":ctx", "Open context submenu"),
-        (":ns <n>", "Switch namespace"),
-        (":ns", "Open namespace picker"),
-        (":ns all", "Show all namespaces"),
-        (":all", "Show all resources"),
-        (":trace <kind>/<n>", "Trace ownership chain"),
-        (":<kind>", "Browse any kind (:deploy, :po)"),
-        (":flux", "Back to the Flux view"),
-        (":healthy", "Show healthy resources"),
-        (":unhealthy", "Show unhealthy resources"),
-        (":suspended", "Show suspended resources"),
-        (":favorites", "View favorites"),
-        (":fav", "View favorites"),
-        (":events", "Live Kubernetes events feed"),
-        (":pulse", "Cluster health dashboard"),
-        (":logs [pod]", "Stream controller logs"),
-        (":q", "Quit application"),
-    ];
+    ]);
+    general_items.extend(crate::tui::app::command_mode::command_help());
     // Discovered kinds (#197) get a dynamic entry only when discovery has
     // actually registered something — no noise for normal users.
     let discovered = crate::models::extra_kinds::global().kind_names();
     let discovered_entry = format!(":{} …", discovered.join(", :").to_lowercase());
-    let mut general_items = general_items;
     if !crate::models::extra_kinds::global().is_empty() {
         general_items.push((discovered_entry.as_str(), "Discovered kinds (CRD)"));
     }
-    render_help_column(f, column_chunks[1], "GENERAL", &general_items, theme);
 
     // NAVIGATION column
-    let nav_items = vec![
-        ("<j>/<Down>", "Navigate down"),
-        ("<k>/<Up>", "Navigate up"),
-        ("<Ctrl+f>/<PgDn>", "Page down"),
-        ("<Ctrl+b>/<PgUp>", "Page up"),
-        ("<Enter>", "Open details / graph node / group"),
-        ("<l>", "Pod logs (workloads, :po)"),
-        ("<r>", "Restart workload (workloads, :deploy)"),
-        ("<Ctrl+d>", "Delete pod (workload detail, :po)"),
-        ("<Enter>/<y>", "Describe/YAML (inventory)"),
-        ("<N>/<A>/<T>/<S>", "Sort name/age/type/status"),
-        ("</>", "Search in YAML/describe/trace/logs"),
-        ("<n>/<N>", "Next/prev search match"),
-        ("<G>", "Follow newest line (logs view)"),
-        ("<c>", "Switch container (logs view)"),
-        ("<x>", "Reveal secrets (values view)"),
-        ("<q>/<Esc>", "Back / quit at root"),
-    ];
-    render_help_column(f, column_chunks[2], "NAVIGATION", &nav_items, theme);
+    let nav_items = help_lines(HelpColumn::Navigation);
 
     // HOTKEYS column - namespace hotkeys (0-9)
     let mut hotkey_items: Vec<(String, String)> = Vec::new();
@@ -127,17 +88,39 @@ pub fn render_help(f: &mut Frame, area: Rect, theme: &Theme, namespace_hotkeys: 
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    render_help_column(
-        f,
-        column_chunks[3],
-        "Namespace Hotkeys",
-        &hotkey_items_ref,
-        theme,
-    );
+
+    // All columns scroll together; clamp so the last line can reach the
+    // bottom but no further (+1 for each column's header line).
+    let longest = [
+        resource_items.len(),
+        general_items.len(),
+        nav_items.len(),
+        hotkey_items_ref.len(),
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0)
+        + 1;
+    let viewport =
+        crate::tui::views::scroll::Viewport::text(scroll, longest, inner_area.height as usize);
+    let offset = u16::try_from(viewport.offset()).unwrap_or(u16::MAX);
+    for (chunk, title, items) in [
+        (column_chunks[0], "RESOURCE", resource_items.as_slice()),
+        (column_chunks[1], "GENERAL", general_items.as_slice()),
+        (column_chunks[2], "NAVIGATION", nav_items.as_slice()),
+        (
+            column_chunks[3],
+            "Namespace Hotkeys",
+            hotkey_items_ref.as_slice(),
+        ),
+    ] {
+        render_help_column(f, chunk, title, items, offset, theme);
+    }
 
     // Render single border around all columns
     let block = Block::default().title("Help").borders(Borders::ALL);
     f.render_widget(block, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 /// Render a single help column (no borders, just content)
@@ -146,6 +129,7 @@ fn render_help_column(
     area: Rect,
     title: &str,
     items: &[(&str, &str)],
+    scroll: u16,
     theme: &Theme,
 ) {
     let mut lines = Vec::new();
@@ -171,6 +155,6 @@ fn render_help_column(
     }
 
     // No borders - just render the content
-    let paragraph = Paragraph::new(lines);
+    let paragraph = Paragraph::new(lines).scroll((scroll, 0));
     f.render_widget(paragraph, area);
 }

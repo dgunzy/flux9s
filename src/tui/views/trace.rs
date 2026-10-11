@@ -153,8 +153,12 @@ pub fn render_resource_trace(
 
     // Calculate scroll
     let available_height = inner_area.height;
+    let viewport = crate::tui::views::scroll::Viewport::text(
+        scroll_offset,
+        total_height as usize,
+        available_height as usize,
+    );
     let max_scroll = total_height.saturating_sub(available_height) as usize;
-    *scroll_offset = (*scroll_offset).min(max_scroll);
     let scroll_offset_u16 = *scroll_offset as u16;
 
     // Render nodes with scrolling
@@ -208,6 +212,8 @@ pub fn render_resource_trace(
             break;
         }
     }
+
+    viewport.render_scrollbar(f, area, theme);
 
     // Show scroll indicator if needed
     if total_height > available_height {

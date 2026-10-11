@@ -30,10 +30,11 @@ pub fn render_inventory_list(
 ) {
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2;
-    crate::tui::views::helpers::update_scroll_offset(
+    let viewport = crate::tui::views::scroll::Viewport::list_with_margin(
         selected_index,
-        visible_height,
         scroll_offset,
+        rows.len(),
+        visible_height,
         SCROLL_BUFFER,
     );
 
@@ -132,6 +133,7 @@ pub fn render_inventory_list(
         .header(header)
         .block(block);
     f.render_widget(table, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 /// Width of a column holding `values`: the longest value or the header,

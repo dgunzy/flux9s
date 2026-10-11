@@ -41,6 +41,12 @@ pub const MAX_ROWS: usize = 5_000;
 /// Cap on the one-off CRD read for printer columns.
 const CRD_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long the first listing may take before the list says so and starts
+/// a fresh watch (a request stalled on a dead connection otherwise waits
+/// out the client's ~5 minute read timeout). Doubles per retry, capped.
+const FIRST_LIST_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_FIRST_LIST_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Longest displayed cell, in characters.
 const MAX_CELL_CHARS: usize = 256;
 
@@ -526,6 +532,15 @@ pub async fn watch_kind(
     request: KindListRequest,
     tx: UnboundedSender<anyhow::Result<KindListSnapshot>>,
 ) {
+    watch_kind_with(client, request, tx, FIRST_LIST_TIMEOUT).await;
+}
+
+async fn watch_kind_with(
+    client: kube::Client,
+    request: KindListRequest,
+    tx: UnboundedSender<anyhow::Result<KindListSnapshot>>,
+    first_list_timeout: Duration,
+) {
     let spec = &request.spec;
     let columns = crd_columns(&client, spec)
         .await
@@ -536,14 +551,45 @@ pub async fn watch_kind(
         _ => Api::all_with(client.clone(), &resource),
     };
 
-    let mut events = watcher(api, watcher::Config::default())
-        .backoff(crate::watcher::CappedBackoff::new())
-        .boxed();
+    let start = || {
+        watcher(api.clone(), watcher::Config::default())
+            .backoff(crate::watcher::CappedBackoff::new())
+            .boxed()
+    };
+    let mut events = start();
     let mut store = KindStore::default();
     let mut owners = OwnerResolver::default();
     let mut last_error: Option<String> = None;
+    let mut first_list_wait = first_list_timeout;
 
-    while let Some(first) = events.next().await {
+    loop {
+        let first = if store.listed {
+            match events.next().await {
+                Some(event) => event,
+                None => break,
+            }
+        } else {
+            // Until the first listing lands, a stall is visible and retried
+            // rather than an endless "Listing…".
+            match tokio::time::timeout(first_list_wait, events.next()).await {
+                Ok(Some(event)) => event,
+                Ok(None) => break,
+                Err(_) => {
+                    let message = format!(
+                        "Still listing {} after {}s — retrying (the API server is slow or unreachable)",
+                        spec.names.plural,
+                        first_list_wait.as_secs()
+                    );
+                    tracing::warn!("{message}");
+                    if tx.send(Err(anyhow::anyhow!(message))).is_err() {
+                        return; // List closed
+                    }
+                    events = start();
+                    first_list_wait = (first_list_wait * 2).min(MAX_FIRST_LIST_TIMEOUT);
+                    continue;
+                }
+            }
+        };
         let mut batch = vec![first];
         tokio::time::sleep(DEBOUNCE).await;
         while let Some(Some(more)) = events.next().now_or_never() {
@@ -955,5 +1001,51 @@ mod tests {
         store.apply(&s, &s.columns, watcher::Event::Delete(pod("a", "rs-a")));
         owners.retain_owners(&store.owner_uids());
         assert!(owners.get("rs-a").is_none());
+    }
+
+    /// A server that accepts connections and never answers.
+    async fn black_hole_client() -> kube::Client {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let config = kube::Config::new(format!("http://{addr}").parse().unwrap());
+        kube::Client::try_from(config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_stalled_first_listing_is_reported_and_retried() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let request = KindListRequest {
+            spec: spec(),
+            namespace: Some("apps".into()),
+        };
+        let task = tokio::spawn(watch_kind_with(
+            black_hole_client().await,
+            request,
+            tx,
+            Duration::from_millis(200),
+        ));
+        let first = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("no report of the stall")
+            .unwrap();
+        let message = format!("{:#}", first.unwrap_err());
+        assert!(message.contains("Still listing"), "{message}");
+        assert!(
+            message.contains("0s") || message.contains("retrying"),
+            "{message}"
+        );
+        // It keeps retrying (with a longer wait) instead of giving up.
+        let second = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("no retry")
+            .unwrap();
+        assert!(second.is_err());
+        task.abort();
     }
 }
