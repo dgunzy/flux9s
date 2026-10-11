@@ -38,7 +38,6 @@ pub use events::*;
 pub use footer::*;
 pub use graph::*;
 pub use header::*;
-#[allow(unused_imports)] // Used via fully qualified paths (crate::tui::views::helpers::)
 pub use helm_values::*;
 pub use help::*;
 pub use helpers::*;

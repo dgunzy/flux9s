@@ -13,7 +13,6 @@ mod theme;
 pub mod trace;
 pub mod views;
 
-#[allow(unused_imports)] // Re-exported for backward compatibility
 pub use crate::kube::api::{get_api_resource_with_fallback, get_gvk_for_resource_type};
 pub use app::App;
 pub use operations::*;
@@ -579,11 +578,7 @@ pub async fn run_tui_with_async_init(
                         // If edit was pending, cancel it and return to origin view
                         if app.view_state.current_view == crate::tui::app::state::View::ResourceEdit
                         {
-                            app.async_state.edit_pending = None;
-                            app.async_state.edit_editor_launched = false;
-                            app.view_state.current_view = app.async_state.edit_return_view;
-                            app.async_state.edit_return_view =
-                                crate::tui::app::state::View::ResourceList;
+                            app.leave_edit();
                         }
                         app.async_state.yaml.set_error();
                         app.set_status_message((format!("Failed to fetch YAML: {}", e), true));
@@ -678,7 +673,7 @@ pub async fn run_tui_with_async_init(
                             format!("Failed to resolve values: {:#}", e),
                             true,
                         ));
-                        app.set_view(app.previous_list_view());
+                        app.back_from(crate::tui::app::state::View::HelmValues);
                     }
                 }
             }
@@ -708,7 +703,7 @@ pub async fn run_tui_with_async_init(
                         app.async_state.graph.set_error();
                         app.set_status_message((format!("Graph building failed: {}", e), true));
                         // Return to the previous view instead of an empty graph
-                        app.set_view(app.previous_list_view());
+                        app.back_from(crate::tui::app::state::View::ResourceGraph);
                     }
                 }
             }
@@ -726,8 +721,8 @@ pub async fn run_tui_with_async_init(
                         app.async_state.workload_metrics.clear();
                         app.logs_after_workload_load = false;
                         app.set_status_message((format!("Failed to fetch workload: {}", e), true));
-                        // Return to the workload list instead of an empty detail
-                        app.set_view(crate::tui::app::state::View::WorkloadList);
+                        // Return to where it was opened instead of an empty detail
+                        app.back_from(crate::tui::app::state::View::WorkloadDetail);
                     }
                 }
             }
@@ -848,19 +843,11 @@ pub async fn run_tui_with_async_init(
                                 "Edit cancelled (no changes)".to_string(),
                                 false,
                             ));
-                            app.async_state.edit_pending = None;
-                            app.async_state.edit_editor_launched = false;
-                            app.view_state.current_view = app.async_state.edit_return_view;
-                            app.async_state.edit_return_view =
-                                crate::tui::app::state::View::ResourceList;
+                            app.leave_edit();
                         }
                         Err(e) => {
                             app.set_status_message((format!("Editor error: {}", e), true));
-                            app.async_state.edit_pending = None;
-                            app.async_state.edit_editor_launched = false;
-                            app.view_state.current_view = app.async_state.edit_return_view;
-                            app.async_state.edit_return_view =
-                                crate::tui::app::state::View::ResourceList;
+                            app.leave_edit();
                         }
                     }
                 }

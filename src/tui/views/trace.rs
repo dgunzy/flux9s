@@ -72,15 +72,21 @@ pub fn render_resource_trace(
     // Add the main object
     nodes.push((&trace_result.object, "Object"));
 
-    // Add chain nodes (Kustomization/HelmRelease/HelmChart)
-    // Skip nodes that match the object being traced (avoid duplicates)
+    // Add chain nodes: the Flux objects that manage it (Kustomization,
+    // HelmRelease, ResourceSet, FluxInstance — the managers MANAGED-BY
+    // knows) and HelmCharts. Skip nodes that match the object being traced
+    // (avoid duplicates).
     for node in &trace_result.chain {
         use crate::models::FluxResourceKind;
         if matches!(
             FluxResourceKind::parse_optional(&node.kind),
-            Some(FluxResourceKind::Kustomization)
-                | Some(FluxResourceKind::HelmRelease)
-                | Some(FluxResourceKind::HelmChart)
+            Some(
+                FluxResourceKind::Kustomization
+                    | FluxResourceKind::HelmRelease
+                    | FluxResourceKind::HelmChart
+                    | FluxResourceKind::ResourceSet
+                    | FluxResourceKind::FluxInstance
+            )
         ) {
             // Skip if this node matches the object being traced (already shown as "Object")
             if node.kind == trace_result.object.kind
@@ -458,4 +464,55 @@ fn render_arrow(f: &mut Frame, area: Rect, relationship: &str, theme: &Theme) {
     // Render the arrow
     let arrow_para = Paragraph::new(arrow_lines).style(Style::default().fg(theme.text_label));
     f.render_widget(arrow_para, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn node(kind: &str, name: &str) -> TraceNode {
+        TraceNode {
+            kind: kind.into(),
+            name: name.into(),
+            namespace: "flux-system".into(),
+            status: None,
+            spec: None,
+        }
+    }
+
+    #[test]
+    fn trace_shows_every_flux_manager_in_the_chain() {
+        let result = TraceResult {
+            object: node("Deployment", "source-controller"),
+            chain: vec![
+                node("Deployment", "source-controller"),
+                node("FluxInstance", "flux"),
+            ],
+            source: None,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                render_resource_trace(
+                    f,
+                    f.area(),
+                    &None,
+                    Some(&result),
+                    false,
+                    &mut 0,
+                    &mut TextSearchState::default(),
+                    &Theme::default(),
+                )
+            })
+            .unwrap();
+        let out: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(out.contains("FluxInstance: flux"), "{out}");
+    }
 }

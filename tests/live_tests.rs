@@ -518,3 +518,18 @@ async fn describe_resolves_managed_by_separately_and_within_bound() {
         assert!(text.contains("via ReplicaSet/"), "{name}: {text}");
     }
 }
+
+/// Trace follows the same manager detection as MANAGED-BY: a Flux
+/// controller Deployment (labelled by the Flux Operator) traces to its
+/// FluxInstance.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn trace_reaches_the_flux_instance_of_a_controller_deployment() {
+    let client = client_for(&simple_context()).await;
+    let result =
+        flux9s::trace::trace_object(&client, "Deployment", "flux-system", "source-controller")
+            .await
+            .unwrap_or_else(|e| panic!("trace failed: {e:#}"));
+    let kinds: Vec<&str> = result.chain.iter().map(|n| n.kind.as_str()).collect();
+    assert!(kinds.contains(&"FluxInstance"), "chain: {kinds:?}");
+}

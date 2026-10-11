@@ -24,7 +24,6 @@ pub struct TraceNode {
 /// Status information from a Flux resource
 #[derive(Debug, Clone)]
 pub struct TraceStatus {
-    #[allow(dead_code)] // Used in format_trace_result which may be used for debugging
     pub ready: Option<bool>,
     pub message: Option<String>,
     pub last_reconciled: Option<String>,

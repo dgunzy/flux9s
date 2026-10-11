@@ -8,7 +8,6 @@
 
 /// Trait for checking resource readiness status
 /// Reserved for future status checking abstraction
-#[allow(dead_code)]
 pub trait ResourceStatus {
     /// Returns true if the resource is ready/reconciled
     fn is_ready(&self) -> bool;
@@ -25,7 +24,6 @@ pub trait ResourceStatus {
 
 /// Trait for getting resource display summaries
 /// Reserved for future display abstraction
-#[allow(dead_code)]
 pub trait ResourceDisplay {
     /// Returns a short summary string for the resource
     fn summary(&self) -> String;

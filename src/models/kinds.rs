@@ -347,6 +347,23 @@ impl KindCatalog {
         kinds.iter().find(|spec| spec.names.matches(token)).cloned()
     }
 
+    /// A discovered kind by kind name, preferring the core API group when
+    /// several groups serve the same name (e.g. core vs Knative `Service`).
+    pub fn find_by_kind(&self, kind: &str) -> Option<KindSpec> {
+        let kinds = self.kinds.read().expect("kind catalog poisoned");
+        let mut matching = kinds.iter().filter(|spec| spec.gvk.kind == kind);
+        let first = matching.next()?;
+        if first.gvk.group.is_empty() {
+            return Some(first.clone());
+        }
+        Some(
+            matching
+                .find(|spec| spec.gvk.group.is_empty())
+                .unwrap_or(first)
+                .clone(),
+        )
+    }
+
     /// A discovered kind by API group and kind name.
     pub fn find_by_group_kind(&self, group: &str, kind: &str) -> Option<KindSpec> {
         self.kinds
@@ -516,6 +533,19 @@ mod tests {
         assert_eq!(spec.family, Family::Flux(FluxResourceKind::Kustomization));
         assert!(spec.caps.flux_operations);
         assert_eq!(spec.gvk.group, "kustomize.toolkit.fluxcd.io");
+    }
+
+    #[test]
+    fn find_by_kind_prefers_the_core_group() {
+        let catalog = KindCatalog::default();
+        catalog.replace(vec![
+            native("serving.knative.dev", "Service", "services", &["ksvc"]),
+            native("", "Service", "services", &["svc"]),
+            native("batch", "CronJob", "cronjobs", &["cj"]),
+        ]);
+        assert_eq!(catalog.find_by_kind("Service").unwrap().gvk.group, "");
+        assert_eq!(catalog.find_by_kind("CronJob").unwrap().gvk.group, "batch");
+        assert!(catalog.find_by_kind("Nope").is_none());
     }
 
     #[test]

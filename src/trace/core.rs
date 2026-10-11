@@ -363,8 +363,13 @@ async fn resolve_helmrelease_source(
         let (chart_ns, chart_name) = parse_namespaced_name(helm_chart_ref, default_ns);
 
         // Fetch the HelmChart and add it to the chain
-        if let Some(chart_node) =
-            fetch_and_trace_flux_resource(client, "HelmChart", &chart_ns, &chart_name).await?
+        if let Some(chart_node) = fetch_and_trace_flux_resource(
+            client,
+            FluxResourceKind::HelmChart.as_str(),
+            &chart_ns,
+            &chart_name,
+        )
+        .await?
         {
             // Add HelmChart to chain
             chain.push(chart_node.clone());
@@ -392,19 +397,23 @@ async fn resolve_helmrelease_source(
             .and_then(|n| n.as_str())
             .unwrap_or(default_ns);
 
-        match chart_ref_kind {
-            "HelmChart" => {
+        match FluxResourceKind::parse_optional(chart_ref_kind) {
+            Some(FluxResourceKind::HelmChart) => {
                 // If chartRef points to HelmChart, add it to chain and resolve its source
-                if let Some(chart_node) =
-                    fetch_and_trace_flux_resource(client, "HelmChart", chart_ref_ns, chart_ref_name)
-                        .await?
+                if let Some(chart_node) = fetch_and_trace_flux_resource(
+                    client,
+                    chart_ref_kind,
+                    chart_ref_ns,
+                    chart_ref_name,
+                )
+                .await?
                 {
                     // Add HelmChart to chain
                     chain.push(chart_node.clone());
                     return resolve_helmchart_source(client, &chart_node, chart_ref_ns).await;
                 }
             }
-            "OCIRepository" => {
+            Some(FluxResourceKind::OCIRepository) => {
                 // Direct source reference
                 return fetch_and_trace_flux_resource(
                     client,
@@ -414,7 +423,7 @@ async fn resolve_helmrelease_source(
                 )
                 .await;
             }
-            "ExternalArtifact" => {
+            Some(FluxResourceKind::ExternalArtifact) => {
                 // Validate ExternalArtifact has sourceRef
                 let ea_obj =
                     fetch_object(client, chart_ref_kind, chart_ref_ns, chart_ref_name).await?;
@@ -530,43 +539,25 @@ fn is_flux_resource(kind: &str) -> bool {
     FluxResourceKind::parse_optional(kind).is_some()
 }
 
-/// Find Flux owner from labels
+/// The Flux object an object's labels name as its manager — the same
+/// detection as the kind lists' MANAGED-BY column ([`detect_manager`]), so
+/// trace and the lists agree (Kustomization, HelmRelease, ResourceSet, and
+/// FluxInstance).
+///
+/// [`detect_manager`]: crate::kube::ownership::detect_manager
 fn find_flux_owner_from_labels(obj: &Value) -> Option<SourceRef> {
-    if let Some(labels) = obj
-        .get("metadata")
-        .and_then(|m| m.get("labels"))
-        .and_then(|l| l.as_object())
-    {
-        // Check for kustomize.toolkit.fluxcd.io/name
-        if let Some(name) = labels
-            .get("kustomize.toolkit.fluxcd.io/name")
-            .and_then(|n| n.as_str())
-        {
-            return Some(SourceRef {
-                kind: FluxResourceKind::Kustomization.as_str().to_string(),
-                name: name.to_string(),
-                namespace: labels
-                    .get("kustomize.toolkit.fluxcd.io/namespace")
-                    .and_then(|n| n.as_str())
-                    .map(|s| s.to_string()),
-            });
-        }
-        // Check for helm.toolkit.fluxcd.io/name
-        if let Some(name) = labels
-            .get("helm.toolkit.fluxcd.io/name")
-            .and_then(|n| n.as_str())
-        {
-            return Some(SourceRef {
-                kind: FluxResourceKind::HelmRelease.as_str().to_string(),
-                name: name.to_string(),
-                namespace: labels
-                    .get("helm.toolkit.fluxcd.io/namespace")
-                    .and_then(|n| n.as_str())
-                    .map(|s| s.to_string()),
-            });
-        }
+    match crate::kube::ownership::detect_manager(obj)? {
+        crate::kube::ownership::Manager::Flux {
+            kind,
+            namespace,
+            name,
+        } => Some(SourceRef {
+            kind,
+            name,
+            namespace: (!namespace.is_empty()).then_some(namespace),
+        }),
+        _ => None,
     }
-    None
 }
 
 /// Fetch and trace a Flux resource
@@ -729,4 +720,58 @@ fn create_trace_node(obj: &Value, namespace: &str) -> Result<TraceNode> {
         status,
         spec,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn labelled(labels: Value) -> Value {
+        json!({"metadata": {"name": "x", "namespace": "apps", "labels": labels}})
+    }
+
+    #[test]
+    fn flux_owner_detection_matches_the_managed_by_column() {
+        let ks = find_flux_owner_from_labels(&labelled(json!({
+            "kustomize.toolkit.fluxcd.io/name": "apps",
+            "kustomize.toolkit.fluxcd.io/namespace": "flux-system"
+        })))
+        .unwrap();
+        assert_eq!(
+            (ks.kind.as_str(), ks.name.as_str()),
+            ("Kustomization", "apps")
+        );
+        assert_eq!(ks.namespace.as_deref(), Some("flux-system"));
+
+        // Previously missed by trace, already shown by MANAGED-BY.
+        let rset = find_flux_owner_from_labels(&labelled(json!({
+            "resourceset.fluxcd.controlplane.io/name": "tenants",
+            "resourceset.fluxcd.controlplane.io/namespace": "flux-system"
+        })))
+        .unwrap();
+        assert_eq!(rset.kind, FluxResourceKind::ResourceSet.as_str());
+        let instance = find_flux_owner_from_labels(&labelled(json!({
+            "app.kubernetes.io/managed-by": "flux-operator",
+            "fluxcd.controlplane.io/name": "flux",
+            "fluxcd.controlplane.io/namespace": "flux-system"
+        })))
+        .unwrap();
+        assert_eq!(instance.kind, FluxResourceKind::FluxInstance.as_str());
+
+        // A label without a namespace falls back to the object's namespace.
+        let hr = find_flux_owner_from_labels(&labelled(json!({
+            "helm.toolkit.fluxcd.io/name": "podinfo"
+        })))
+        .unwrap();
+        assert_eq!(hr.namespace, None);
+
+        // Non-Flux managers aren't Flux owners.
+        assert!(
+            find_flux_owner_from_labels(&labelled(json!({
+                "argocd.argoproj.io/instance": "guestbook"
+            })))
+            .is_none()
+        );
+    }
 }

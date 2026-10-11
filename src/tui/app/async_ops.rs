@@ -114,27 +114,15 @@ impl App {
         match result {
             Ok(_) => {
                 tracing::info!("Resource edit applied successfully via SSA");
-                // Clear all edit state
-                self.async_state.edit_pending = None;
-                self.async_state.edit_full_yaml = None;
-                self.async_state.edit_save_pending = None;
-                self.async_state.edit_error_message = None;
-                self.async_state.edit_editor_launched = false;
-                // Return to origin view (wherever 'e' was pressed from)
-                self.view_state.current_view = self.async_state.edit_return_view;
-                self.async_state.edit_return_view = super::state::View::ResourceList;
+                // Back to wherever `e` was pressed (clears the edit state).
+                self.leave_edit();
                 self.set_status_message(("Resource saved successfully".to_string(), false));
             }
             Err(e) => {
                 tracing::warn!("Resource edit SSA apply failed: {}", e);
                 let msg = e.to_string();
+                self.leave_edit();
                 self.async_state.edit_error_message = Some(msg.clone());
-                self.async_state.edit_pending = None;
-                self.async_state.edit_full_yaml = None;
-                self.async_state.edit_save_pending = None;
-                self.async_state.edit_editor_launched = false;
-                self.view_state.current_view = self.async_state.edit_return_view;
-                self.async_state.edit_return_view = super::state::View::ResourceList;
                 self.set_status_message((format!("Save failed: {}", msg), true));
             }
         }
@@ -251,7 +239,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::state::View;
+    use super::super::state::{NavEntry, View};
     use super::*;
     use crate::config::{Config, UiConfig};
     use crate::tui::Theme;
@@ -299,7 +287,7 @@ mod tests {
         app.async_state.edit_save_pending = Some("apiVersion: v1".to_string());
         app.async_state.edit_editor_launched = true;
         app.view_state.current_view = View::ResourceEdit;
-        app.async_state.edit_return_view = View::ResourceList;
+        app.view_state.nav_stack = vec![NavEntry::View(View::ResourceList)];
     }
 
     #[test]
@@ -356,7 +344,10 @@ mod tests {
         let mut app = create_test_app();
         set_edit_in_progress(&mut app);
         // Simulate pressing 'e' from ResourceFavorites
-        app.async_state.edit_return_view = View::ResourceFavorites;
+        app.view_state.nav_stack = vec![
+            NavEntry::View(View::ResourceList),
+            NavEntry::View(View::ResourceFavorites),
+        ];
 
         app.set_edit_save_result(Err(anyhow::anyhow!("some error")));
 
@@ -368,7 +359,10 @@ mod tests {
         let mut app = create_test_app();
         set_edit_in_progress(&mut app);
         // Simulate pressing 'e' from ResourceYAML
-        app.async_state.edit_return_view = View::ResourceYAML;
+        app.view_state.nav_stack = vec![
+            NavEntry::View(View::ResourceList),
+            NavEntry::View(View::ResourceYAML),
+        ];
 
         app.set_edit_save_result(Ok(()));
 

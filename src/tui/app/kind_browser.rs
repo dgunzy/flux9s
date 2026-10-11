@@ -7,7 +7,7 @@
 //! to the Flux list from anywhere.
 
 use super::core::App;
-use super::state::{ListTarget, View};
+use super::state::View;
 use crate::kube::kind_list::{KindListRequest, KindListSnapshot, KindRow};
 use crate::kube::workloads::WorkloadAction;
 use crate::models::kinds::{Capabilities, KindSpec};
@@ -55,27 +55,13 @@ const KIND_ACTIONS: &[KindAction] = &[
     },
 ];
 
-/// Lists remembered for `Esc`.
-const MAX_LIST_HISTORY: usize = 20;
-
 /// Minimum gap between discovery re-checks triggered by unknown kinds.
 const REDISCOVERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl App {
-    /// The list on screen, as something `Esc` can return to.
-    fn current_list_target(&self) -> Option<ListTarget> {
-        match self.view_state.current_view {
-            View::ResourceList => Some(ListTarget::Flux),
-            View::KindList => self
-                .async_state
-                .kind_list
-                .key()
-                .map(|request| ListTarget::Kind(request.spec.clone())),
-            _ => None,
-        }
-    }
-
-    /// Open a live list of `spec`, remembering the current list for `Esc`.
+    /// Open a live list of `spec`. From another kind list, Back returns to
+    /// that list; from anywhere else it's a top-level switch (Back returns to
+    /// the Flux list).
     pub(crate) fn open_kind_list(&mut self, spec: KindSpec) {
         if !self.config.native_resources {
             self.set_status_message((
@@ -84,23 +70,23 @@ impl App {
             ));
             return;
         }
-        let target = ListTarget::Kind(spec.clone());
-        if let Some(current) = self.current_list_target()
-            && current != target
-        {
-            self.view_state.list_history.push(current);
-            if self.view_state.list_history.len() > MAX_LIST_HISTORY {
-                self.view_state.list_history.remove(0);
+        if self.view_state.current_view == View::KindList {
+            let same = self
+                .async_state
+                .kind_list
+                .key()
+                .is_some_and(|request| request.spec == spec);
+            if !same {
+                self.push_current_view();
             }
+        } else {
+            self.navigate_root(View::KindList);
         }
         self.show_kind_list(spec);
     }
 
     /// Start (or restart) the list for `spec` in the current namespace.
-    fn show_kind_list(&mut self, spec: KindSpec) {
-        if self.view_state.current_view == View::EventList {
-            self.stop_kube_events_watch();
-        }
+    pub(crate) fn show_kind_list(&mut self, spec: KindSpec) {
         let namespace = if spec.is_namespaced() {
             self.namespace.clone()
         } else {
@@ -119,26 +105,10 @@ impl App {
         self.invalidate_layout_cache();
     }
 
-    /// `Esc` in a kind list: the previous list, else the Flux list.
-    pub(crate) fn kind_list_back(&mut self) {
-        match self.view_state.list_history.pop() {
-            Some(ListTarget::Kind(spec)) => self.show_kind_list(spec),
-            Some(ListTarget::Flux) | None => self.go_home_flux(),
-        }
-    }
-
-    /// Return to the Flux list, dropping kind-list state and history.
+    /// Return to the Flux list, closing kind lists and everything else
+    /// opened on the way.
     pub(crate) fn go_home_flux(&mut self) {
-        self.async_state.kind_list.clear();
-        self.view_state.list_history.clear();
-        self.view_state.kind_list_error = None;
-        if self.view_state.current_view == View::KindList {
-            self.view_state.filter.clear();
-            self.view_state.selected_index = 0;
-            self.view_state.scroll_offset = 0;
-        }
-        self.view_state.current_view = View::ResourceList;
-        self.invalidate_layout_cache();
+        self.navigate_root(View::ResourceList);
     }
 
     /// Kind-list rows after the `/` filter (name or namespace substring).
@@ -191,7 +161,10 @@ impl App {
     /// walk back.
     pub(crate) fn kind_list_escape(&mut self) {
         if self.view_state.filter.is_empty() {
-            self.kind_list_back();
+            // The previous kind list, else the Flux list.
+            if !self.navigate_back() {
+                self.go_home_flux();
+            }
         } else {
             self.view_state.filter.clear();
             self.view_state.selected_index = 0;
@@ -342,7 +315,7 @@ impl App {
             return;
         }
         if let Some((kind, namespace, name)) = self.selected_kind_object() {
-            self.open_workload_detail(kind, namespace, name, View::KindList, false);
+            self.open_workload_detail(kind, namespace, name, false);
         }
     }
 
@@ -353,9 +326,8 @@ impl App {
             return;
         };
         if self.kind_list_caps().workload_detail {
-            self.open_workload_detail(kind, namespace, name, View::KindList, true);
+            self.open_workload_detail(kind, namespace, name, true);
         } else {
-            self.view_state.logs_back_view = Some(View::KindList);
             self.open_pod_logs(&namespace, &name);
         }
     }

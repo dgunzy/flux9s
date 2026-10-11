@@ -13,6 +13,7 @@ mod async_ops;
 mod core;
 mod events;
 mod kind_browser;
+mod navigation;
 mod rendering;
 
 pub use core::*;

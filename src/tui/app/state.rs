@@ -48,7 +48,6 @@ pub enum View {
     KindList,
     /// Waiting for external editor / SSA apply
     ResourceEdit,
-    #[allow(dead_code)] // Reserved for future alternative help view implementation
     Help,
 }
 
@@ -261,11 +260,13 @@ pub struct ViewState {
     pub history_scroll_offset: usize,
     /// Scroll offset for the HelmRelease values view
     pub helm_values_scroll_offset: usize,
-    /// Where Back from the workload detail returns (the graph's workload
-    /// list or a `:<kind>` list).
-    pub workload_back_view: Option<View>,
-    /// Lists visited before the current one; `Esc` in a kind list pops it.
-    pub list_history: Vec<ListTarget>,
+    /// Where Back goes: the views (and kind lists) opened on the way to the
+    /// current one, most recent last. The single source of truth for Back —
+    /// see `navigation.rs`.
+    pub nav_stack: Vec<NavEntry>,
+    /// `l` on a list fetched a workload only to stream its pods' logs: the
+    /// logs replace the workload detail, so Back returns to the list.
+    pub logs_replace_workload: bool,
     /// Why the current kind list can't be shown (e.g. RBAC), if it can't.
     pub kind_list_error: Option<String>,
     /// Scroll offset for the controller log view
@@ -274,10 +275,6 @@ pub struct ViewState {
     pub workload_scroll_offset: usize,
     /// Scroll offset for the pulse dashboard
     pub pulse_scroll_offset: usize,
-    /// Where Back from the log view returns to, when logs were opened from
-    /// somewhere other than a root list view (e.g. a workload's pods).
-    /// Consumed on Back; `None` falls back to `previous_list_view`.
-    pub logs_back_view: Option<View>,
     /// Workload rows shown by the WorkloadList view, decoded from the graph
     /// WorkloadGroup node that was opened.
     pub workload_rows: Vec<crate::kube::workloads::WorkloadRef>,
@@ -289,12 +286,6 @@ pub struct ViewState {
     /// Index (into the graph's node list) of the currently focused graph node.
     /// `None` until a graph is built; set to the object node when one loads.
     pub graph_focus_index: Option<usize>,
-    /// Track previous list view for navigation (ResourceList or ResourceFavorites)
-    pub previous_list_view: View,
-    /// When the detail view was entered by drilling into a node from the graph,
-    /// this holds `ResourceGraph` so that Back returns to the graph instead of
-    /// all the way to the list. Consumed (taken) on the next Back.
-    pub detail_back_view: Option<View>,
     /// Active submenu state (if a submenu is currently being displayed)
     pub submenu_state: Option<SubmenuState>,
     /// Original theme name when previewing themes in submenu (for restoration on cancel)
@@ -324,19 +315,16 @@ impl Default for ViewState {
             trace_scroll_offset: 0,
             history_scroll_offset: 0,
             helm_values_scroll_offset: 0,
-            workload_back_view: None,
-            list_history: Vec::new(),
+            nav_stack: Vec::new(),
+            logs_replace_workload: false,
             kind_list_error: None,
             log_scroll_offset: 0,
             workload_scroll_offset: 0,
             pulse_scroll_offset: 0,
-            logs_back_view: None,
             workload_rows: Vec::new(),
             inventory_rows: Vec::new(),
             graph_scroll_offset: 0,
             graph_focus_index: None,
-            previous_list_view: View::ResourceList,
-            detail_back_view: None,
             submenu_state: None,
             preview_original_theme: None,
             page_size: 10,
@@ -424,7 +412,7 @@ pub struct ManagerResolution {
     pub text: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct AsyncOperationState {
     /// Full-object fetch backing the YAML view (Flux or native object).
     pub yaml: AsyncTask<ObjectRef, serde_json::Value>,
@@ -490,40 +478,6 @@ pub struct AsyncOperationState {
     pub edit_error_message: Option<String>,
     /// True once the external editor has been launched for the current edit
     pub edit_editor_launched: bool,
-    /// The view that was active when `e` was pressed — returned to on cancel/save
-    pub edit_return_view: View,
-}
-
-impl Default for AsyncOperationState {
-    fn default() -> Self {
-        Self {
-            yaml: Default::default(),
-            describe: Default::default(),
-            describe_manager: Default::default(),
-            trace: Default::default(),
-            graph: Default::default(),
-            workload: Default::default(),
-            inventory_status: Default::default(),
-            operation: Default::default(),
-            last_operation_key: None,
-            confirmation_pending: None,
-            workload_action: Default::default(),
-            helm_values: Default::default(),
-            workload_metrics: Default::default(),
-            kind_list: Default::default(),
-            kind_discovery: Default::default(),
-            kind_discovery_at: None,
-            namespace_list: Default::default(),
-            flux_namespace_discovery: Default::default(),
-            edit_pending: None,
-            edit_full_yaml: None,
-            edit_save_pending: None,
-            edit_save_result_rx: None,
-            edit_error_message: None,
-            edit_editor_launched: false,
-            edit_return_view: View::ResourceList,
-        }
-    }
 }
 
 impl AsyncOperationState {
@@ -552,18 +506,27 @@ impl AsyncOperationState {
         self.edit_save_result_rx = None;
         self.edit_error_message = None;
         self.edit_editor_launched = false;
-        self.edit_return_view = View::ResourceList;
     }
 }
 
 /// Pending operation awaiting confirmation
-/// A list the user can return to with `Esc` (#267).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ListTarget {
-    /// The Flux resource list (with whatever type filter it had).
-    Flux,
-    /// A kind list.
+/// A place Back can return to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NavEntry {
+    /// A view (for `KindList`, whichever kind list is loaded).
+    View(View),
+    /// A kind list of this kind (#267) — reopened if another kind replaced it.
     Kind(crate::models::kinds::KindSpec),
+}
+
+impl NavEntry {
+    /// The view this entry returns to.
+    pub fn view(&self) -> View {
+        match self {
+            NavEntry::View(view) => *view,
+            NavEntry::Kind(_) => View::KindList,
+        }
+    }
 }
 
 /// Which HelmRelease's values to show, and whether Secret-sourced values are
@@ -708,7 +671,6 @@ impl KubeEventStore {
         self.events.len()
     }
 
-    #[allow(dead_code)] // Used in tests
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }

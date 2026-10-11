@@ -70,119 +70,81 @@ fn add_test_resource(app: &mut App) {
 
 #[test]
 fn test_navigation_from_list_to_trace_to_graph_to_esc() {
-    // Test: List -> Trace -> Graph -> Esc should return to List
-    let mut app = create_test_app();
-
-    // Start in list view
+    // List -> Trace -> Graph -> Esc returns to the list: sibling detail
+    // views replace each other instead of stacking.
+    let mut app = create_test_app_no_splash();
     app.set_view(View::ResourceList);
-    // Simulate navigating to trace from list (this would set previous_list_view in real code)
-    // For testing, we'll manually set it to simulate the behavior
-    // In real code, this happens in handle_key when 't' is pressed from ResourceList
 
-    // Navigate to trace (simulate what handle_key does)
     app.set_view_trace();
-    // previous_list_view should be ResourceList (set when navigating from list)
-
-    // Navigate to graph from trace (should NOT update previous_list_view)
+    assert_eq!(app.back_target(), Some(View::ResourceList));
     app.set_view_graph();
-    // Verify previous_list_view is still ResourceList
     assert_eq!(
-        app.previous_list_view(),
-        View::ResourceList,
-        "previous_list_view should remain ResourceList when navigating trace -> graph"
+        app.back_target(),
+        Some(View::ResourceList),
+        "trace -> graph doesn't stack"
     );
+
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.current_view(), View::ResourceList);
+    assert_eq!(app.back_target(), None);
 }
 
 #[test]
 fn test_navigation_from_list_to_yaml_to_trace_to_esc() {
-    // Test: List -> YAML -> Trace -> Esc should return to List
-    let mut app = create_test_app();
-
+    let mut app = create_test_app_no_splash();
+    add_test_resource(&mut app);
     app.set_view(View::ResourceList);
 
-    // Navigate to YAML (simulate - in real code this sets previous_list_view)
-    app.set_view(View::ResourceYAML);
-    // In real code, previous_list_view would be set to ResourceList when navigating from list
-
-    // Navigate to trace from YAML (should NOT update previous_list_view)
+    app.handle_key(make_key(KeyCode::Char('y')));
+    assert_eq!(app.current_view(), View::ResourceYAML);
     app.set_view_trace();
-    // Verify previous_list_view behavior - it should remain unchanged when navigating between detail views
-    // This test verifies the logic, actual state would be set by handle_key
+
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.current_view(), View::ResourceList);
 }
 
 #[test]
 fn test_navigation_from_favorites_to_trace_to_graph_to_esc() {
-    // Test: Favorites -> Trace -> Graph -> Esc should return to Favorites
-    let mut app = create_test_app();
-
+    let mut app = create_test_app_no_splash();
     app.set_view(View::ResourceFavorites);
-    // In real code, previous_list_view would be set when navigating from favorites
 
-    // Navigate to trace
     app.set_view_trace();
-
-    // Navigate to graph from trace (should NOT update previous_list_view)
     app.set_view_graph();
-    // Verify that set_view_graph doesn't change previous_list_view
-    // The actual previous_list_view state is managed by handle_key, not by set_view_graph
+
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(
+        app.current_view(),
+        View::ResourceFavorites,
+        "Back returns to the favorites it was opened from"
+    );
 }
 
 #[test]
-fn test_navigation_previous_list_view_only_updated_from_list_views() {
-    // Test that previous_list_view is only updated when coming from ResourceList or ResourceFavorites
-    // This test verifies the logic in handle_key - we can't directly test handle_key without
-    // setting up a full app with resources, but we can verify the helper methods work correctly
+fn test_set_view_does_not_touch_back_history() {
     let mut app = create_test_app();
-
-    // Test that set_view doesn't change previous_list_view
     app.set_view(View::ResourceList);
-    let initial_prev = app.previous_list_view();
-
     app.set_view(View::ResourceDetail);
-    assert_eq!(
-        app.previous_list_view(),
-        initial_prev,
-        "set_view should not change previous_list_view"
-    );
-
     app.set_view(View::ResourceTrace);
-    assert_eq!(
-        app.previous_list_view(),
-        initial_prev,
-        "set_view should not change previous_list_view"
-    );
-
     app.set_view(View::ResourceGraph);
-    assert_eq!(
-        app.previous_list_view(),
-        initial_prev,
-        "set_view should not change previous_list_view"
-    );
+    assert_eq!(app.back_target(), None, "set_view is a raw setter");
 }
 
 #[test]
 fn test_navigation_from_list_to_detail_to_yaml_to_esc() {
-    // Test: List -> Detail -> YAML -> Esc should return to List
-    // This verifies that navigating between detail views doesn't change previous_list_view
-    let mut app = create_test_app();
-
+    let mut app = create_test_app_no_splash();
+    add_test_resource(&mut app);
     app.set_view(View::ResourceList);
-    let initial_prev = app.previous_list_view();
 
-    // Navigate to detail
-    app.set_view(View::ResourceDetail);
-    assert_eq!(
-        app.previous_list_view(),
-        initial_prev,
-        "previous_list_view should not change"
-    );
+    app.handle_key(make_key(KeyCode::Enter));
+    assert_eq!(app.current_view(), View::ResourceDetail);
+    app.handle_key(make_key(KeyCode::Char('y')));
+    assert_eq!(app.current_view(), View::ResourceYAML);
 
-    // Navigate to YAML from detail (should NOT update previous_list_view)
-    app.set_view(View::ResourceYAML);
+    app.handle_key(make_key(KeyCode::Esc));
     assert_eq!(
-        app.previous_list_view(),
-        initial_prev,
-        "previous_list_view should remain unchanged when navigating between detail views"
+        app.current_view(),
+        View::ResourceList,
+        "detail -> YAML doesn't stack"
     );
 }
 
@@ -339,31 +301,16 @@ fn test_ctrl_c_quits_immediately() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn test_navigation_esc_from_detail_views() {
-    // Test that Esc from any detail view returns to the correct list view
-    // This tests the set_view and previous_list_view methods
-    let mut app = create_test_app();
-
-    // Test set_view works correctly
-    app.set_view(View::ResourceDetail);
+fn test_backspace_mirrors_esc_without_the_quit_prompt() {
+    let mut app = create_test_app_no_splash();
+    add_test_resource(&mut app);
     app.set_view(View::ResourceList);
-    assert_eq!(app.previous_list_view(), View::ResourceList); // Default
 
-    // Test that set_view can change to any view
-    app.set_view(View::ResourceYAML);
-    app.set_view(View::ResourceFavorites);
-    app.set_view(View::ResourceTrace);
-    app.set_view(View::ResourceGraph);
-    app.set_view(View::ResourceHistory);
-    // All should work without panicking
+    app.handle_key(make_key(KeyCode::Enter));
+    app.handle_key(make_key(KeyCode::Backspace));
+    assert_eq!(app.current_view(), View::ResourceList);
 
-    // Test previous_list_view returns correct value
-    assert_eq!(app.previous_list_view(), View::ResourceList);
-
-    // Test that set_view with previous_list_view works (simulating Esc)
-    app.set_view(View::ResourceGraph);
-    let prev = app.previous_list_view();
-    app.set_view(prev);
-    // Should successfully change view
-    assert_eq!(app.current_view(), prev);
+    // At the top Backspace does nothing (Esc would ask to quit).
+    app.handle_key(make_key(KeyCode::Backspace));
+    assert_eq!(app.current_view(), View::ResourceList);
 }

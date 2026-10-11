@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Back navigation (`Esc` / `Backspace`) uses one history for every view, replacing five separate "where to go back to" fields. Back now always returns to where you came from — e.g. trace opened from a graph returns to the graph, and `:logs` from a detail view returns to it. `Backspace` behaves exactly like `Esc` except it never asks to quit. `:` commands that switch top-level view (`:flux`, `:favorites`, `:events`, `:pulse`) close what was open (e.g. a kind list's watch) instead of leaving it running
+- `:trace <kind>/<name>` resolves kinds through the kind registry, like `:<kind>`: Flux aliases (`ks`, `hr`), Flux-adjacent kinds, and with native resources on any served kind by plural or short name (`deploy`, `sts`, `cj`). Exact kind names (`Deployment`) work without it
+
+### Fixed
+
+- `NetworkPolicy` resolved to the wrong plural (`networkpolicyes`) when traced or fetched
+- Trace (`t` / `:trace`) now recognises objects managed by a ResourceSet or FluxInstance, using the same detection as the MANAGED-BY column (it only knew Kustomization and HelmRelease labels)
+- `:trace <kind>/<name>` is listed in the help overlay
+
 ## [1.2.0] - 2026-09-30
 
 # Version 1.2.0 Changelog

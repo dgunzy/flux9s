@@ -603,6 +603,28 @@ When adding support for a new Flux resource type:
     ];
     ```
 
+## Back Navigation (`src/tui/app/navigation.rs`)
+
+`Esc` / `Backspace` use one stack, `ViewState::nav_stack` (`NavEntry::View`
+or `NavEntry::Kind(spec)` for a kind list). Never write
+`current_view = …` for a user-visible transition; use one of three verbs:
+
+- `navigate_to(view)` — drill in (Enter, `d`, `y`, `l`, `g`, …). Pushes the
+  current view. Sibling detail views (detail ↔ YAML ↔ describe ↔ trace ↔
+  graph) replace each other, so Back returns to the list they came from;
+  views opened *from* the graph return to the graph.
+- `navigate_root(view)` — a `:` command switching top-level view (`:flux`,
+  `:favorites`, `:events`, `:pulse`, a first `:<kind>`). Closes everything
+  on the stack; Back then returns to the Flux list.
+- `navigate_back()` — pop. Returns `false` at the top (Esc then asks to quit).
+
+Whatever a view holds (log stream, events watch, kind list, workload fetch,
+edit state) is released in `leave_view`, an exhaustive match, when the view
+is closed — a new `View` variant won't compile until it says what it
+releases. Async failures use `back_from(view)` and edit results
+`leave_edit()`, which only navigate if that view is still on screen.
+`set_view` is a raw setter for tests and initial state.
+
 ## The Kind Registry (`:<kind>`)
 
 Every `:<kind>` command resolves to a `KindSpec` (`src/models/kinds.rs`) —

@@ -112,9 +112,26 @@ Type these commands in command mode (press `:`):
 | `:discover`        | Toggle CRD discovery for this session    |
 | `:discovery`       | Alias for `:discover`                    |
 | `:help`            | Show/hide help                           |
-| `:trace <res>`     | Trace ownership chain for a resource     |
+| `:trace`           | Trace the selected resource              |
+| `:trace <kind>/<n>` | Trace a resource by kind and name       |
 | `:q` or `:q!`      | Quit application                         |
 | `:quit` or `:exit` | Aliases for `:q`                         |
+
+### Tracing (`:trace`)
+
+`t` or `:trace` traces the selected resource. `:trace <kind>/<name>` traces a
+resource by name in the current namespace (`default` when watching all
+namespaces). It shows what manages the resource: Kustomization, HelmRelease,
+ResourceSet, or FluxInstance, then its source.
+
+The kind is resolved the same way as `:<kind>`:
+
+- Flux kinds and their aliases always work: `:trace ks/apps`,
+  `:trace hr/podinfo`, `:trace kustomization/apps`
+- Exact Kubernetes kind names always work: `:trace Deployment/web`
+- Kubernetes plurals and short names (`:trace deploy/web`, `:trace sts/db`,
+  `:trace cj/backup`) need native resources on (`:native`) — they come from
+  API discovery. With it off, flux9s says so instead of guessing
 
 ### Resource Type Commands
 

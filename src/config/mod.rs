@@ -13,9 +13,7 @@ pub mod schema;
 pub mod theme_loader;
 
 pub use loader::ConfigLoader;
-#[allow(unused_imports)] // Public API exports - may be used by external code
 pub use schema::Config;
-#[allow(unused_imports)] // Public API exports - may be used by external code
 pub use schema::UiConfig;
 #[cfg(feature = "tui")]
 pub use theme_loader::ThemeLoader;

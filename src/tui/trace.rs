@@ -7,7 +7,6 @@
 pub use crate::trace::{TraceNode, TraceResult, trace_object};
 
 /// Format trace result as a string (similar to flux trace output)
-#[allow(dead_code)] // May be used for debugging or future CLI output
 pub fn format_trace_result(result: &TraceResult) -> String {
     let mut output = Vec::new();
 
