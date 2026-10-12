@@ -9,13 +9,22 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# On Linux npm installs both the glibc and musl packages, and the musl one
+# sorts first but can't run on glibc (e.g. GitHub runners), so use the first
+# binary that actually runs rather than the first match.
 shopt -s nullglob
-dart_sass=(node_modules/sass-embedded-*/dart-sass)
-if [ ${#dart_sass[@]} -eq 0 ]; then
-  echo "Dart Sass not found — run 'npm ci' in docs/ first" >&2
+dart_sass=""
+for dir in node_modules/sass-embedded-*/dart-sass; do
+  if "$dir/sass" --version >/dev/null 2>&1; then
+    dart_sass="$PWD/$dir"
+    break
+  fi
+done
+if [ -z "$dart_sass" ]; then
+  echo "No runnable Dart Sass found — run 'npm ci' in docs/ first" >&2
   exit 1
 fi
-export PATH="$PWD/${dart_sass[0]}:$PATH"
+export PATH="$dart_sass:$PATH"
 # The theme module pin in go.mod must not move during a build.
 export GOFLAGS=-mod=readonly
 exec hugo "$@"
