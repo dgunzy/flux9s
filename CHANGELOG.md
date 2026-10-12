@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-12
+
+# Version 1.3.0 Changelog
+
+## Added
+- Support for editing non-Flux objects with data-driven write actions
+
+## Changed
+- Action table now drives keys, footer, and help text
+- Trace enhancements and code hygiene improvements
+
+## Fixed
+- Namespace filtering and context handling
+- Changelog accuracy
+
 ### Added
 
 - (preview) `e` edits non-Flux objects (#276): any kind the API server lists as patchable, in kind lists, inventory/event rows, and native YAML/describe views. Before the editor opens, flux9s resolves who manages the object and asks first — Flux (with different wording when the managing Kustomization/HelmRelease/ResourceSet is suspended: the change sticks until it's resumed), Helm, Argo CD, or a controller owner. Secrets are never editable (flux9s holds them redacted); `e` suggests `kubectl edit` there and for kinds the API won't patch
