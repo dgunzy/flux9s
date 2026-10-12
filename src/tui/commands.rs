@@ -6,6 +6,28 @@
 use crate::tui::submenu::{CommandSubmenu, SubmenuItem, SubmenuState};
 use anyhow::Result;
 
+/// Ids of the popups (submenus), shared by each popup's builder and the
+/// selection table in `app/submenus.rs`, so the two can't disagree.
+pub mod submenu_ids {
+    pub const CONTEXT: &str = "ctx";
+    pub const NAMESPACE: &str = "ns";
+    pub const SKIN: &str = "skin";
+    pub const CONTROLLER_LOGS: &str = "logs";
+    pub const POD_LOGS: &str = "pod-logs";
+    pub const POD_DELETE: &str = "pod-delete";
+    pub const LOG_CONTAINER: &str = "log-container";
+    /// Every popup id (tests check each has a selection handler).
+    pub const ALL: &[&str] = &[
+        CONTEXT,
+        NAMESPACE,
+        SKIN,
+        CONTROLLER_LOGS,
+        POD_LOGS,
+        POD_DELETE,
+        LOG_CONTAINER,
+    ];
+}
+
 /// Command definition
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -379,7 +401,7 @@ impl CommandSubmenu for ContextSubmenu {
             .collect();
 
         // Create submenu state with title and help text
-        let state = SubmenuState::new("ctx".to_string(), items)
+        let state = SubmenuState::new(submenu_ids::CONTEXT.to_string(), items)
             .with_title("Select Context".to_string())
             .with_help("j/k: Navigate | /: Filter | Enter: Select | Esc: Cancel".to_string());
 
@@ -429,7 +451,7 @@ impl CommandSubmenu for ThemeSubmenu {
             .collect();
 
         // Create submenu state with title and help text
-        let state = SubmenuState::new("skin".to_string(), items)
+        let state = SubmenuState::new(submenu_ids::SKIN.to_string(), items)
             .with_title("Select Theme".to_string())
             .with_help(
                 "j/k: Navigate | /: Filter | Enter: Apply | s: Save | Esc: Cancel".to_string(),
@@ -471,7 +493,7 @@ pub fn logs_submenu(
         .collect();
 
     Some(
-        SubmenuState::new("logs".to_string(), items)
+        SubmenuState::new(submenu_ids::CONTROLLER_LOGS.to_string(), items)
             .with_title("Controller Logs".to_string())
             .with_help("j/k: Navigate | /: Filter | Enter: Stream logs | Esc: Cancel".to_string()),
     )
@@ -511,7 +533,7 @@ pub fn namespace_submenu(
         .collect();
 
     Some(
-        SubmenuState::new("ns".to_string(), items)
+        SubmenuState::new(submenu_ids::NAMESPACE.to_string(), items)
             .with_title("Select Namespace".to_string())
             .with_help("j/k: Navigate | /: Filter | Enter: Select | Esc: Cancel".to_string()),
     )

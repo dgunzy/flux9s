@@ -1,7 +1,7 @@
 //! Centralized keybindings and navigation commands
 //!
-//! This module provides a single source of truth for all keybindings
-//! used in the footer, help view, and layout calculations.
+//! Footer hint type and layout helpers. The keys themselves (dispatch,
+//! footer layouts, help) live in the action table, `app/actions.rs`.
 
 use ratatui::style::Color;
 
@@ -21,172 +21,18 @@ impl NavigationCommand {
     }
 }
 
-/// Get all default navigation commands in the order they should appear
+/// Footer hints of the Flux resource list (every action in its layout
+/// applies there). Built from the action table in `app/actions.rs`, the
+/// single source for keys, footer, and help.
 pub fn get_navigation_commands() -> Vec<NavigationCommand> {
-    // Order matches original footer.rs to maintain snapshot compatibility
-    vec![
-        NavigationCommand::new("j/k ", "Navigate"),
-        NavigationCommand::new("^f/^b", "PgDn/Up"),
-        NavigationCommand::new(":", "Command"),
-        NavigationCommand::new("Enter", "Details"),
-        NavigationCommand::new("/", "Filter/Search"),
-        NavigationCommand::new("N/A/T/S", "Sort"),
-        NavigationCommand::new("s", "Suspend"),
-        NavigationCommand::new("r", "Resume"),
-        NavigationCommand::new("R", "Reconcile"),
-        NavigationCommand::new("y", "YAML"),
-        NavigationCommand::new("d", "Describe"),
-        NavigationCommand::new("e", "Edit"),
-        NavigationCommand::new("f", "Favorite"),
-        NavigationCommand::new("g", "Graph"),
-        NavigationCommand::new("h", "History"),
-        NavigationCommand::new("v", "Values"),
-        NavigationCommand::new("t", "Trace"),
-        NavigationCommand::new("W", "Reconcile+Source"),
-        NavigationCommand::new("^d", "Delete"),
-        NavigationCommand::new("?", "Help"),
-        NavigationCommand::new("Esc/q", "Back"),
-    ]
+    use crate::tui::app::actions::{FLUX_LAYOUT, layout_hints};
+    layout_hints(FLUX_LAYOUT)
 }
 
-/// Footer hints shared by every non-resource view: command mode, help, back.
-fn common_tail() -> [NavigationCommand; 3] {
-    [
-        NavigationCommand::new(":", "Command"),
-        NavigationCommand::new("?", "Help"),
-        NavigationCommand::new("Esc/q", "Back"),
-    ]
-}
-
-/// Footer hints for the workload list (#194, #263).
-pub fn get_workload_list_commands() -> Vec<NavigationCommand> {
-    let mut commands = vec![
-        NavigationCommand::new("j/k ", "Navigate"),
-        NavigationCommand::new("^f/^b", "PgDn/Up"),
-        NavigationCommand::new("Enter", "Details"),
-        NavigationCommand::new("l", "Logs"),
-        NavigationCommand::new("r", "Restart"),
-    ];
-    commands.extend(common_tail());
-    commands
-}
-
-/// Footer hints for a workload's detail view (#194, #263).
-pub fn get_workload_detail_commands() -> Vec<NavigationCommand> {
-    let mut commands = vec![
-        NavigationCommand::new("j/k ", "Scroll"),
-        NavigationCommand::new("^f/^b", "PgDn/Up"),
-        NavigationCommand::new("/", "Search"),
-        NavigationCommand::new("l", "Logs"),
-        NavigationCommand::new("r", "Restart"),
-        NavigationCommand::new("^d", "Delete pod"),
-    ];
-    commands.extend(common_tail());
-    commands
-}
-
-/// Footer hints for the inventory breakdown (#262).
-pub fn get_inventory_commands() -> Vec<NavigationCommand> {
-    let mut commands = vec![
-        NavigationCommand::new("j/k ", "Navigate"),
-        NavigationCommand::new("^f/^b", "PgDn/Up"),
-        NavigationCommand::new("Enter/d", "Describe"),
-        NavigationCommand::new("y", "YAML"),
-    ];
-    commands.extend(common_tail());
-    commands
-}
-
-/// Footer hints for YAML/describe of a native (non-Flux) object (#262):
-/// Flux operations don't apply, so only viewing keys are offered.
-pub fn get_native_object_commands() -> Vec<NavigationCommand> {
-    let mut commands = vec![
-        NavigationCommand::new("j/k ", "Scroll"),
-        NavigationCommand::new("^f/^b", "PgDn/Up"),
-        NavigationCommand::new("/", "Search"),
-        NavigationCommand::new("n/N", "Next/Prev"),
-        NavigationCommand::new("y", "YAML"),
-        NavigationCommand::new("d", "Describe"),
-    ];
-    commands.extend(common_tail());
-    commands
-}
-
-/// Footer hints for the log viewer.
-pub fn get_logs_commands() -> Vec<NavigationCommand> {
-    let mut commands = vec![
-        NavigationCommand::new("j/k ", "Scroll"),
-        NavigationCommand::new("^f/^b", "PgDn/Up"),
-        NavigationCommand::new("/", "Search"),
-        NavigationCommand::new("n/N", "Next/Prev"),
-        NavigationCommand::new("G", "Follow"),
-        NavigationCommand::new("c", "Container"),
-    ];
-    commands.extend(common_tail());
-    commands
-}
-
-/// Footer hints for the live events feed.
-pub fn get_events_commands() -> Vec<NavigationCommand> {
-    let mut commands = vec![
-        NavigationCommand::new("j/k ", "Navigate"),
-        NavigationCommand::new("^f/^b", "PgDn/Up"),
-        NavigationCommand::new("Enter", "Open"),
-        NavigationCommand::new("/", "Filter"),
-        NavigationCommand::new("y", "YAML"),
-        NavigationCommand::new("d", "Describe"),
-    ];
-    commands.extend(common_tail());
-    commands
-}
-
-/// Footer hints for a `:<kind>` list (#267).
-pub fn get_kind_list_commands() -> Vec<NavigationCommand> {
-    vec![
-        NavigationCommand::new("j/k ", "Navigate"),
-        NavigationCommand::new("^f/^b", "PgDn/Up"),
-        NavigationCommand::new("Enter/d", "Describe"),
-        NavigationCommand::new("y", "YAML"),
-        NavigationCommand::new("/", "Filter"),
-        NavigationCommand::new(":flux", "Flux view"),
-        NavigationCommand::new(":", "Command"),
-        NavigationCommand::new("?", "Help"),
-        NavigationCommand::new("Esc/q", "Back"),
-    ]
-}
-
-/// Footer hints for the HelmRelease values view (#264).
-pub fn get_helm_values_commands() -> Vec<NavigationCommand> {
-    let mut commands = vec![
-        NavigationCommand::new("j/k ", "Scroll"),
-        NavigationCommand::new("^f/^b", "PgDn/Up"),
-        NavigationCommand::new("/", "Search"),
-        NavigationCommand::new("n/N", "Next/Prev"),
-        NavigationCommand::new("x", "Reveal secrets"),
-        NavigationCommand::new("R", "Reconcile"),
-    ];
-    commands.extend(common_tail());
-    commands
-}
-
-/// Footer hints for the pulse dashboard.
-pub fn get_pulse_commands() -> Vec<NavigationCommand> {
-    let mut commands = vec![
-        NavigationCommand::new("j/k ", "Scroll"),
-        NavigationCommand::new("^f/^b", "PgDn/Up"),
-        NavigationCommand::new("/", "Search"),
-    ];
-    commands.extend(common_tail());
-    commands
-}
-
-/// Get navigation commands for the connection error state
+/// Footer hints before a connection is established.
 pub fn get_connection_error_commands() -> Vec<NavigationCommand> {
-    vec![
-        NavigationCommand::new(":", "Command"),
-        NavigationCommand::new("?", "Help"),
-        NavigationCommand::new("Esc/q", "Quit"),
-    ]
+    use crate::tui::app::actions::{CONNECTION_ERROR_LAYOUT, layout_hints};
+    layout_hints(CONNECTION_ERROR_LAYOUT)
 }
 
 /// Convert navigation commands to segments with color for footer rendering
@@ -207,37 +53,6 @@ pub fn navigation_commands_to_segments_simple(
     commands
         .iter()
         .map(|cmd| (cmd.key.to_string(), cmd.label.to_string()))
-        .collect()
-}
-
-/// Get resource-specific commands for help view
-///
-/// Returns commands that are resource-specific (excluding navigation, command mode, filter, help, quit)
-/// in the order they should appear in the help view, with help-specific descriptions.
-pub fn get_resource_help_commands() -> Vec<(&'static str, &'static str)> {
-    let commands = get_navigation_commands();
-    commands
-        .iter()
-        .filter_map(|cmd| {
-            // Map resource-specific commands to help format
-            match cmd.key {
-                "Enter" => Some(("<Enter>", "View resource details")),
-                "s" => Some(("<s>", "Suspend reconciliation")),
-                "r" => Some(("<r>", "Resume reconciliation")),
-                "R" => Some(("<R>", "Reconcile resource")),
-                "y" => Some(("<y>", "View YAML manifest")),
-                "d" => Some(("<d>", "Describe resource")),
-                "e" => Some(("<e>", "Edit resource in system editor")),
-                "f" => Some(("<f>", "Toggle favorite")),
-                "g" => Some(("<g>", "View resource graph")),
-                "h" => Some(("<h>", "View reconciliation history")),
-                "v" => Some(("<v>", "HelmRelease effective values")),
-                "t" => Some(("<t>", "Trace ownership chain")),
-                "W" => Some(("<W>", "Reconcile with source")),
-                "^d" => Some(("<Ctrl+d>", "Delete resource")),
-                _ => None, // Skip non-resource commands (j/k, :, /, ?, Esc)
-            }
-        })
         .collect()
 }
 

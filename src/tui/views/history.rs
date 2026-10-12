@@ -101,8 +101,9 @@ pub fn render_reconciliation_history(
 
     // Handle scrolling
     let visible_height = inner_area.height as usize;
+    let viewport =
+        crate::tui::views::scroll::Viewport::text(scroll_offset, lines.len(), visible_height);
     let max_scroll = lines.len().saturating_sub(visible_height);
-    *scroll_offset = (*scroll_offset).min(max_scroll);
 
     // Get visible lines with syntax highlighting
     let visible_lines: Vec<Line> = lines
@@ -164,6 +165,7 @@ pub fn render_reconciliation_history(
         .wrap(ratatui::widgets::Wrap { trim: false });
 
     f.render_widget(paragraph, inner_area);
+    viewport.render_scrollbar(f, area, theme);
 
     // Show scroll indicator if needed
     if lines.len() > visible_height {

@@ -56,6 +56,7 @@ Use these keyboard shortcuts to navigate flux9s:
 | `:`       | Command mode (e.g., `:kustomization`, `:gitrepository`) |
 | `Enter`   | View resource details                                   |
 | `/`       | Filter resources by name (in list views) or search text (in YAML/describe/trace views) |
+| `?`       | Help overlay — scroll it with `j`/`k`, `PgUp`/`PgDn`, `g`/`G`; `?` or `Esc` closes |
 | `n` / `N` | Jump to next/previous search match (in YAML/describe/trace views) |
 | `Shift+N` | Sort list by name (press again to reverse, third press restores default order) |
 | `Shift+A` | Sort list by age                                        |
@@ -223,6 +224,8 @@ qualified `plural.group` form (`:clusters.postgresql.cnpg.io`).
 - Very large lists show the first 5,000 rows (sorted by namespace/name) and
   say so in the title — narrow with `:ns` or `/`. Only the displayed text of
   each object is kept in memory (listing Secrets holds no secret data).
+- If the first listing stalls (a slow or unreachable API server), the list says
+  so after 10s and retries with a fresh request instead of waiting silently.
 - Flux kinds keep their meaning: `:ks`, `:hr`, … still filter the Flux list.
   flux9s commands also win over kind names — `:ns`, `:events`, and `:logs`
   keep their flux9s behaviour; use the plural (`:namespaces`) for the kind.
@@ -377,6 +380,7 @@ The graph view displays:
   - `Ctrl+d` in the detail deletes a pod so its controller replaces it; with several pods a picker opens first.
   - Both ask for confirmation and are blocked in read-only mode.
   - The detail is live: the workload, its pods, and its events are watched while it is open, so a restart's new pods appear and old ones drain away as it happens.
+  - The workload list's READY and STATUS are live too (each workload is watched while the list is open), so a restart or scale shows up without reopening the graph.
   - A **Resources** section shows each pod's CPU and memory use next to its request and limit, with a bar filled against the limit (`│` marks the request) that turns amber at 75% and red at 90% of the limit (throttling / OOM risk). CPU is always in millicores so the three compare directly. The source — kubelet, metrics-server, or none (requests/limits only) — is picked automatically and named in the section header; see [Pod Usage Metrics](../configuration/#pod-usage-metrics).
 - `Esc` / `Backspace` - Return to the graph (when you opened a view from it), then back to the resource list.
 

@@ -10,6 +10,19 @@ use crate::tui::submenu::SubmenuState;
 use crate::watcher::ResourceKey;
 use std::collections::HashSet;
 
+/// How a view responds to j/k, PgUp/PgDn, and Ctrl+f/b.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollModel {
+    /// Free scrolling by line (its offset is `View::scroll_offset_mut`).
+    Offset,
+    /// Moves the selected row; the list follows it.
+    Selection,
+    /// Moves keyboard focus between graph nodes.
+    Focus,
+    /// Doesn't scroll.
+    Fixed,
+}
+
 /// View types for the application
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum View {
@@ -52,6 +65,31 @@ pub enum View {
 }
 
 impl View {
+    /// How this view scrolls — the one place a view declares it. Exhaustive
+    /// on purpose: a new view must choose. Rendering pairs it with
+    /// `views::scroll::Viewport` (`text` for `Offset`, `list` for
+    /// `Selection`), which also draws the scroll indicator.
+    pub fn scroll_model(self) -> ScrollModel {
+        match self {
+            View::ResourceYAML
+            | View::ResourceDescribe
+            | View::ResourceTrace
+            | View::ResourceHistory
+            | View::HelmValues
+            | View::Logs
+            | View::WorkloadDetail
+            | View::Pulse => ScrollModel::Offset,
+            View::ResourceList
+            | View::ResourceFavorites
+            | View::EventList
+            | View::WorkloadList
+            | View::InventoryList
+            | View::KindList => ScrollModel::Selection,
+            View::ResourceGraph => ScrollModel::Focus,
+            View::ResourceDetail | View::ResourceEdit | View::Help => ScrollModel::Fixed,
+        }
+    }
+
     /// Mutable line-scroll offset for the simple text/log views that scroll one
     /// line at a time. Returns `None` for views with bespoke navigation: lists
     /// use a selection index and the graph view uses node focus. This is the
@@ -71,32 +109,11 @@ impl View {
         }
     }
 
-    /// Footer key hints for this view. Views that act on Flux resources share
-    /// the full resource set; the others advertise only the keys they handle,
-    /// so e.g. `r` reads "Restart" in the workload views, not "Resume".
-    /// Add a new view's hints here (and its key handling in `events.rs`).
-    pub fn footer_commands(self) -> Vec<crate::tui::keybindings::NavigationCommand> {
-        use crate::tui::keybindings as kb;
-        match self {
-            View::WorkloadList => kb::get_workload_list_commands(),
-            View::WorkloadDetail => kb::get_workload_detail_commands(),
-            View::InventoryList => kb::get_inventory_commands(),
-            View::Logs => kb::get_logs_commands(),
-            View::EventList => kb::get_events_commands(),
-            View::Pulse => kb::get_pulse_commands(),
-            View::HelmValues => kb::get_helm_values_commands(),
-            View::KindList => kb::get_kind_list_commands(),
-            View::ResourceList
-            | View::ResourceDetail
-            | View::ResourceDescribe
-            | View::ResourceYAML
-            | View::ResourceTrace
-            | View::ResourceGraph
-            | View::ResourceFavorites
-            | View::ResourceHistory
-            | View::ResourceEdit
-            | View::Help => kb::get_navigation_commands(),
-        }
+    /// Footer layout for this view (see `actions.rs`): the footer shows
+    /// the layout's actions that apply in the current state. Add a new
+    /// view's layout there, next to its actions.
+    pub(crate) fn footer_layout(self) -> &'static [crate::tui::app::actions::FooterItem] {
+        crate::tui::app::actions::view_layout(self)
     }
 
     /// Whether this is a list-style view (the main resource list or favorites)
@@ -360,6 +377,8 @@ pub struct UIState {
     pub command_buffer: String,
     /// Whether to show help overlay
     pub show_help: bool,
+    /// Scroll offset of the help overlay (clamped when rendered).
+    pub help_scroll: usize,
     /// Whether to show quit confirmation dialog.
     ///
     /// Shown when `q` or `Esc` is pressed at the top-level view. This is
@@ -390,6 +409,7 @@ impl UIState {
             command_mode: false,
             command_buffer: String::new(),
             show_help: false,
+            help_scroll: 0,
             show_quit_confirm: false,
             status_message: None,
             status_message_time: None,
@@ -709,9 +729,43 @@ mod tests {
             View::Help,
         ];
         for view in views {
-            let keys: Vec<_> = view.footer_commands().iter().map(|c| c.key).collect();
+            let hints = crate::tui::app::actions::layout_hints(view.footer_layout());
+            let keys: Vec<_> = hints.iter().map(|c| c.key).collect();
             assert!(keys.contains(&"?"), "{view:?} footer lacks help");
             assert!(keys.contains(&"Esc/q"), "{view:?} footer lacks back");
+        }
+    }
+
+    #[test]
+    fn offset_views_have_an_offset_and_only_they_do() {
+        let views = [
+            View::ResourceList,
+            View::ResourceDetail,
+            View::ResourceDescribe,
+            View::ResourceYAML,
+            View::ResourceTrace,
+            View::ResourceGraph,
+            View::ResourceFavorites,
+            View::ResourceHistory,
+            View::EventList,
+            View::Logs,
+            View::WorkloadList,
+            View::WorkloadDetail,
+            View::InventoryList,
+            View::Pulse,
+            View::HelmValues,
+            View::KindList,
+            View::ResourceEdit,
+            View::Help,
+        ];
+        let mut vs = ViewState::default();
+        for view in views {
+            let has_offset = view.scroll_offset_mut(&mut vs).is_some();
+            assert_eq!(
+                view.scroll_model() == ScrollModel::Offset,
+                has_offset,
+                "{view:?}: scroll_model and scroll_offset_mut disagree"
+            );
         }
     }
 

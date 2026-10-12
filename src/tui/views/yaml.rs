@@ -170,8 +170,11 @@ pub fn render_resource_yaml(
     decorate_title_with_search(&mut title, search);
 
     // Clamp scroll offset to valid range
-    let max_scroll = all_lines.len().saturating_sub(visible_height as usize);
-    *yaml_scroll_offset = (*yaml_scroll_offset).min(max_scroll);
+    let viewport = crate::tui::views::scroll::Viewport::text(
+        yaml_scroll_offset,
+        all_lines.len(),
+        visible_height as usize,
+    );
 
     // Get visible lines based on scroll offset
     // Preserve leading spaces for proper YAML indentation and apply syntax highlighting
@@ -198,6 +201,7 @@ pub fn render_resource_yaml(
         .block(block)
         .wrap(Wrap { trim: false });
     f.render_widget(paragraph, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 /// Highlight a YAML line using the active theme's label, value, and secondary text colors.

@@ -110,7 +110,8 @@ pub async fn execute_workload_action(
 }
 
 /// A workload reference as carried inside a graph WorkloadGroup node's
-/// description, one per line: `Kind|name|namespace|<indicator>|<status>`.
+/// description, one per line:
+/// `Kind|name|namespace|<indicator>|<status>|<apiVersion>`.
 /// This struct is the single source of truth for that format — the graph
 /// builder encodes with [`Self::to_graph_line`], and the graph renderer and
 /// the workload list view decode with [`Self::parse_graph_line`].
@@ -121,29 +122,50 @@ pub struct WorkloadRef {
     pub namespace: String,
     /// The pre-rendered readiness indicator (●/○/?).
     pub indicator: String,
-    /// Human-readable status (e.g. "Replicas: 1/1").
+    /// Human-readable status (e.g. "Replicas: 1/1") when the graph was built.
     pub status: String,
+    /// The workload's apiVersion, so the workload list can watch it live.
+    pub api_version: String,
 }
 
 impl WorkloadRef {
     /// Encode for a WorkloadGroup node description line.
     pub fn to_graph_line(&self) -> String {
+        // apiVersion goes last: a status may not contain `|`, but keeping
+        // the old field order keeps older lines decodable.
         format!(
-            "{}|{}|{}|{}|{}",
-            self.kind, self.name, self.namespace, self.indicator, self.status
+            "{}|{}|{}|{}|{}|{}",
+            self.kind,
+            self.name,
+            self.namespace,
+            self.indicator,
+            self.status.replace('|', "/"),
+            self.api_version
         )
     }
 
     /// Decode a WorkloadGroup node description line.
     pub fn parse_graph_line(line: &str) -> Option<Self> {
-        let mut parts = line.splitn(5, '|');
+        let mut parts = line.splitn(6, '|');
         Some(Self {
             kind: parts.next()?.to_string(),
             name: parts.next()?.to_string(),
             namespace: parts.next()?.to_string(),
             indicator: parts.next()?.to_string(),
             status: parts.next().unwrap_or_default().to_string(),
+            // Graph workloads are the built-in apps/v1 kinds.
+            api_version: parts.next().unwrap_or("apps/v1").to_string(),
         })
+    }
+
+    /// The object to watch for this row's live status.
+    pub fn status_target(&self) -> crate::kube::inventory::InventoryEntry {
+        crate::kube::inventory::InventoryEntry {
+            kind: self.kind.clone(),
+            name: self.name.clone(),
+            namespace: self.namespace.clone(),
+            api_version: self.api_version.clone(),
+        }
     }
 }
 

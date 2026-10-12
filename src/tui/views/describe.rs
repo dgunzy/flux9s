@@ -389,8 +389,11 @@ pub fn render_resource_describe(
         apply_text_search(search, &match_lines, describe_scroll_offset, visible_height);
     decorate_title_with_search(&mut title, search);
 
-    let max_scroll = all_lines.len().saturating_sub(visible_height);
-    *describe_scroll_offset = (*describe_scroll_offset).min(max_scroll);
+    let viewport = crate::tui::views::scroll::Viewport::text(
+        describe_scroll_offset,
+        all_lines.len(),
+        visible_height,
+    );
 
     let visible_lines: Vec<Line> = all_lines
         .iter()
@@ -414,6 +417,7 @@ pub fn render_resource_describe(
         .block(block)
         .wrap(Wrap { trim: false });
     f.render_widget(paragraph, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 #[cfg(test)]

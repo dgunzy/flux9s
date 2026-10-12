@@ -98,9 +98,15 @@ pub fn render_resource_graph(
     }
 
     *scroll_offset = (*scroll_offset).min(max_scroll);
+    let viewport = crate::tui::views::scroll::Viewport::text(
+        scroll_offset,
+        max_scroll + visible_height,
+        visible_height,
+    );
 
     // Render graph using improved layout with line-based scrolling
     render_graph_nodes_and_edges(f, inner_area, &graph, *scroll_offset, focus_index, theme);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 /// Scroll offset that keeps the focused node visible: scrolls up to its top

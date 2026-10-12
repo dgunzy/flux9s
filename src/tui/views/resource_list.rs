@@ -51,10 +51,11 @@ pub fn render_resource_list(
     const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling
 
     // Adjust scroll offset based on selected index with buffer
-    crate::tui::views::helpers::update_scroll_offset(
+    let viewport = crate::tui::views::scroll::Viewport::list_with_margin(
         selected_index,
-        visible_height,
         scroll_offset,
+        resources.len(),
+        visible_height,
         SCROLL_BUFFER,
     );
 
@@ -370,6 +371,7 @@ pub fn render_resource_list(
         .block(Block::default().title(title).borders(Borders::ALL));
 
     f.render_widget(table, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 pub fn get_status_indicator(

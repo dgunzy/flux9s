@@ -117,10 +117,11 @@ pub fn render_kind_list(
     }
 
     let visible_height = (area.height as usize).saturating_sub(3);
-    crate::tui::views::helpers::update_scroll_offset(
+    let viewport = crate::tui::views::scroll::Viewport::list_with_margin(
         selected_index,
-        visible_height,
         scroll_offset,
+        rows.len(),
+        visible_height,
         2,
     );
     let selected = selected_index.min(rows.len().saturating_sub(1));
@@ -197,6 +198,7 @@ pub fn render_kind_list(
         .header(header)
         .block(block);
     f.render_widget(table, area);
+    viewport.render_scrollbar(f, area, theme);
 }
 
 #[cfg(test)]

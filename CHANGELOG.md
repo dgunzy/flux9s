@@ -9,11 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Keys, footer hints, and help now come from one action table (#276), so they can't drift. Each view's footer shows only the keys that work there (e.g. the YAML/describe views no longer advertise `Enter`, `f`, or sort keys), and the help overlay is generated from the same table and the `:` command table. `Ctrl`+letter no longer triggers the plain letter's action
+- Scrollable views show a subtle scroll thumb on their right border — sized to how much is visible and placed where you are — in every text view, list, the graph, and help. Scrolling is one mechanism (`View::scroll_model` + `Viewport`), so every view clamps and scrolls the same way
 - Back navigation (`Esc` / `Backspace`) uses one history for every view, replacing five separate "where to go back to" fields. Back now always returns to where you came from — e.g. trace opened from a graph returns to the graph, and `:logs` from a detail view returns to it. `Backspace` behaves exactly like `Esc` except it never asks to quit. `:` commands that switch top-level view (`:flux`, `:favorites`, `:events`, `:pulse`) close what was open (e.g. a kind list's watch) instead of leaving it running
 - `:trace <kind>/<name>` resolves kinds through the kind registry, like `:<kind>`: Flux aliases (`ks`, `hr`), Flux-adjacent kinds, and with native resources on any served kind by plural or short name (`deploy`, `sts`, `cj`). Exact kind names (`Deployment`) work without it
 
 ### Fixed
 
+- The help overlay (`?`) was cut off on short terminals with no way to see the rest; it now scrolls with `j`/`k`, `PgUp`/`PgDn`, `Ctrl+f`/`b`, `g`/`G`
+- The graph's workload list showed readiness from when the graph was built; READY and STATUS are now watched live, so a restart or scale is visible immediately
+- A kind list whose first listing stalled (e.g. a request stuck on a dead connection to a remote API server) showed "Listing…" for up to ~5 minutes; it now reports the stall after 10s and retries with a fresh watch (backing off to 60s)
 - `NetworkPolicy` resolved to the wrong plural (`networkpolicyes`) when traced or fetched
 - Trace (`t` / `:trace`) now recognises objects managed by a ResourceSet or FluxInstance, using the same detection as the MANAGED-BY column (it only knew Kustomization and HelmRelease labels)
 - `:trace <kind>/<name>` is listed in the help overlay
