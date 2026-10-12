@@ -129,9 +129,8 @@ pub fn render_resource_yaml(
         &crate::tui::views::helpers::clean_resource_json(&obj_json),
     );
 
-    // Convert JSON to YAML using serde_yaml with proper formatting
-    // serde_yaml automatically handles indentation with spaces
-    let yaml_text = match serde_yaml::to_string(&cleaned_json) {
+    // Render the JSON as YAML (two-space indentation, quoted ambiguous strings)
+    let yaml_text = match crate::yaml::to_string(&cleaned_json) {
         Ok(yaml) => yaml,
         Err(e) => {
             // Fallback to JSON pretty print if YAML conversion fails
@@ -291,7 +290,10 @@ pub(crate) fn highlight_yaml_line(line: &str, theme: &Theme) -> Line<'static> {
             '-' if current_token.is_empty() && chars.peek().map(|c| *c == ' ') == Some(true) => {
                 // List item marker
                 spans.push(Span::styled("-", Style::default().fg(theme.text_label)));
-                chars.next(); // Skip the space
+                // Keep the space after the marker (`- item`, not `-item`)
+                if let Some(space) = chars.next() {
+                    spans.push(Span::raw(space.to_string()));
+                }
             }
             ' ' | '\t' => {
                 if !current_token.is_empty() {
@@ -379,6 +381,25 @@ mod tests {
         apply_text_search(&mut search, &[5], &mut scroll, 30);
         assert_eq!(search.current_match, 0);
         assert_eq!(search.total_matches, 1);
+    }
+
+    #[test]
+    fn highlight_keeps_the_space_after_a_list_marker() {
+        let theme = crate::tui::theme::Theme::default();
+        let text = |line: &str| -> String {
+            highlight_yaml_line(line, &theme)
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect()
+        };
+        for line in [
+            "  - finalizers.fluxcd.io",
+            "- type: Ready",
+            "  -not-a-marker: x",
+        ] {
+            assert_eq!(text(line), line);
+        }
     }
 
     #[test]

@@ -642,3 +642,21 @@ code:not(pre code) {
 .td-page-meta__child {
   display: none !important;
 }
+
+// Demo videos are recorded at 1600x940 (docs/demos/*.tape). Size their box to
+// that ratio instead of 16:9, so they fill the column edge to edge like the
+// screenshots instead of sitting inside side padding.
+.ratio.demo-ratio {
+  --bs-aspect-ratio: calc(940 / 1600 * 100%);
+}
+
+// Docsy caps prose paragraphs at 80% for readability; a paragraph that is only
+// a screenshot should span the column like the videos do.
+.td-content > p:has(> img:only-child) {
+  max-width: 100%;
+
+  > img {
+    width: 100%;
+    height: auto;
+  }
+}

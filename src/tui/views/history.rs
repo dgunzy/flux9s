@@ -82,7 +82,7 @@ pub fn render_reconciliation_history(
         "history": history_array
     });
 
-    let yaml_str = match serde_yaml::to_string(&history_obj) {
+    let yaml_str = match crate::yaml::to_string(&history_obj) {
         Ok(yaml) => yaml,
         Err(e) => {
             let text = vec![

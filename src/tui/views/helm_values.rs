@@ -63,7 +63,7 @@ fn build_lines(values: &HelmValues, theme: &Theme) -> Vec<Line<'static>> {
             Style::default().fg(theme.text_secondary),
         )));
     } else {
-        let yaml = serde_yaml::to_string(&values.values)
+        let yaml = crate::yaml::to_string(&values.values)
             .unwrap_or_else(|e| format!("Error converting values to YAML: {e}"));
         lines.extend(yaml.lines().map(|line| highlight_yaml_line(line, theme)));
     }

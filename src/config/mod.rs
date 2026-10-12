@@ -33,7 +33,7 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
         "ui.rbacWarnings" => Ok(config.ui.rbac_warnings.to_string()),
         "namespaceHotkeys" => {
             // Return as YAML array
-            serde_yaml::to_string(&config.namespace_hotkeys)
+            crate::yaml::to_string(&config.namespace_hotkeys)
                 .map_err(|e| anyhow::anyhow!("Failed to serialize namespaceHotkeys: {}", e))
         }
         "defaultResourceFilter" => Ok(config.default_resource_filter.clone().unwrap_or_default()),
@@ -46,18 +46,18 @@ pub fn get_config_value(config: &schema::Config, key: &str) -> anyhow::Result<St
         // config — the fully-populated skeleton tells "empty" apart from
         // "not a config key at all".
         _ => {
-            let resolve = |value: &serde_yaml::Value| -> Option<serde_yaml::Value> {
+            let resolve = |value: &serde_json::Value| -> Option<serde_json::Value> {
                 key.split('.')
                     .try_fold(value.clone(), |node, part| node.get(part).cloned())
             };
-            let current = serde_yaml::to_value(config)
+            let current = serde_json::to_value(config)
                 .map_err(|e| anyhow::anyhow!("Failed to serialize configuration: {}", e))?;
             if let Some(node) = resolve(&current) {
-                return serde_yaml::to_string(&node)
+                return crate::yaml::to_string(&node)
                     .map(|s| s.trim_end().to_string())
                     .map_err(|e| anyhow::anyhow!("Failed to serialize {}: {}", key, e));
             }
-            let skeleton = serde_yaml::to_value(schema::Config::fully_populated())
+            let skeleton = serde_json::to_value(schema::Config::fully_populated())
                 .map_err(|e| anyhow::anyhow!("Failed to serialize configuration: {}", e))?;
             if resolve(&skeleton).is_some() {
                 Ok(String::new()) // real field, currently empty/unset
@@ -136,7 +136,7 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
             // Parse as YAML array or comma-separated list
             let hotkeys: Vec<String> = if value.trim_start().starts_with('[') {
                 // YAML array format
-                serde_yaml::from_str(value).context(
+                crate::yaml::from_str(value).context(
                     "namespaceHotkeys must be a YAML array (e.g., ['all', 'flux-system', 'ns1'])",
                 )?
             } else {

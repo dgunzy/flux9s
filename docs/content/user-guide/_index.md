@@ -26,7 +26,7 @@ for the keys that work in the current view.
 
 <div class="mb-4">
   <h3>Graph, workload detail, logs, and a restart</h3>
-  <div class="ratio ratio-16x9" style="background: transparent;">
+  <div class="ratio demo-ratio" style="background: transparent;">
     <video autoplay loop muted playsinline class="w-100 h-100" style="object-fit: contain; background: transparent;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
       <source src="/images/demo-graph.mp4" type="video/mp4">
       Your browser does not support the video tag.
@@ -39,7 +39,7 @@ for the keys that work in the current view.
 
 <div class="mb-4">
   <h3>Native resources: any kind, and what manages it</h3>
-  <div class="ratio ratio-16x9" style="background: transparent;">
+  <div class="ratio demo-ratio" style="background: transparent;">
     <video autoplay loop muted playsinline class="w-100 h-100" style="object-fit: contain; background: transparent;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
       <source src="/images/demo-native.mp4" type="video/mp4">
       Your browser does not support the video tag.
@@ -52,7 +52,7 @@ for the keys that work in the current view.
 
 <div class="mb-4">
   <h3>Theme selection with live preview</h3>
-  <div class="ratio ratio-16x9" style="background: transparent;">
+  <div class="ratio demo-ratio" style="background: transparent;">
     <video autoplay loop muted playsinline class="w-100 h-100" style="object-fit: contain; background: transparent;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
       <source src="/images/demo-skin.mp4" type="video/mp4">
       Your browser does not support the video tag.

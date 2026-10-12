@@ -84,7 +84,7 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
             } else {
                 // Print all config as YAML
                 let yaml =
-                    serde_yaml::to_string(&config).context("Failed to serialize configuration")?;
+                    crate::yaml::to_string(&config).context("Failed to serialize configuration")?;
                 print!("{}", yaml);
             }
         }
@@ -246,35 +246,29 @@ fn display_config_with_defaults(config: &Config) {
 /// future) appears in the listing. Values come from the user's config;
 /// fields it omitted render as their empty form with a `# (default)` marker.
 fn render_config_listing(config: &Config) -> String {
-    let current = serde_yaml::to_value(config).unwrap_or_default();
-    let defaults = serde_yaml::to_value(Config::default()).unwrap_or_default();
-    let skeleton = serde_yaml::to_value(Config::fully_populated()).unwrap_or_default();
+    let current = serde_json::to_value(config).unwrap_or_default();
+    let defaults = serde_json::to_value(Config::default()).unwrap_or_default();
+    let skeleton = serde_json::to_value(Config::fully_populated()).unwrap_or_default();
 
     let mut out = String::new();
-    if let Some(skel) = skeleton.as_mapping() {
-        render_section(
-            &mut out,
-            skel,
-            current.as_mapping(),
-            defaults.as_mapping(),
-            0,
-        );
+    if let Some(skel) = skeleton.as_object() {
+        render_section(&mut out, skel, current.as_object(), defaults.as_object(), 0);
     }
     out
 }
 
 fn render_section(
     out: &mut String,
-    skeleton: &serde_yaml::Mapping,
-    current: Option<&serde_yaml::Mapping>,
-    defaults: Option<&serde_yaml::Mapping>,
+    skeleton: &serde_json::Map<String, serde_json::Value>,
+    current: Option<&serde_json::Map<String, serde_json::Value>>,
+    defaults: Option<&serde_json::Map<String, serde_json::Value>>,
     indent: usize,
 ) {
-    use serde_yaml::Value;
+    use serde_json::Value;
 
     let pad = "  ".repeat(indent);
     for (key, skel_val) in skeleton {
-        let key_str = key.as_str().unwrap_or_default();
+        let key_str = key.as_str();
         let cur = current.and_then(|m| m.get(key));
         let def = defaults.and_then(|m| m.get(key));
         // A field the user's config omitted is at its (empty) default.
@@ -291,24 +285,24 @@ fn render_section(
             // holds sample data for those. The defaults config tells them
             // apart: struct sections serialize their fields, user maps are
             // empty-and-skipped by default.
-            Value::Mapping(skel_inner) => {
+            Value::Object(skel_inner) => {
                 let struct_like = def
-                    .and_then(Value::as_mapping)
+                    .and_then(Value::as_object)
                     .is_some_and(|m| !m.is_empty());
                 if struct_like {
                     out.push_str(&format!("{pad}{key_str}:\n"));
                     render_section(
                         out,
                         skel_inner,
-                        cur.and_then(Value::as_mapping),
-                        def.and_then(Value::as_mapping),
+                        cur.and_then(Value::as_object),
+                        def.and_then(Value::as_object),
                         indent + 1,
                     );
                 } else {
-                    match cur.and_then(Value::as_mapping).filter(|m| !m.is_empty()) {
+                    match cur.and_then(Value::as_object).filter(|m| !m.is_empty()) {
                         Some(m) => {
                             out.push_str(&format!("{pad}{key_str}:\n"));
-                            let yaml = serde_yaml::to_string(&Value::Mapping(m.clone()))
+                            let yaml = crate::yaml::to_string(&Value::Object(m.clone()))
                                 .unwrap_or_default();
                             for line in yaml.lines() {
                                 out.push_str(&format!("{pad}  {line}\n"));
@@ -318,17 +312,15 @@ fn render_section(
                     }
                 }
             }
-            Value::Sequence(_) => {
-                match cur.and_then(Value::as_sequence).filter(|s| !s.is_empty()) {
-                    Some(seq) => {
-                        out.push_str(&format!("{pad}{key_str}:{marker}\n"));
-                        for item in seq {
-                            out.push_str(&format!("{pad}  - {}\n", scalar_str(item)));
-                        }
+            Value::Array(_) => match cur.and_then(Value::as_array).filter(|s| !s.is_empty()) {
+                Some(seq) => {
+                    out.push_str(&format!("{pad}{key_str}:{marker}\n"));
+                    for item in seq {
+                        out.push_str(&format!("{pad}  - {}\n", scalar_str(item)));
                     }
-                    None => out.push_str(&format!("{pad}{key_str}: []{marker}\n")),
                 }
-            }
+                None => out.push_str(&format!("{pad}{key_str}: []{marker}\n")),
+            },
             _ => {
                 let rendered = cur.map(scalar_str).unwrap_or_else(|| "~".to_string());
                 out.push_str(&format!("{pad}{key_str}: {rendered}{marker}\n"));
@@ -340,26 +332,26 @@ fn render_section(
 /// A field missing from a serialized config was skipped because it is empty;
 /// resolve it to the empty value of its type (per the skeleton) so it
 /// compares equal to an equally-empty default.
-fn normalize(value: Option<&serde_yaml::Value>, skeleton: &serde_yaml::Value) -> serde_yaml::Value {
-    use serde_yaml::Value;
+fn normalize(value: Option<&serde_json::Value>, skeleton: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
     match value {
         Some(v) => v.clone(),
         None => match skeleton {
-            Value::Mapping(_) => Value::Mapping(serde_yaml::Mapping::new()),
-            Value::Sequence(_) => Value::Sequence(Vec::new()),
+            Value::Object(_) => Value::Object(serde_json::Map::new()),
+            Value::Array(_) => Value::Array(Vec::new()),
             _ => Value::Null,
         },
     }
 }
 
-fn scalar_str(value: &serde_yaml::Value) -> String {
-    use serde_yaml::Value;
+fn scalar_str(value: &serde_json::Value) -> String {
+    use serde_json::Value;
     match value {
         Value::Null => "~".to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => s.clone(),
-        other => serde_yaml::to_string(other)
+        other => crate::yaml::to_string(other)
             .unwrap_or_default()
             .trim_end()
             .to_string(),
@@ -414,12 +406,12 @@ mod tests {
     /// Dotted camelCase paths for every config field, from the fully
     /// populated skeleton (a serialized real config hides skipped fields).
     fn all_field_paths() -> Vec<String> {
-        let skeleton = serde_yaml::to_value(Config::fully_populated()).unwrap();
-        let defaults = serde_yaml::to_value(Config::default()).unwrap();
+        let skeleton = serde_json::to_value(Config::fully_populated()).unwrap();
+        let defaults = serde_json::to_value(Config::default()).unwrap();
         let mut paths = Vec::new();
         collect_paths(
-            skeleton.as_mapping().unwrap(),
-            defaults.as_mapping(),
+            skeleton.as_object().unwrap(),
+            defaults.as_object(),
             "",
             &mut paths,
         );
@@ -427,14 +419,14 @@ mod tests {
     }
 
     fn collect_paths(
-        skeleton: &serde_yaml::Mapping,
-        defaults: Option<&serde_yaml::Mapping>,
+        skeleton: &serde_json::Map<String, serde_json::Value>,
+        defaults: Option<&serde_json::Map<String, serde_json::Value>>,
         prefix: &str,
         out: &mut Vec<String>,
     ) {
-        use serde_yaml::Value;
+        use serde_json::Value;
         for (key, skel_val) in skeleton {
-            let key_str = key.as_str().unwrap();
+            let key_str = key.as_str();
             let path = if prefix.is_empty() {
                 key_str.to_string()
             } else {
@@ -444,12 +436,12 @@ mod tests {
             // Recurse into struct sections only — free-form maps hold sample
             // data, not fields (same rule as render_section).
             match skel_val {
-                Value::Mapping(inner)
+                Value::Object(inner)
                     if def
-                        .and_then(Value::as_mapping)
+                        .and_then(Value::as_object)
                         .is_some_and(|m| !m.is_empty()) =>
                 {
-                    collect_paths(inner, def.and_then(Value::as_mapping), &path, out);
+                    collect_paths(inner, def.and_then(Value::as_object), &path, out);
                 }
                 _ => out.push(path),
             }

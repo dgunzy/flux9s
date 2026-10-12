@@ -60,7 +60,7 @@ pub struct Config {
 
     /// Cluster-specific settings (merged with cluster configs)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub cluster: HashMap<String, serde_yaml::Value>,
+    pub cluster: HashMap<String, serde_json::Value>,
 
     /// Favorite resources (resource keys: "resource_type:namespace:name")
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -121,7 +121,7 @@ impl Config {
             context_skins: HashMap::from([("my-context".to_string(), "default".to_string())]),
             cluster: HashMap::from([(
                 "my-cluster".to_string(),
-                serde_yaml::Value::String("value".to_string()),
+                serde_json::Value::String("value".to_string()),
             )]),
             favorites: vec!["Kustomization:flux-system:my-app".to_string()],
             default_resource_filter: Some("Kustomization".to_string()),
@@ -282,7 +282,7 @@ mod tests {
     fn test_config_connect_timeout_defaults_when_absent() {
         // Older config files without the field should still deserialize.
         let yaml = "readOnly: false\n";
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let config: Config = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(
             config.connect_timeout_seconds,
             crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn test_config_serialization() {
         let config = Config::default();
-        let yaml = serde_yaml::to_string(&config).unwrap();
+        let yaml = crate::yaml::to_string(&config).unwrap();
         assert!(yaml.contains("readOnly"));
         assert!(yaml.contains("defaultNamespace"));
         assert!(yaml.contains("connectTimeoutSeconds"));
@@ -307,7 +307,7 @@ connectTimeoutSeconds: 15
 ui:
   skin: dracula
 "#;
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let config: Config = crate::yaml::from_str(yaml).unwrap();
         assert!(config.read_only);
         assert_eq!(config.default_namespace, "my-ns");
         assert_eq!(config.connect_timeout_seconds, 15);
@@ -318,17 +318,17 @@ ui:
     fn test_config_without_editor_field_deserializes_as_none() {
         // Older config files without the editor field should still deserialize fine.
         let yaml = "readOnly: false\n";
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let config: Config = crate::yaml::from_str(yaml).unwrap();
         assert!(config.editor.is_none());
     }
 
     #[test]
     fn test_native_resources_opt_out_also_disables_crd_discovery() {
         let both: Config =
-            serde_yaml::from_str("nativeResources: true\ndiscoverFluxResources: true\n").unwrap();
+            crate::yaml::from_str("nativeResources: true\ndiscoverFluxResources: true\n").unwrap();
         assert!(both.flux_crd_discovery_enabled());
         let opted_out: Config =
-            serde_yaml::from_str("nativeResources: false\ndiscoverFluxResources: true\n").unwrap();
+            crate::yaml::from_str("nativeResources: false\ndiscoverFluxResources: true\n").unwrap();
         assert!(
             !opted_out.flux_crd_discovery_enabled(),
             "nativeResources: false must mean no discovery or extra watches"
@@ -341,26 +341,26 @@ ui:
 
     #[test]
     fn test_native_resources_is_an_opt_in_preview() {
-        let config: Config = serde_yaml::from_str("readOnly: false\n").unwrap();
+        let config: Config = crate::yaml::from_str("readOnly: false\n").unwrap();
         assert!(!config.native_resources, "preview: off unless opted in");
         assert!(!Config::default().native_resources);
-        let config: Config = serde_yaml::from_str("nativeResources: true\n").unwrap();
+        let config: Config = crate::yaml::from_str("nativeResources: true\n").unwrap();
         assert!(config.native_resources);
     }
 
     #[test]
     fn test_metrics_source_defaults_to_auto_and_parses() {
         use crate::kube::metrics::MetricsSourceSetting;
-        let config: Config = serde_yaml::from_str("readOnly: false\n").unwrap();
+        let config: Config = crate::yaml::from_str("readOnly: false\n").unwrap();
         assert_eq!(config.metrics_source, MetricsSourceSetting::Auto);
-        let config: Config = serde_yaml::from_str("metricsSource: metrics-server\n").unwrap();
+        let config: Config = crate::yaml::from_str("metricsSource: metrics-server\n").unwrap();
         assert_eq!(config.metrics_source, MetricsSourceSetting::MetricsServer);
     }
 
     #[test]
     fn test_config_with_editor_field() {
         let yaml = "readOnly: false\neditor: nvim\n";
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let config: Config = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(config.editor.as_deref(), Some("nvim"));
     }
 }

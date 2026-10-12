@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Replaced the deprecated `serde_yaml` (its `unsafe-libyaml` parser is unmaintained,
+  RUSTSEC-2024-0449) with `serde-saphyr`, a YAML implementation in safe Rust (#296)
+- YAML views keep the API server's field order (as `kubectl get -o yaml` does) instead of
+  sorting keys alphabetically
+- Unquoted leading-zero numbers in edited YAML are read as octal, as `kubectl edit` does
+  (`defaultMode: 0644` applies 420)
+- Minimum supported Rust version is now 1.89
+- Dependency refresh, including `quinn-proto` 0.11.19 for RUSTSEC-2026-0338 to 0342
+
+### Fixed
+- YAML views showed list items without the space after the dash (`-item` instead of `- item`)
+- Docs site build on Linux CI picked a Dart Sass binary that can't run on glibc
+
 ## [1.3.0] - 2026-10-12
 
 # Version 1.3.0 Changelog

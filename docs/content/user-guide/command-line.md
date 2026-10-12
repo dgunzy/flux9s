@@ -36,7 +36,8 @@ flux9s config set nativeResources true
 flux9s config set ui.skinReadOnly rose-pine
 
 # Context- or cluster-specific values
-flux9s config set ui.skin dracula --context prod
+flux9s config set ui.skin dracula --cluster my-cluster
+flux9s config set ui.skin dracula --cluster my-cluster --context prod
 
 # Import a skin file and use it
 flux9s config skins set navy.yaml

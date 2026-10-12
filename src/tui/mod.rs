@@ -837,7 +837,7 @@ pub async fn run_tui_with_async_init(
                     // raw API response (no managedFields, no status, no explicit nulls).
                     let edit_doc = crate::tui::views::prepare_edit_document(&full_yaml_json);
                     let yaml_str =
-                        serde_yaml::to_string(&edit_doc).unwrap_or_else(|_| "{}".to_string());
+                        crate::yaml::to_string(&edit_doc).unwrap_or_else(|_| "{}".to_string());
                     let editor_candidates =
                         crate::editor::editor_candidates(app.config.editor.as_deref());
                     let enable_mouse = app.config.ui.enable_mouse;

@@ -219,7 +219,7 @@ impl ThemeLoader {
             .with_context(|| format!("Failed to read skin file: {}", source_path.display()))?;
 
         // Parse YAML
-        let skin: SkinFile = serde_yaml::from_str(&contents)
+        let skin: SkinFile = crate::yaml::from_str(&contents)
             .with_context(|| format!("Failed to parse YAML: {}", source_path.display()))?;
 
         // Validate skin structure
@@ -329,7 +329,7 @@ impl ThemeLoader {
     /// This is used for both file-based themes and embedded themes.
     pub fn load_from_yaml(yaml_content: &str) -> Result<Theme> {
         let skin: SkinFile =
-            serde_yaml::from_str(yaml_content).with_context(|| "Failed to parse theme YAML")?;
+            crate::yaml::from_str(yaml_content).with_context(|| "Failed to parse theme YAML")?;
 
         tracing::debug!("Successfully parsed theme YAML");
         Self::convert_skin_to_theme(skin)
