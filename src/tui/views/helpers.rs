@@ -8,7 +8,7 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::Line,
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders},
 };
 
 /// Update scroll offset based on selected index and visible area
@@ -45,7 +45,7 @@ pub fn render_loading_state(f: &mut Frame, area: Rect, title: &str, message: &st
         Line::from(""),
         Line::from("Please wait..."),
     ];
-    let paragraph = Paragraph::new(text)
+    let paragraph = crate::tui::views::text::wrapped(text)
         .block(block)
         .style(Style::default().fg(theme.text_secondary));
     f.render_widget(paragraph, area);
@@ -140,7 +140,7 @@ pub fn render_empty_state(
         Line::from(""),
         Line::from(instructions),
     ];
-    let paragraph = Paragraph::new(text)
+    let paragraph = crate::tui::views::text::wrapped(text)
         .block(block)
         .style(Style::default().fg(theme.text_secondary));
     f.render_widget(paragraph, area);

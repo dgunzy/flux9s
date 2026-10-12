@@ -398,6 +398,33 @@ pub async fn run_tui_with_async_init(
                         });
                     }
 
+                    if let Some((target, tx)) = app.async_state.edit_preflight.dispatch() {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            let result = async {
+                                let object =
+                                    crate::kube::objects::fetch_object(&client, &target).await?;
+                                // Each bounded by MANAGER_TIMEOUT.
+                                let manager =
+                                    crate::kube::ownership::lookup_manager(&client, &object).await;
+                                let manager_suspended = match manager.manager() {
+                                    Some(m) => {
+                                        crate::kube::ownership::flux_manager_suspended(&client, m)
+                                            .await
+                                    }
+                                    None => None,
+                                };
+                                Ok(crate::tui::app::state::EditPreflight {
+                                    object,
+                                    manager,
+                                    manager_suspended,
+                                })
+                            }
+                            .await;
+                            let _ = tx.send(result);
+                        });
+                    }
+
                     if let Some((object, tx)) = app.async_state.describe_manager.dispatch() {
                         let client = client.clone();
                         tokio::spawn(async move {
@@ -482,12 +509,12 @@ pub async fn run_tui_with_async_init(
                         app.async_state.helm_values.set_handle(handle);
                     }
 
-                    if let Some((action, tx)) = app.async_state.workload_action.dispatch() {
+                    if let Some((action, tx)) = app.async_state.object_action.dispatch() {
                         let client = client.clone();
                         tokio::spawn(async move {
                             tracing::debug!("Running workload action {:?}", action);
                             let result =
-                                crate::kube::workloads::execute_workload_action(&client, &action)
+                                crate::kube::workloads::execute_object_action(&client, &action)
                                     .await
                                     .map(|()| action);
                             if let Err(ref e) = result {
@@ -599,6 +626,19 @@ pub async fn run_tui_with_async_init(
                 }
             }
 
+            if let Some(result) = app.async_state.edit_preflight.try_recv() {
+                match result {
+                    Ok(preflight) => app.on_edit_preflight(preflight),
+                    Err(e) => {
+                        app.set_status_message((
+                            format!("Failed to fetch for editing: {e:#}"),
+                            true,
+                        ));
+                        app.back_from(crate::tui::app::state::View::ResourceEdit);
+                    }
+                }
+            }
+
             if let Some(result) = app.async_state.describe_manager.try_recv() {
                 match result {
                     Ok(resolution) => app.set_manager_resolution(resolution),
@@ -678,8 +718,8 @@ pub async fn run_tui_with_async_init(
                 }
             }
 
-            if let Some(result) = app.async_state.workload_action.try_recv() {
-                app.set_workload_action_result(result);
+            if let Some(result) = app.async_state.object_action.try_recv() {
+                app.set_object_action_result(result);
             }
 
             if let Some(result) = app.async_state.trace.try_recv() {
@@ -857,11 +897,9 @@ pub async fn run_tui_with_async_init(
             if kube_initialized {
                 if let Some(req) = app.trigger_edit_save() {
                     tokio::spawn(async move {
-                        let result = crate::operations::apply_resource_yaml(
+                        let result = crate::operations::apply_object_yaml(
                             &req.client,
-                            &req.resource_key.resource_type,
-                            &req.resource_key.namespace,
-                            &req.resource_key.name,
+                            &req.target,
                             &req.yaml_to_apply,
                         )
                         .await;

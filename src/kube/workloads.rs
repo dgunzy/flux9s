@@ -9,7 +9,6 @@ use anyhow::Context;
 use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams};
-use kube::core::DynamicObject;
 use serde_json::Value;
 
 /// Pod-template annotation `kubectl rollout restart` sets; changing it rolls
@@ -20,21 +19,28 @@ pub const RESTARTED_AT_ANNOTATION: &str = "kubectl.kubernetes.io/restartedAt";
 /// pod template to roll.
 const RESTARTABLE_KINDS: &[&str] = &["Deployment", "StatefulSet", "DaemonSet"];
 
-/// A write action on a workload or one of its pods (#263). Always confirmed
-/// by the user and blocked in read-only mode.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WorkloadAction {
-    /// Rollout restart, equivalent to `kubectl rollout restart`.
-    Restart {
-        kind: String,
-        namespace: String,
-        name: String,
+/// A confirmed write to one object: a merge patch built from an action's
+/// [`ActionSpec`] data (restart, annotate, …) or a pod delete. Always
+/// confirmed by the user and blocked in read-only mode.
+///
+/// [`ActionSpec`]: crate::tui::app::actions::ActionSpec
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObjectAction {
+    /// A JSON merge patch on `target`, labelled for the confirmation and
+    /// status messages ("Restart" / "Restarted").
+    Patch {
+        target: crate::kube::objects::ObjectRef,
+        verb: String,
+        done: String,
+        /// Extra sentence for the confirmation ("All pods will be rolled.").
+        detail: String,
+        patch: Value,
     },
     /// Delete one pod; its controller replaces it.
     DeletePod { namespace: String, name: String },
 }
 
-impl WorkloadAction {
+impl ObjectAction {
     /// Whether `kind` can be rollout-restarted.
     pub fn is_restartable(kind: &str) -> bool {
         RESTARTABLE_KINDS.contains(&kind)
@@ -43,14 +49,25 @@ impl WorkloadAction {
     /// Question shown in the confirmation dialog.
     pub fn confirmation_message(&self) -> String {
         match self {
-            WorkloadAction::Restart {
-                kind,
-                namespace,
-                name,
-            } => format!(
-                "Restart {kind} '{name}' in namespace '{namespace}'? All pods will be rolled."
-            ),
-            WorkloadAction::DeletePod { namespace, name } => {
+            ObjectAction::Patch {
+                target,
+                verb,
+                detail,
+                ..
+            } => {
+                let location = if target.namespace.is_empty() {
+                    String::new()
+                } else {
+                    format!(" in namespace '{}'", target.namespace)
+                };
+                let question = format!("{verb} {} '{}'{location}?", target.kind, target.name);
+                if detail.is_empty() {
+                    question
+                } else {
+                    format!("{question} {detail}")
+                }
+            }
+            ObjectAction::DeletePod { namespace, name } => {
                 format!("Delete pod '{name}' in namespace '{namespace}'?")
             }
         }
@@ -59,47 +76,43 @@ impl WorkloadAction {
     /// Status message after the action succeeds.
     pub fn success_message(&self) -> String {
         match self {
-            WorkloadAction::Restart { kind, name, .. } => format!("Restarted {kind} {name}"),
-            WorkloadAction::DeletePod { name, .. } => format!("Deleted pod {name}"),
+            ObjectAction::Patch { target, done, .. } => {
+                format!("{done} {} {}", target.kind, target.name)
+            }
+            ObjectAction::DeletePod { name, .. } => format!("Deleted pod {name}"),
         }
     }
 }
 
-/// The merge patch a rollout restart applies.
-fn restart_patch(now: &str) -> Value {
-    serde_json::json!({
-        "spec": {"template": {"metadata": {"annotations": {RESTARTED_AT_ANNOTATION: now}}}}
-    })
-}
+/// The merge patch a rollout restart applies (`{{now}}` is filled in when
+/// the action runs). Shared with the action table's restart entry.
+pub const RESTART_PATCH: &str = r#"{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"{{now}}"}}}}}"#;
 
-/// Perform a confirmed [`WorkloadAction`].
-pub async fn execute_workload_action(
+/// Workload kinds the restart action applies to.
+pub const RESTART_KINDS: &[&str] = RESTARTABLE_KINDS;
+
+/// Perform a confirmed [`ObjectAction`].
+pub async fn execute_object_action(
     client: &kube::Client,
-    action: &WorkloadAction,
+    action: &ObjectAction,
 ) -> anyhow::Result<()> {
     match action {
-        WorkloadAction::Restart {
-            kind,
-            namespace,
-            name,
+        ObjectAction::Patch {
+            target,
+            patch,
+            verb,
+            ..
         } => {
-            if !WorkloadAction::is_restartable(kind) {
-                anyhow::bail!("{kind} does not support a rollout restart");
-            }
-            let resource =
-                crate::kube::get_api_resource_with_fallback(client, kind, namespace, name).await?;
-            let api: Api<DynamicObject> =
-                Api::namespaced_with(client.clone(), namespace, &resource);
-            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let api = crate::kube::objects::object_api(client, target).await?;
             api.patch(
-                name,
+                &target.name,
                 &PatchParams::default(),
-                &Patch::Merge(restart_patch(&now)),
+                &Patch::Merge(patch.clone()),
             )
             .await
-            .with_context(|| format!("Failed to restart {kind}/{name} in {namespace}"))?;
+            .with_context(|| format!("Failed to {} {target}", verb.to_lowercase()))?;
         }
-        WorkloadAction::DeletePod { namespace, name } => {
+        ObjectAction::DeletePod { namespace, name } => {
             let api: Api<Pod> = Api::namespaced(client.clone(), namespace);
             api.delete(name, &DeleteParams::default())
                 .await
@@ -589,7 +602,9 @@ mod tests {
 
     #[test]
     fn restart_patch_sets_template_annotation() {
-        let patch = restart_patch("2026-09-26T00:00:00Z");
+        let patch: Value =
+            serde_json::from_str(&RESTART_PATCH.replace("{{now}}", "2026-09-26T00:00:00Z"))
+                .unwrap();
         assert_eq!(
             patch["spec"]["template"]["metadata"]["annotations"][RESTARTED_AT_ANNOTATION],
             "2026-09-26T00:00:00Z"
@@ -598,22 +613,27 @@ mod tests {
 
     #[test]
     fn only_pod_template_workloads_are_restartable() {
-        assert!(WorkloadAction::is_restartable("Deployment"));
-        assert!(WorkloadAction::is_restartable("StatefulSet"));
-        assert!(WorkloadAction::is_restartable("DaemonSet"));
-        assert!(!WorkloadAction::is_restartable("CronJob"));
+        assert!(ObjectAction::is_restartable("Deployment"));
+        assert!(ObjectAction::is_restartable("StatefulSet"));
+        assert!(ObjectAction::is_restartable("DaemonSet"));
+        assert!(!ObjectAction::is_restartable("CronJob"));
     }
 
     #[test]
     fn action_messages_name_the_target() {
-        let restart = WorkloadAction::Restart {
-            kind: "Deployment".into(),
-            namespace: "apps".into(),
-            name: "web".into(),
+        let restart = ObjectAction::Patch {
+            target: crate::kube::objects::ObjectRef::native("apps/v1", "Deployment", "apps", "web"),
+            verb: "Restart".into(),
+            done: "Restarted".into(),
+            detail: "All pods will be rolled.".into(),
+            patch: serde_json::json!({}),
         };
-        assert!(restart.confirmation_message().contains("Deployment 'web'"));
+        assert_eq!(
+            restart.confirmation_message(),
+            "Restart Deployment 'web' in namespace 'apps'? All pods will be rolled."
+        );
         assert_eq!(restart.success_message(), "Restarted Deployment web");
-        let delete = WorkloadAction::DeletePod {
+        let delete = ObjectAction::DeletePod {
             namespace: "apps".into(),
             name: "web-abc".into(),
         };

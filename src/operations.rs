@@ -794,11 +794,9 @@ impl FluxOperation for ReconcileWithSourceOperation {
 /// Uses `PatchParams::apply("flux9s").force()` so flux9s takes ownership of
 /// fields it manages, but if the resource was modified (resourceVersion mismatch)
 /// the API server returns 409 before field ownership is checked.
-pub async fn apply_resource_yaml(
+pub async fn apply_object_yaml(
     client: &kube::Client,
-    resource_type: &str,
-    namespace: &str,
-    name: &str,
+    target: &crate::kube::objects::ObjectRef,
     yaml_str: &str,
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
@@ -806,15 +804,23 @@ pub async fn apply_resource_yaml(
     let mut value: serde_json::Value =
         serde_yaml::from_str(yaml_str).context("Failed to parse edited YAML as valid YAML/JSON")?;
 
+    // Secrets are fetched redacted (objects::fetch_object), so applying an
+    // edited copy would overwrite real values with the placeholder.
+    if value.get("kind").and_then(|k| k.as_str()) == Some("Secret") {
+        anyhow::bail!(
+            "Secrets can't be edited in flux9s (their values are redacted) — use kubectl edit"
+        );
+    }
+
     // SSA rejects documents that include managedFields — strip it before applying.
     if let Some(meta) = value.get_mut("metadata").and_then(|m| m.as_object_mut()) {
         meta.remove("managedFields");
     }
 
-    let api = get_resource_api(client, resource_type, namespace, name).await?;
+    let api = crate::kube::objects::object_api(client, target).await?;
 
     let params = PatchParams::apply("flux9s").force();
-    api.patch(name, &params, &Patch::Apply(&value))
+    api.patch(&target.name, &params, &Patch::Apply(&value))
         .await
         .map_err(|e| {
             // Surface a user-friendly message for 409 Conflict (concurrent modification)
@@ -828,12 +834,7 @@ pub async fn apply_resource_yaml(
             }
         })?;
 
-    tracing::info!(
-        "Successfully applied {}/{} in namespace {} via SSA",
-        resource_type,
-        name,
-        namespace
-    );
+    tracing::info!("Successfully applied {target} via SSA");
     Ok(())
 }
 

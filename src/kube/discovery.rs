@@ -37,6 +37,14 @@ async fn get_json(client: &kube::Client, path: &str, accept: &str) -> anyhow::Re
     serde_json::from_str(&text).with_context(|| format!("Invalid discovery document at {path}"))
 }
 
+/// Whether discovery lists `verb` for a resource.
+fn has_verb(resource: &Value, verb: &str) -> bool {
+    resource
+        .get("verbs")
+        .and_then(Value::as_array)
+        .is_some_and(|verbs| verbs.iter().any(|v| v.as_str() == Some(verb)))
+}
+
 fn has_verbs(resource: &Value) -> bool {
     let verbs: Vec<&str> = resource
         .get("verbs")
@@ -107,16 +115,19 @@ pub fn parse_aggregated(doc: &Value) -> Option<Vec<KindSpec>> {
                 } else {
                     KindScope::Namespaced
                 };
-                kinds.push(KindSpec::generic(
-                    Gvk {
-                        group: group_name.to_string(),
-                        version: version_name.to_string(),
-                        kind: kind.to_string(),
-                    },
-                    scope,
-                    plural.to_string(),
-                    short_names(resource),
-                ));
+                kinds.push(
+                    KindSpec::generic(
+                        Gvk {
+                            group: group_name.to_string(),
+                            version: version_name.to_string(),
+                            kind: kind.to_string(),
+                        },
+                        scope,
+                        plural.to_string(),
+                        short_names(resource),
+                    )
+                    .with_patch_verb(has_verb(resource, "patch")),
+                );
             }
         }
     }
@@ -153,16 +164,19 @@ pub fn parse_resource_list(doc: &Value) -> Vec<KindSpec> {
             } else {
                 KindScope::Namespaced
             };
-            Some(KindSpec::generic(
-                Gvk {
-                    group: group.to_string(),
-                    version: version.to_string(),
-                    kind: r.get("kind")?.as_str()?.to_string(),
-                },
-                scope,
-                r.get("name")?.as_str()?.to_string(),
-                short_names(r),
-            ))
+            Some(
+                KindSpec::generic(
+                    Gvk {
+                        group: group.to_string(),
+                        version: version.to_string(),
+                        kind: r.get("kind")?.as_str()?.to_string(),
+                    },
+                    scope,
+                    r.get("name")?.as_str()?.to_string(),
+                    short_names(r),
+                )
+                .with_patch_verb(has_verb(r, "patch")),
+            )
         })
         .collect()
 }
@@ -252,6 +266,35 @@ pub async fn discover_kinds(client: &kube::Client) -> anyhow::Result<Vec<KindSpe
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn edit_follows_the_patch_verb_and_never_secrets() {
+        let doc = json!({"kind": "APIGroupDiscoveryList", "items": [{
+            "metadata": {"name": ""},
+            "versions": [{"version": "v1", "resources": [
+                {"resource": "configmaps", "responseKind": {"kind": "ConfigMap"},
+                 "scope": "Namespaced", "verbs": ["get", "list", "watch", "patch"]},
+                {"resource": "secrets", "responseKind": {"kind": "Secret"},
+                 "scope": "Namespaced", "verbs": ["get", "list", "watch", "patch"]},
+                {"resource": "events", "responseKind": {"kind": "Event"},
+                 "scope": "Namespaced", "verbs": ["get", "list", "watch"]}
+            ]}]
+        }]});
+        let kinds = parse_aggregated(&doc).unwrap();
+        let edit = |kind: &str| kinds.iter().find(|k| k.gvk.kind == kind).unwrap().caps.edit;
+        assert!(edit("ConfigMap"));
+        assert!(
+            !edit("Secret"),
+            "Secrets are fetched redacted — never editable"
+        );
+        assert!(!edit("Event"), "no patch verb");
+
+        let legacy = parse_resource_list(&json!({"groupVersion": "v1", "resources": [
+            {"name": "configmaps", "kind": "ConfigMap", "namespaced": true,
+             "verbs": ["list", "watch", "patch"]}
+        ]}));
+        assert!(legacy[0].caps.edit);
+    }
 
     #[test]
     fn parses_aggregated_documents() {

@@ -135,8 +135,24 @@ impl App {
         // The footer's hints depend on the current view, so its height is
         // recomputed every frame (cheap) instead of living in the layout cache.
         let footer_commands = self.footer_commands();
-        self.ui_state.cached_footer_height =
-            calculate_footer_height(terminal_width, &footer_commands);
+        let hints_height = calculate_footer_height(terminal_width, &footer_commands);
+        // A status / confirmation message replaces the hints and may wrap:
+        // give it the rows it needs (capped, so the view keeps its space).
+        let message_height = crate::tui::views::footer_message_line(
+            self.ui_state.show_help,
+            self.confirmation_message().as_deref(),
+            &self.ui_state.status_message,
+            &self.theme,
+        )
+        .filter(|_| !self.ui_state.command_mode && !self.view_state.filter_mode)
+        .map(|line| {
+            const MAX_MESSAGE_ROWS: u16 = 4;
+            crate::tui::views::text::wrapped_height(&[line], terminal_width.saturating_sub(2))
+                .min(MAX_MESSAGE_ROWS)
+                + 2
+        })
+        .unwrap_or(0);
+        self.ui_state.cached_footer_height = hints_height.max(message_height);
 
         let header_height = self.ui_state.cached_header_height;
         let footer_constraint = self.ui_state.cached_footer_height;

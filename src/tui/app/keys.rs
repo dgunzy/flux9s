@@ -354,16 +354,20 @@ impl App {
                             &op.name,
                             op.operation_key,
                         ),
-                        Confirmation::Workload(action) => {
-                            self.async_state.workload_action.request(action);
+                        Confirmation::Object(action) => {
+                            self.async_state.object_action.request(action);
                         }
+                        Confirmation::Edit(_) => self.answer_edit_warning(true),
                     }
                 }
                 crossterm::event::KeyCode::Char('n')
                 | crossterm::event::KeyCode::Char('N')
                 | crossterm::event::KeyCode::Esc => {
                     // Cancel operation
-                    self.async_state.confirmation_pending = None;
+                    let pending = self.async_state.confirmation_pending.take();
+                    if matches!(pending, Some(Confirmation::Edit(_))) {
+                        self.answer_edit_warning(false);
+                    }
                 }
                 _ => {}
             }

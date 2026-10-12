@@ -561,24 +561,16 @@ fn render_node_text(
             Style::default().fg(theme.text_secondary),
         )]));
     } else if matches!(node.node_type, NodeType::WorkloadGroup) {
-        // For workload group nodes, show each workload on multiple lines
-        // Format: "Kind|name|namespace|status_indicator|status_text"
+        // For workload group nodes, show each workload on multiple lines.
+        // Lines are decoded by WorkloadRef — the single source of truth for
+        // the format (decoding by hand broke when a field was added).
         // Web UI shows: kind (muted), name (bold), status with dot, namespace only if namespaces differ
         if let Some(ref desc) = node.description {
-            // First pass: collect all workloads to check if namespaces differ
-            let mut workloads: Vec<(String, String, String, String, String)> = Vec::new();
-            for workload_line in desc.lines() {
-                let parts: Vec<&str> = workload_line.split('|').collect();
-                if parts.len() == 5 {
-                    workloads.push((
-                        parts[0].to_string(), // kind
-                        parts[1].to_string(), // name
-                        parts[2].to_string(), // namespace
-                        parts[3].to_string(), // status_indicator
-                        parts[4].to_string(), // status_text
-                    ));
-                }
-            }
+            let workloads: Vec<(String, String, String, String, String)> = desc
+                .lines()
+                .filter_map(crate::kube::workloads::WorkloadRef::parse_graph_line)
+                .map(|w| (w.kind, w.name, w.namespace, w.indicator, w.status))
+                .collect();
 
             // Check if all workloads share the same namespace
             let show_namespace = if workloads.len() > 1 {
@@ -860,8 +852,9 @@ fn render_node_text(
 
 #[cfg(test)]
 mod tests {
-    use super::{box_glyph, fanout_routes, follow_focus_scroll};
+    use super::{box_glyph, fanout_routes, follow_focus_scroll, render_graph_nodes_and_edges};
     use crate::trace::{GraphEdge, GraphNode, NodeType, RelationshipType, ResourceGraph};
+    use crate::tui::theme::Theme;
 
     #[test]
     fn box_glyph_renders_expected_junctions() {
@@ -888,6 +881,49 @@ mod tests {
             position: None,
             description: desc.map(|d| d.to_string()),
         }
+    }
+
+    /// Regression: the renderer decoded workload lines by hand and dropped
+    /// every line when the format gained a field, drawing an empty group.
+    #[test]
+    fn workload_group_renders_lines_from_the_real_encoder() {
+        use crate::kube::workloads::WorkloadRef;
+        use ratatui::{Terminal, backend::TestBackend};
+        let lines: Vec<String> = ["web", "worker"]
+            .iter()
+            .map(|name| {
+                WorkloadRef {
+                    kind: "Deployment".into(),
+                    name: name.to_string(),
+                    namespace: "apps".into(),
+                    indicator: "●".into(),
+                    status: "Replicas: 1/1".into(),
+                    api_version: "apps/v1".into(),
+                }
+                .to_graph_line()
+            })
+            .collect();
+        let mut graph = ResourceGraph::new();
+        graph.add_node(node("wg", NodeType::WorkloadGroup, Some(&lines.join("\n"))));
+        assert!(
+            graph.nodes[0].render_height() > 5,
+            "height counts the workloads"
+        );
+        graph.calculate_layout(80, 40);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+        terminal
+            .draw(|f| render_graph_nodes_and_edges(f, f.area(), &graph, 0, None, &Theme::default()))
+            .unwrap();
+        let out: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(out.contains("web") && out.contains("worker"), "{out}");
+        assert!(out.contains("Replicas: 1/1"));
     }
 
     #[test]

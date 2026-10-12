@@ -160,6 +160,10 @@ pub struct Capabilities {
     pub pod_logs: bool,
     /// `Ctrl+d` deletes the pod.
     pub pod_delete: bool,
+    /// `e` edits the object in the system editor (server-side apply). Native
+    /// kinds get it when discovery lists the `patch` verb — never Secrets,
+    /// which flux9s only ever fetches redacted.
+    pub edit: bool,
 }
 
 impl Capabilities {
@@ -172,6 +176,7 @@ impl Capabilities {
         restart: false,
         pod_logs: false,
         pod_delete: false,
+        edit: false,
     };
 
     /// Curated capabilities for well-known native kinds, so browsing them
@@ -239,6 +244,14 @@ impl KindSpec {
         self.scope == KindScope::Namespaced
     }
 
+    /// Grant `e` when the API allows patching this kind (discovery's verbs),
+    /// except Secrets (see [`Capabilities::edit`]).
+    pub fn with_patch_verb(mut self, patchable: bool) -> Self {
+        let secret = self.gvk.group.is_empty() && self.gvk.kind == "Secret";
+        self.caps.edit = patchable && !secret;
+        self
+    }
+
     /// Whether the existing Flux list handles this kind.
     pub fn is_flux(&self) -> bool {
         matches!(self.family, Family::Flux(_))
@@ -279,6 +292,7 @@ fn flux_spec(kind: FluxResourceKind) -> Option<KindSpec> {
             flux_operations: true,
             graph: kind.supports_graph(),
             history: kind.supports_history(),
+            edit: true,
             ..Capabilities::VIEW_ONLY
         },
     })
@@ -297,6 +311,7 @@ fn extra_spec(extra: &super::extra_kinds::ExtraKind) -> KindSpec {
         extra.short_names.clone(),
     );
     spec.family = Family::FluxAdjacent;
+    spec.caps.edit = true;
     spec
 }
 

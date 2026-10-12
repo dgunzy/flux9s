@@ -55,13 +55,63 @@ impl Key {
     }
 }
 
-/// What an action does.
+/// What an action does. The write variants are plain data so config-defined
+/// actions (#277) can reuse the same confirmation, read-only gate, footer,
+/// and help; `&'static str` fields become owned strings when config can
+/// supply them.
 pub(crate) enum ActionSpec {
     /// App code. Returns `Some(true)` to quit, like `handle_key`.
     Builtin(fn(&mut App, KeyEvent) -> Option<bool>),
     /// A registered [`crate::operations::FluxOperation`], by its keybinding:
     /// validity check, read-only gate, and confirmation are shared.
     Operation(char),
+    /// A JSON merge patch on the action's target. `{{now}}` is replaced with
+    /// the current time (RFC 3339, UTC).
+    Patch { patch: &'static str, write: Write },
+    /// Set one annotation on the target (`{{now}}` allowed in the value).
+    Annotate {
+        key: &'static str,
+        value: &'static str,
+        write: Write,
+    },
+}
+
+/// How a write action is confirmed, reported, and limited.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Write {
+    /// Imperative for the confirmation ("Restart").
+    pub verb: &'static str,
+    /// Past tense for the status line ("Restarted").
+    pub done: &'static str,
+    /// Extra sentence in the confirmation ("All pods will be rolled.").
+    pub detail: &'static str,
+    /// Kinds it applies to; empty means any.
+    pub kinds: &'static [&'static str],
+}
+
+impl ActionSpec {
+    /// The merge patch a write action applies at `now`, or `None` for
+    /// non-write actions.
+    pub(crate) fn patch_document(&self, now: &str) -> Option<anyhow::Result<serde_json::Value>> {
+        match self {
+            ActionSpec::Patch { patch, .. } => Some(
+                serde_json::from_str(&patch.replace("{{now}}", now))
+                    .map_err(|e| anyhow::anyhow!("Invalid patch in action: {e}")),
+            ),
+            ActionSpec::Annotate { key, value, .. } => Some(Ok(serde_json::json!({
+                "metadata": {"annotations": {*key: value.replace("{{now}}", now)}}
+            }))),
+            ActionSpec::Builtin(_) | ActionSpec::Operation(_) => None,
+        }
+    }
+
+    /// Confirmation / status wording and kind filter of a write action.
+    pub(crate) fn write_info(&self) -> Option<&Write> {
+        match self {
+            ActionSpec::Patch { write, .. } | ActionSpec::Annotate { write, .. } => Some(write),
+            ActionSpec::Builtin(_) | ActionSpec::Operation(_) => None,
+        }
+    }
 }
 
 /// Help overlay column.
@@ -76,7 +126,7 @@ pub(crate) enum HelpColumn {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ActionId {
     KindLogs,
-    KindRestart,
+    Restart,
     KindDeletePod,
     KindEnter,
     KindDescribe,
@@ -88,7 +138,6 @@ pub(crate) enum ActionId {
     Back,
     QuitNow,
     Help,
-    WorkloadRestart,
     Suspend,
     Resume,
     Reconcile,
@@ -104,6 +153,7 @@ pub(crate) enum ActionId {
     Yaml,
     Describe,
     Edit,
+    EditHint,
     GraphEnter,
     EventEnter,
     WorkloadListEnter,
@@ -166,6 +216,15 @@ fn on_flux_resource(app: &App) -> bool {
         )
 }
 
+/// Whether `e` would edit the current target: always for Flux resources;
+/// for native objects when the kind is patchable and isn't a Secret.
+fn can_edit(app: &App) -> bool {
+    match app.native_view_target() {
+        Some(target) => app.native_editable(&target),
+        None => true,
+    }
+}
+
 /// Views where `y` / `d` have a target.
 fn has_view_target(app: &App) -> bool {
     !in_view(
@@ -199,18 +258,6 @@ pub(crate) const ACTIONS: &[Action] = &[
         footer: Some(("l", "Logs")),
         help: Some((HelpColumn::Navigation, "<l>", "Pod logs (workloads, :po)")),
         sets_status: false,
-    },
-    Action {
-        id: ActionId::KindRestart,
-        keys: &[key('r')],
-        when: |app| kind_caps(app, |c| c.restart),
-        spec: ActionSpec::Builtin(|app, _| {
-            app.kind_restart_selected();
-            None
-        }),
-        footer: Some(("r", "Restart")),
-        help: None,
-        sets_status: true,
     },
     Action {
         id: ActionId::KindDeletePod,
@@ -357,15 +404,24 @@ pub(crate) const ACTIONS: &[Action] = &[
         help: Some((HelpColumn::General, "<?>", "Show/hide help")),
         sets_status: false,
     },
-    // Rollout restart from the workload views (#263), k9s-style.
+    // Rollout restart (#263), k9s-style — a data-driven patch: the same
+    // shape a config-defined action will have (#277).
     Action {
-        id: ActionId::WorkloadRestart,
+        id: ActionId::Restart,
         keys: &[key('r')],
-        when: |app| in_view(app, &[View::WorkloadList, View::WorkloadDetail]),
-        spec: ActionSpec::Builtin(|app, _| {
-            app.request_workload_restart();
-            None
-        }),
+        when: |app| {
+            in_view(app, &[View::WorkloadList, View::WorkloadDetail])
+                || kind_caps(app, |c| c.restart)
+        },
+        spec: ActionSpec::Patch {
+            patch: crate::kube::workloads::RESTART_PATCH,
+            write: Write {
+                verb: "Restart",
+                done: "Restarted",
+                detail: "All pods will be rolled.",
+                kinds: crate::kube::workloads::RESTART_KINDS,
+            },
+        },
         footer: Some(("r", "Restart")),
         help: Some((
             HelpColumn::Navigation,
@@ -599,7 +655,7 @@ pub(crate) const ACTIONS: &[Action] = &[
     Action {
         id: ActionId::Edit,
         keys: &[key('e')],
-        when: has_view_target,
+        when: |app| has_view_target(app) && can_edit(app),
         spec: ActionSpec::Builtin(|app, _| {
             app.edit_selected();
             None
@@ -610,6 +666,20 @@ pub(crate) const ACTIONS: &[Action] = &[
             "<e>",
             "Edit resource in system editor",
         )),
+        sets_status: true,
+    },
+    // `e` on something that can't be edited here: say why (Secrets, kinds
+    // the API won't patch) and point at kubectl. No footer hint.
+    Action {
+        id: ActionId::EditHint,
+        keys: &[key('e')],
+        when: has_view_target,
+        spec: ActionSpec::Builtin(|app, _| {
+            app.edit_selected();
+            None
+        }),
+        footer: None,
+        help: None,
         sets_status: true,
     },
     // Drill into the focused graph node's resource.
@@ -851,7 +921,7 @@ const WORKLOAD_LIST_LAYOUT: &[FooterItem] = &[
     Act(A::Page),
     Act(A::WorkloadListEnter),
     Act(A::WorkloadListLogs),
-    Act(A::WorkloadRestart),
+    Act(A::Restart),
     TAIL[0],
     TAIL[1],
     TAIL[2],
@@ -862,7 +932,7 @@ const WORKLOAD_DETAIL_LAYOUT: &[FooterItem] = &[
     Act(A::Page),
     Relabel(A::FilterOrSearch, "Search"),
     Act(A::WorkloadLogs),
-    Act(A::WorkloadRestart),
+    Act(A::Restart),
     Act(A::WorkloadDeletePod),
     TAIL[0],
     TAIL[1],
@@ -874,6 +944,7 @@ const INVENTORY_LAYOUT: &[FooterItem] = &[
     Act(A::Page),
     Act(A::InventoryDescribe),
     Act(A::Yaml),
+    Act(A::Edit),
     TAIL[0],
     TAIL[1],
     TAIL[2],
@@ -887,6 +958,7 @@ const NATIVE_OBJECT_LAYOUT: &[FooterItem] = &[
     Act(A::NextMatch),
     Act(A::Yaml),
     Act(A::Describe),
+    Act(A::Edit),
     TAIL[0],
     TAIL[1],
     TAIL[2],
@@ -911,6 +983,7 @@ const EVENTS_LAYOUT: &[FooterItem] = &[
     Relabel(A::FilterOrSearch, "Filter"),
     Act(A::Yaml),
     Act(A::Describe),
+    Act(A::Edit),
     TAIL[0],
     TAIL[1],
     TAIL[2],
@@ -924,8 +997,9 @@ const KIND_LIST_LAYOUT: &[FooterItem] = &[
     Act(A::KindDescribe),
     Act(A::Describe),
     Act(A::Yaml),
+    Act(A::Edit),
     Act(A::KindLogs),
-    Act(A::KindRestart),
+    Act(A::Restart),
     Act(A::KindDeletePod),
     Relabel(A::FilterOrSearch, "Filter"),
     Cmd(":flux", "Flux view"),
@@ -1058,6 +1132,10 @@ impl App {
             ActionSpec::Builtin(run) => run(self, key),
             ActionSpec::Operation(op_key) => {
                 self.handle_operation_key(op_key);
+                None
+            }
+            ActionSpec::Patch { .. } | ActionSpec::Annotate { .. } => {
+                self.request_write(&action.spec);
                 None
             }
         })

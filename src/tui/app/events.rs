@@ -10,9 +10,11 @@ use crate::kube::objects::ObjectRef;
 use crate::models::FluxResourceKind;
 use crate::watcher::ResourceKey;
 
-/// Status message for `e` on a native object: editing isn't supported yet,
-/// here's the kubectl command that does it. A Flux kind only lands here when
-/// it's outside the watched namespace scope (e.g. from the events feed).
+/// Status message for `e` on a native object flux9s won't edit: why, and the
+/// kubectl command that does it. Secrets are never edited (flux9s only holds
+/// them redacted); other kinds when the API doesn't allow patching them or
+/// kind lookup (`:native`) is off. A Flux kind only lands here when it's
+/// outside the watched namespace scope (e.g. from the events feed).
 pub(super) fn native_edit_message(target: &ObjectRef) -> String {
     if FluxResourceKind::parse_optional(&target.kind).is_some() {
         return format!(
@@ -31,13 +33,21 @@ pub(super) fn native_edit_message(target: &ObjectRef) -> String {
     } else {
         format!(" -n {}", target.namespace)
     };
-    format!(
-        "Editing {} isn't supported yet (non-Flux kinds are view-only). Try: kubectl edit {}{}/{}{}",
-        target.kind,
+    let kubectl = format!(
+        "kubectl edit {}{}/{}{}",
         target.kind.to_lowercase(),
         group,
         target.name,
         namespace
+    );
+    if target.kind == "Secret" && group.is_empty() {
+        return format!(
+            "Secrets can't be edited in flux9s (their values are redacted). Try: {kubectl}"
+        );
+    }
+    format!(
+        "{} can't be edited here (the API doesn't allow patching it, or kind lookup is off — :native). Try: {kubectl}",
+        target.kind
     )
 }
 
@@ -384,10 +394,7 @@ impl App {
     }
 
     /// Queue a workload action for confirmation, unless read-only (#263).
-    pub(crate) fn confirm_workload_action(
-        &mut self,
-        action: crate::kube::workloads::WorkloadAction,
-    ) {
+    pub(crate) fn confirm_object_action(&mut self, action: crate::kube::workloads::ObjectAction) {
         if self.config.read_only {
             self.set_status_message((
                 crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
@@ -395,36 +402,91 @@ impl App {
             ));
             return;
         }
-        self.async_state.confirmation_pending = Some(Confirmation::Workload(action));
+        self.async_state.confirmation_pending = Some(Confirmation::Object(action));
     }
 
-    /// `r` in the workload list/detail: confirm a rollout restart of the
-    /// selected (list) or displayed (detail) workload.
-    pub(super) fn request_workload_restart(&mut self) {
-        let target = match self.view_state.current_view {
+    /// The object a write action (restart, annotate, …) targets in the
+    /// current view: the selected kind-list or workload row, the workload on
+    /// screen, or the view's native / Flux target.
+    pub(super) fn write_target(&self) -> Option<ObjectRef> {
+        match self.view_state.current_view {
+            View::KindList => {
+                let spec = &self.async_state.kind_list.key()?.spec;
+                let (kind, namespace, name) = self.selected_kind_object()?;
+                Some(ObjectRef::native(
+                    spec.gvk.api_version(),
+                    kind,
+                    namespace,
+                    name,
+                ))
+            }
             View::WorkloadList => self
                 .view_state
                 .workload_rows
                 .get(self.view_state.selected_index)
-                .map(|row| (row.kind.clone(), row.namespace.clone(), row.name.clone())),
-            View::WorkloadDetail => self
-                .async_state
-                .workload
-                .result()
-                .map(|w| (w.kind.clone(), w.namespace.clone(), w.name.clone())),
-            _ => None,
+                .map(|row| {
+                    ObjectRef::native(
+                        row.api_version.clone(),
+                        row.kind.clone(),
+                        row.namespace.clone(),
+                        row.name.clone(),
+                    )
+                }),
+            View::WorkloadDetail => self.async_state.workload.result().map(|w| {
+                ResourceKey::new(w.kind.clone(), w.namespace.clone(), w.name.clone()).into()
+            }),
+            _ => self
+                .native_view_target()
+                .or_else(|| self.view_target().map(ObjectRef::from)),
+        }
+    }
+
+    /// Run a data-driven write action ([`ActionSpec::Patch`] /
+    /// [`ActionSpec::Annotate`]) on the current target: kind filter,
+    /// read-only gate, then the usual confirmation.
+    ///
+    /// [`ActionSpec::Patch`]: super::actions::ActionSpec::Patch
+    /// [`ActionSpec::Annotate`]: super::actions::ActionSpec::Annotate
+    pub(super) fn request_write(&mut self, spec: &super::actions::ActionSpec) {
+        let Some(write) = spec.write_info() else {
+            return;
         };
-        let Some((kind, namespace, name)) = target else {
+        let Some(target) = self.write_target() else {
             return; // Nothing selected, or still loading
         };
-        if !crate::kube::workloads::WorkloadAction::is_restartable(&kind) {
-            self.set_status_message((format!("{kind} does not support a rollout restart"), true));
+        if !write.kinds.is_empty() && !write.kinds.contains(&target.kind.as_str()) {
+            self.set_status_message((
+                format!(
+                    "{} does not support {}",
+                    target.kind,
+                    write.verb.to_lowercase()
+                ),
+                true,
+            ));
             return;
         }
-        self.confirm_workload_action(crate::kube::workloads::WorkloadAction::Restart {
-            kind,
-            namespace,
-            name,
+        if self.config.read_only {
+            self.set_status_message((
+                crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
+                true,
+            ));
+            return;
+        }
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let patch = match spec.patch_document(&now) {
+            Some(Ok(patch)) => patch,
+            Some(Err(e)) => {
+                self.set_status_message((format!("{e:#}"), true));
+                return;
+            }
+            None => return,
+        };
+        self.confirm_object_action(crate::kube::workloads::ObjectAction::Patch {
+            target,
+            verb: write.verb.to_string(),
+            done: write.done.to_string(),
+            detail: write.detail.to_string(),
+            patch,
         });
     }
 
@@ -440,11 +502,11 @@ impl App {
                 self.set_status_message((msg, false));
             }
             [only] => {
-                let action = crate::kube::workloads::WorkloadAction::DeletePod {
+                let action = crate::kube::workloads::ObjectAction::DeletePod {
                     namespace: workload.namespace.clone(),
                     name: only.name.clone(),
                 };
-                self.confirm_workload_action(action);
+                self.confirm_object_action(action);
             }
             pods => {
                 if self.config.read_only {
@@ -710,29 +772,161 @@ impl App {
 
     /// `e`: edit the current Flux resource in the system editor.
     pub(super) fn edit_selected(&mut self) {
-        if let Some(native) = self.native_view_target() {
-            // Native kinds are view-only for now (#276); point at the
-            // equivalent kubectl command instead of a vague error.
-            self.set_status_message((native_edit_message(&native), true));
-        } else if self.config.read_only {
-            self.set_status_message(("Editing disabled in read-only mode".to_string(), true));
-        } else if let Some(resource) = self.get_current_resource() {
-            // Trigger YAML fetch for the full resource object (via AsyncTask)
-            let rk = ResourceKey::new(
-                resource.resource_type.clone(),
-                resource.namespace.clone(),
-                resource.name.clone(),
-            );
-            self.async_state.yaml.request(rk.clone().into());
-            self.async_state.edit_pending = Some(rk);
-            self.async_state.edit_full_yaml = None;
-            self.async_state.edit_editor_launched = false;
-            self.async_state.edit_error_message = None;
-            // Back (cancel/save) returns to the exact view `e` came from.
-            self.navigate_to(View::ResourceEdit);
-        } else {
-            self.set_status_message(("No resource selected for editing".to_string(), true));
+        let native = self.native_view_target();
+        if let Some(target) = native.as_ref().filter(|t| !self.native_editable(t)) {
+            // Not editable here: say why and point at kubectl.
+            self.set_status_message((native_edit_message(target), true));
+            return;
         }
+        if self.config.read_only {
+            self.set_status_message(("Editing disabled in read-only mode".to_string(), true));
+            return;
+        }
+        let target = match native {
+            // Native: fetch it and check who manages it before the editor
+            // opens (the warning comes from `on_edit_preflight`).
+            Some(target) => {
+                self.async_state.edit_preflight.request(target.clone());
+                target
+            }
+            None => match self.get_current_resource() {
+                Some(resource) => {
+                    let rk = ResourceKey::new(
+                        resource.resource_type.clone(),
+                        resource.namespace.clone(),
+                        resource.name.clone(),
+                    );
+                    // Flux resources go straight to the editor (via the YAML fetch).
+                    self.async_state.yaml.request(rk.clone().into());
+                    ObjectRef::from(rk)
+                }
+                None => {
+                    self.set_status_message(("No resource selected for editing".to_string(), true));
+                    return;
+                }
+            },
+        };
+        self.async_state.edit_pending = Some(target);
+        self.async_state.edit_full_yaml = None;
+        self.async_state.edit_editor_launched = false;
+        self.async_state.edit_error_message = None;
+        // Back (cancel/save) returns to the exact view `e` came from.
+        self.navigate_to(View::ResourceEdit);
+    }
+
+    /// Whether `e` can edit a native object: its kind is patchable
+    /// (discovery's verbs) and isn't a Secret.
+    pub(super) fn native_editable(&self, target: &ObjectRef) -> bool {
+        if self.view_state.current_view == View::KindList {
+            return self.kind_list_caps().edit;
+        }
+        let Some(api_version) = target.api_version.as_deref() else {
+            return true; // A Flux resource reached through a native path.
+        };
+        let group = api_version.split_once('/').map_or("", |(group, _)| group);
+        crate::models::kinds::catalog()
+            .find_by_group_kind(group, &target.kind)
+            .is_some_and(|spec| spec.caps.edit)
+    }
+
+    /// The native edit pre-check finished: warn when something manages the
+    /// object, else open the editor.
+    pub fn on_edit_preflight(&mut self, preflight: super::state::EditPreflight) {
+        let editing = self.view_state.current_view == View::ResourceEdit;
+        let Some(target) = self.async_state.edit_pending.clone().filter(|_| editing) else {
+            return; // The user left the edit meanwhile.
+        };
+        match self.edit_warning(&target, &preflight.manager, preflight.manager_suspended) {
+            Some(warning) => {
+                self.async_state.edit_preflight.set_result(preflight);
+                self.async_state.confirmation_pending = Some(Confirmation::Edit(warning));
+            }
+            None => self.async_state.edit_full_yaml = Some(preflight.object),
+        }
+    }
+
+    /// The edit confirmation was answered.
+    pub(super) fn answer_edit_warning(&mut self, proceed: bool) {
+        match self.async_state.edit_preflight.result().cloned() {
+            Some(preflight) if proceed => {
+                self.async_state.edit_full_yaml = Some(preflight.object);
+            }
+            _ => {
+                self.set_status_message(("Edit cancelled".to_string(), false));
+                self.leave_edit();
+            }
+        }
+    }
+
+    /// The warning for editing `target`, or `None` when nothing manages it.
+    /// A Flux manager that is suspended gets its own wording: the change
+    /// sticks until it's resumed. Suspension comes from the watched state,
+    /// else from `fetched_suspended` (read from the cluster by the
+    /// pre-check, for managers outside the watched namespaces).
+    pub(super) fn edit_warning(
+        &self,
+        target: &ObjectRef,
+        lookup: &crate::kube::ownership::ManagerLookup,
+        fetched_suspended: Option<bool>,
+    ) -> Option<String> {
+        use crate::kube::ownership::{Manager, ManagerLookup, Resolved};
+        let object = format!("{} {}", target.kind, target.name);
+        let (manager, via) = match lookup {
+            ManagerLookup::Unmanaged => return None,
+            ManagerLookup::Managed(manager) => (manager, String::new()),
+            ManagerLookup::Owned {
+                owner,
+                resolved: Some(Resolved::Manager(manager)),
+                ..
+            } => (manager, format!(" (via {}/{})", owner.kind, owner.name)),
+            ManagerLookup::Owned {
+                resolved: Some(Resolved::Owner { kind, name }),
+                ..
+            } => {
+                return Some(format!(
+                    "{object} is owned by {kind}/{name} — its controller may overwrite your change. Edit anyway?"
+                ));
+            }
+            ManagerLookup::Owned { owner, .. } => {
+                return Some(format!(
+                    "{object} is owned by {}/{} (its manager couldn't be checked) — a controller may overwrite your change. Edit anyway?",
+                    owner.kind, owner.name
+                ));
+            }
+        };
+        let consequence = match manager {
+            Manager::Flux {
+                kind,
+                namespace,
+                name,
+            } => {
+                let key = crate::watcher::resource_key(namespace, name, kind);
+                let suspended = self
+                    .state
+                    .get(&key)
+                    .and_then(|r| r.suspended)
+                    .or(fetched_suspended);
+                match suspended {
+                    Some(true) => format!(
+                        ", which is suspended — your change stays until {kind} {name} is resumed, then its next reconcile reverts it"
+                    ),
+                    Some(false) => " — its next reconcile will revert your change".to_string(),
+                    None => " — unless it's suspended, its next reconcile will revert your change"
+                        .to_string(),
+                }
+            }
+            Manager::Helm { .. } => {
+                " — the next helm upgrade may overwrite your change".to_string()
+            }
+            Manager::ArgoCd { .. } => {
+                " — Argo CD may revert it (self-heal) or report it OutOfSync".to_string()
+            }
+            Manager::Other(_) => " — it may overwrite your change".to_string(),
+        };
+        Some(format!(
+            "{object} is managed by {}{via}{consequence}. Edit anyway?",
+            manager.describe()
+        ))
     }
 
     /// Enter in the Flux list: open the selected resource's detail.

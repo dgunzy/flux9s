@@ -296,9 +296,88 @@ pub async fn describe_manager(client: &kube::Client, obj: &Value) -> String {
 }
 
 async fn describe_manager_within(client: &kube::Client, obj: &Value, limit: Duration) -> String {
+    match lookup_manager_within(client, obj, limit).await {
+        ManagerLookup::Managed(manager) => manager.describe(),
+        ManagerLookup::Unmanaged => UNMANAGED_TEXT.to_string(),
+        ManagerLookup::Owned {
+            owner,
+            resolved: None,
+            timed_out: true,
+        } => format!(
+            "owned by {}/{} (manager lookup timed out)",
+            owner.kind, owner.name
+        ),
+        ManagerLookup::Owned {
+            owner, resolved, ..
+        } => describe_resolution(&owner, resolved.as_ref()),
+    }
+}
+
+/// Who manages an object, walking its controller owner chain if needed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManagerLookup {
+    /// No manager and no controller owner.
+    Unmanaged,
+    /// Its own metadata names the manager.
+    Managed(Manager),
+    /// A controller owns it; `resolved` is where the chain leads (`None`
+    /// when it couldn't be read, `timed_out` when the bound ran out).
+    Owned {
+        owner: OwnerRef,
+        resolved: Option<Resolved>,
+        timed_out: bool,
+    },
+}
+
+impl ManagerLookup {
+    /// The manager this lookup ended at, directly or through the chain.
+    pub fn manager(&self) -> Option<&Manager> {
+        match self {
+            ManagerLookup::Managed(manager)
+            | ManagerLookup::Owned {
+                resolved: Some(Resolved::Manager(manager)),
+                ..
+            } => Some(manager),
+            _ => None,
+        }
+    }
+}
+
+/// Whether a Flux manager is suspended, read from the cluster — for when
+/// it isn't among the watched resources (flux9s scoped to another
+/// namespace). `None` for non-Flux managers, or when it can't be read
+/// (RBAC, gone, slow — bounded by [`MANAGER_TIMEOUT`]).
+pub async fn flux_manager_suspended(client: &kube::Client, manager: &Manager) -> Option<bool> {
+    let Manager::Flux {
+        kind,
+        namespace,
+        name,
+    } = manager
+    else {
+        return None;
+    };
+    let flux_kind = FluxResourceKind::parse_optional(kind)?;
+    let fetch = crate::kube::fetch::fetch_resource(client, kind, namespace, name);
+    let object = tokio::time::timeout(MANAGER_TIMEOUT, fetch)
+        .await
+        .ok()?
+        .ok()?;
+    flux_kind.extract_suspended(&object)
+}
+
+/// [`ManagerLookup`] for `obj`, bounded by [`MANAGER_TIMEOUT`] overall.
+pub async fn lookup_manager(client: &kube::Client, obj: &Value) -> ManagerLookup {
+    lookup_manager_within(client, obj, MANAGER_TIMEOUT).await
+}
+
+async fn lookup_manager_within(
+    client: &kube::Client,
+    obj: &Value,
+    limit: Duration,
+) -> ManagerLookup {
     match ownership(obj) {
-        Ownership::Managed(manager) => manager.describe(),
-        Ownership::Unmanaged => UNMANAGED_TEXT.to_string(),
+        Ownership::Managed(manager) => ManagerLookup::Managed(manager),
+        Ownership::Unmanaged => ManagerLookup::Unmanaged,
         Ownership::Owned(owner) => {
             let namespace = obj
                 .pointer("/metadata/namespace")
@@ -307,13 +386,15 @@ async fn describe_manager_within(client: &kube::Client, obj: &Value, limit: Dura
                 .to_string();
             let mut resolver = OwnerResolver::default();
             let resolve = resolver.resolve_many(client, vec![(owner.clone(), namespace)]);
-            if tokio::time::timeout(limit, resolve).await.is_err() {
-                return format!(
-                    "owned by {}/{} (manager lookup timed out)",
-                    owner.kind, owner.name
-                );
+            let timed_out = tokio::time::timeout(limit, resolve).await.is_err();
+            let resolved = (!timed_out)
+                .then(|| resolver.get(&owner.uid).cloned())
+                .flatten();
+            ManagerLookup::Owned {
+                owner,
+                resolved,
+                timed_out,
             }
-            describe_resolution(&owner, resolver.get(&owner.uid))
         }
     }
 }

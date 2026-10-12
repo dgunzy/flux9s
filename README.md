@@ -136,7 +136,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `r` - Resume resource
 - `R` - Reconcile resource
 - `y` - View resource YAML
-- `e` - Edit resource in system editor (opens YAML, applies changes via Server Side Apply on save)
+- `e` - Edit resource in system editor (opens YAML, applies changes via Server Side Apply on save). With `:native`, also any patchable non-Flux kind except Secrets — with a warning first when Flux, Helm, Argo CD, or a controller manages it
 - `f` - Toggle favorite
 - `g` - View resource graph (Kustomization, HelmRelease, etc.)
 - `h` - View reconciliation history

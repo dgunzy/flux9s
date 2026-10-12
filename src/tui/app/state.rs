@@ -482,12 +482,15 @@ pub struct AsyncOperationState {
     pub helm_values: LiveTask<HelmValuesRequest, crate::kube::helm_values::HelmValues>,
     /// Confirmed workload restart / pod delete in flight (#263).
     /// Resolves to the action itself so the success message can name it.
-    pub workload_action:
-        AsyncTask<crate::kube::workloads::WorkloadAction, crate::kube::workloads::WorkloadAction>,
+    pub object_action:
+        AsyncTask<crate::kube::workloads::ObjectAction, crate::kube::workloads::ObjectAction>,
 
     // Edit operation
     /// Resource being edited (key used for SSA apply)
-    pub edit_pending: Option<ResourceKey>,
+    pub edit_pending: Option<ObjectRef>,
+    /// Native edit pre-check (#276): the object plus who manages it, so the
+    /// user is warned before editing something a controller will revert.
+    pub edit_preflight: AsyncTask<ObjectRef, EditPreflight>,
     /// Full fetched JSON object (includes resourceVersion) for the resource being edited
     pub edit_full_yaml: Option<serde_json::Value>,
     /// YAML string from the editor — queued for SSA apply
@@ -512,7 +515,7 @@ impl AsyncOperationState {
         self.operation.clear();
         self.last_operation_key = None;
         self.confirmation_pending = None;
-        self.workload_action.clear();
+        self.object_action.clear();
         self.helm_values.clear();
         self.workload_metrics.clear();
         self.kind_list.clear();
@@ -521,6 +524,7 @@ impl AsyncOperationState {
         self.flux_namespace_discovery.clear();
 
         self.edit_pending = None;
+        self.edit_preflight.clear();
         self.edit_full_yaml = None;
         self.edit_save_pending = None;
         self.edit_save_result_rx = None;
@@ -562,8 +566,24 @@ pub struct HelmValuesRequest {
 pub enum Confirmation {
     /// A Flux operation (suspend, delete, …) on a watched resource.
     Flux(PendingOperation),
-    /// A workload rollout restart or pod delete (#263).
-    Workload(crate::kube::workloads::WorkloadAction),
+    /// A patch built from an action's data (restart, annotate, …) or a pod
+    /// delete (#263, #276).
+    Object(crate::kube::workloads::ObjectAction),
+    /// Editing an object something else manages (#276): the warning shown;
+    /// `y` opens the editor, `n` leaves the edit.
+    Edit(String),
+}
+
+/// What the native edit pre-check found.
+#[derive(Debug, Clone)]
+pub struct EditPreflight {
+    /// The object as fetched (the editor's starting document).
+    pub object: serde_json::Value,
+    /// Who manages it.
+    pub manager: crate::kube::ownership::ManagerLookup,
+    /// Whether a Flux manager is suspended, read from the cluster (it may
+    /// be outside the watched namespaces); `None` when unknown.
+    pub manager_suspended: Option<bool>,
 }
 
 #[derive(Clone, Debug)]

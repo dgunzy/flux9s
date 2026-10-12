@@ -119,7 +119,9 @@ help is `SPECIAL_COMMAND_HELP`.
 
 Every key of the normal key handler is an `Action` in `ACTIONS`
 (`src/tui/app/actions.rs`): keys, `when` (view / capabilities — deny by default),
-`spec` (`Builtin` or `Operation`), footer hint, help line. Table order is
+`spec` (`Builtin`, `Operation`, or the data-only writes `Patch` / `Annotate`, which
+share the kind filter, read-only gate, and confirmation via `App::request_write`),
+footer hint, help line. Prefer `Patch` / `Annotate` over new Rust for simple writes. Table order is
 precedence: put view-specific actions above the general ones they override. Footers
 are per-view layouts of action ids filtered by `when`, so a footer can't show a key
 that doesn't work. `every_footer_hint_runs_the_action_it_advertises` fails if an
@@ -150,6 +152,10 @@ uses the id and its selection handler is registered in `SUBMENU_TABLE`
   line offsets, `list` for selections — draw only `viewport.range()`, then call
   `viewport.render_scrollbar(f, area, theme)` on the bordered area. Never clamp
   offsets by hand or draw a custom indicator.
+- **Long text wraps through one helper.** Messages that can outgrow the screen
+  (confirmations, status lines, empty/loading states, anything built from cluster
+  data) render with `views::text::wrapped`; a layout that must make room for them
+  sizes it with `views::text::wrapped_height` (same word-wrap, so the space matches).
 - **Back navigation is one stack** (`src/tui/app/navigation.rs`): open views with
   `navigate_to` (drill in) or `navigate_root` (`:` top-level switch), go back with
   `navigate_back`. Never add a per-view "back target" field or assign
@@ -328,6 +334,9 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
 
 - Don't forget to invalidate layout cache when state affecting layout changes
 - Always check `config.read_only` before write operations
+- **Never edit Secrets**: `objects::fetch_object` redacts them, so applying an edited copy
+  would overwrite real values. `KindSpec::with_patch_verb` denies `caps.edit` for Secrets and
+  `apply_object_yaml` refuses them as a second guard
 - Update both `NO_PROXY` and `no_proxy` for environment compatibility
 - Generated models are version-controlled for reproducible builds
 - **Kind registry**: `:<kind>` resolves through `models::kinds::resolve` (Flux → Flux-adjacent → discovered). Keep `KindSpec` columns/health/capabilities as data (no fn pointers) so config overlays (#277) stay possible; `nativeResources` is an opt-in preview (default false; `:native` toggles per session) — while off, discovery and kind watches must not run at all, including Flux-adjacent CRD discovery (`Config::flux_crd_discovery_enabled`). See DEVELOPER_GUIDE "The Kind Registry".

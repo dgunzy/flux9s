@@ -67,7 +67,7 @@ Use these keyboard shortcuts to navigate flux9s:
 | `R`       | Reconcile resource                                      |
 | `y`       | View resource YAML                                      |
 | `d`       | View describe output                                    |
-| `e`       | Edit resource in system editor (disabled in read-only mode) |
+| `e`       | Edit in system editor — Flux resources, and with `:native` any patchable kind except Secrets (disabled in read-only mode) |
 | `f`       | Toggle favorite                                         |
 | `g`       | View resource graph (Kustomization, HelmRelease, etc.)  |
 | `h`       | View reconciliation history                             |
@@ -243,8 +243,8 @@ CRDs that keep some kinds in an older version (e.g. metallb's
 connects and after `:ctx`; an unknown `:<kind>` triggers a re-check (at most
 every 30s), so a CRD installed while flux9s runs is found on the next try.
 
-Non-Flux kinds are view-only for now: `e` explains that and suggests the
-equivalent `kubectl edit` command.
+`e` edits non-Flux objects too (see [Editing Resources](#editing-resources)):
+any kind the API server lets you patch, except Secrets.
 
 While the preview is off (the default), flux9s makes no discovery calls and
 no extra watches — Flux-adjacent CRD discovery (`discoverFluxResources`,
@@ -524,6 +524,29 @@ Press `e` on any resource to open it in your system editor. flux9s fetches the f
 GUI editors (VS Code, Sublime Text, Atom, Zed) are automatically invoked with `--wait` so flux9s blocks until you close the editing window.
 
 **Note:** Editing is disabled in read-only mode. The previous view (YAML, detail, graph, or list) is restored after saving, cancelling, or on error.
+
+### Editing non-Flux objects
+
+With native resources on (`:native`), `e` works in kind lists, on inventory
+and event rows, and in a native object's YAML/describe view — for any kind the
+API server lists as patchable (RBAC still decides on save). Before the editor
+opens, flux9s checks who manages the object and asks first when something
+does:
+
+- **Flux** (Kustomization, HelmRelease, ResourceSet, FluxInstance — directly
+  or through an owner chain, e.g. a pod of a Flux-managed Deployment):
+  *"its next reconcile will revert your change"*. If that Flux object is
+  **suspended**, the warning says so instead: your change stays until it's
+  resumed, then the next reconcile reverts it.
+- **Helm**, **Argo CD**, or another `app.kubernetes.io/managed-by` manager:
+  that tool may overwrite or revert the change.
+- **A controller owner** with no manager above it (e.g. a hand-made
+  Deployment's ReplicaSet): its controller may overwrite the change.
+
+`y` opens the editor; `n` or `Esc` backs out. Unmanaged objects open straight
+away. **Secrets are never editable** in flux9s — it only ever holds their
+values redacted, so saving would overwrite them; `e` suggests the matching
+`kubectl edit` instead, as it does for kinds the API won't patch.
 
 ## Terminal Commands
 

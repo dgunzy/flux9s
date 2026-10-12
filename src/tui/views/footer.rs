@@ -51,8 +51,25 @@ pub fn render_footer(
         return render_navigation_footer(f, area, theme, nav_commands);
     }
 
-    // Build footer text for non-default cases
-    let footer_text: Vec<Span> = if show_help {
+    // Messages wrap; the layout reserves the rows (see `footer_message_line`).
+    let line = footer_message_line(show_help, confirmation_message, status_message, theme)
+        .unwrap_or_default();
+    let footer =
+        crate::tui::views::text::wrapped(line).block(Block::default().borders(Borders::ALL));
+    f.render_widget(footer, area);
+    1
+}
+
+/// The line the footer shows instead of key hints (help hint, pending
+/// confirmation, status message), if any. Shared with the layout so the
+/// footer's height fits the wrapped message.
+pub fn footer_message_line<'a>(
+    show_help: bool,
+    confirmation_message: Option<&str>,
+    status_message: &Option<(String, bool)>,
+    theme: &Theme,
+) -> Option<Line<'a>> {
+    let spans: Vec<Span> = if show_help {
         vec![
             Span::raw("Press "),
             Span::styled("?", theme.footer_key_style()),
@@ -72,13 +89,9 @@ pub fn render_footer(
             },
         )]
     } else {
-        vec![]
+        return None;
     };
-
-    let footer =
-        Paragraph::new(Line::from(footer_text)).block(Block::default().borders(Borders::ALL));
-    f.render_widget(footer, area);
-    1 // Single line for these cases
+    Some(Line::from(spans))
 }
 
 fn render_command_footer(f: &mut Frame, area: Rect, command_buffer: &str, theme: &Theme) -> usize {
@@ -323,13 +336,10 @@ fn render_quit_confirm_footer(f: &mut Frame, area: Rect, theme: &Theme) -> usize
     1
 }
 
-fn render_confirmation_footer_text<'a>(confirmation_msg: &str, theme: &Theme) -> Vec<Span<'a>> {
+/// Footer keys while a confirmation is pending. The question itself is the
+/// dialog's (always drawn in the main area), so it isn't repeated here.
+fn render_confirmation_footer_text<'a>(_confirmation_msg: &str, theme: &Theme) -> Vec<Span<'a>> {
     vec![
-        Span::styled(
-            confirmation_msg.to_string(),
-            theme.operation_warning_style(),
-        ),
-        Span::raw("  "),
         Span::styled(
             "y",
             Style::default()

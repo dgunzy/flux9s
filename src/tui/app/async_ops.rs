@@ -8,12 +8,11 @@
 //! bookkeeping) and the graph result hook (initial keyboard focus).
 
 use super::core::App;
-use crate::watcher::ResourceKey;
 
 /// Request to save edited resource YAML via Server Side Apply
 pub struct EditSaveRequest {
-    /// Key of the resource being saved
-    pub resource_key: ResourceKey,
+    /// The object being saved (Flux or native)
+    pub target: crate::kube::objects::ObjectRef,
     /// Full YAML string from the editor (must include resourceVersion for conflict detection)
     pub yaml_to_apply: String,
     /// Kubernetes client to use for the SSA patch
@@ -74,7 +73,7 @@ impl App {
         if self.async_state.edit_save_result_rx.is_some() {
             return None;
         }
-        let rk = self.async_state.edit_pending.clone()?;
+        let target = self.async_state.edit_pending.clone()?;
         let client = self.kube_client.clone()?;
         let yaml_to_apply = self.async_state.edit_save_pending.take()?;
 
@@ -82,7 +81,7 @@ impl App {
         self.async_state.edit_save_result_rx = Some(rx);
 
         Some(EditSaveRequest {
-            resource_key: rk,
+            target,
             yaml_to_apply,
             client,
             tx,
@@ -145,15 +144,16 @@ impl App {
                         .map(|resource| operation.confirmation_message(&resource))
                 })
                 .unwrap_or_else(|| "Resource not found".to_string()),
-            Confirmation::Workload(action) => action.confirmation_message(),
+            Confirmation::Object(action) => action.confirmation_message(),
+            Confirmation::Edit(message) => message.clone(),
         })
     }
 
     /// Record a finished workload action (#263). The live workload watch
     /// picks up the resulting rollout / replacement pod on its own.
-    pub fn set_workload_action_result(
+    pub fn set_object_action_result(
         &mut self,
-        result: anyhow::Result<crate::kube::workloads::WorkloadAction>,
+        result: anyhow::Result<crate::kube::workloads::ObjectAction>,
     ) {
         match result {
             Ok(action) => {
@@ -278,11 +278,14 @@ mod tests {
 
     fn set_edit_in_progress(app: &mut App) {
         use crate::watcher::ResourceKey;
-        app.async_state.edit_pending = Some(ResourceKey {
-            resource_type: "Kustomization".to_string(),
-            namespace: "flux-system".to_string(),
-            name: "my-ks".to_string(),
-        });
+        app.async_state.edit_pending = Some(
+            ResourceKey {
+                resource_type: "Kustomization".to_string(),
+                namespace: "flux-system".to_string(),
+                name: "my-ks".to_string(),
+            }
+            .into(),
+        );
         app.async_state.edit_full_yaml = Some(serde_json::json!({"apiVersion": "v1"}));
         app.async_state.edit_save_pending = Some("apiVersion: v1".to_string());
         app.async_state.edit_editor_launched = true;
@@ -371,7 +374,7 @@ mod tests {
 
     #[test]
     fn workload_action_success_reports() {
-        use crate::kube::workloads::{WorkloadAction, WorkloadData};
+        use crate::kube::workloads::{ObjectAction, WorkloadData};
         let mut app = create_test_app();
         app.view_state.current_view = super::super::state::View::WorkloadDetail;
         app.async_state.workload.set_result(WorkloadData {
@@ -388,10 +391,12 @@ mod tests {
             managed_by: None,
         });
 
-        app.set_workload_action_result(Ok(WorkloadAction::Restart {
-            kind: "Deployment".into(),
-            namespace: "apps".into(),
-            name: "web".into(),
+        app.set_object_action_result(Ok(ObjectAction::Patch {
+            target: crate::kube::objects::ObjectRef::native("apps/v1", "Deployment", "apps", "web"),
+            verb: "Restart".into(),
+            done: "Restarted".into(),
+            detail: String::new(),
+            patch: serde_json::json!({}),
         }));
 
         assert_eq!(
@@ -403,7 +408,7 @@ mod tests {
     #[test]
     fn workload_action_failure_reports_error() {
         let mut app = create_test_app();
-        app.set_workload_action_result(Err(anyhow::anyhow!("forbidden")));
+        app.set_object_action_result(Err(anyhow::anyhow!("forbidden")));
         assert!(
             app.ui_state
                 .status_message

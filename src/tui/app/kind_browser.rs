@@ -9,7 +9,7 @@
 use super::core::App;
 use super::state::View;
 use crate::kube::kind_list::{KindListRequest, KindListSnapshot, KindRow};
-use crate::kube::workloads::WorkloadAction;
+use crate::kube::workloads::ObjectAction;
 use crate::models::kinds::{Capabilities, KindSpec};
 
 /// Minimum gap between discovery re-checks triggered by unknown kinds.
@@ -210,7 +210,7 @@ impl App {
     }
 
     /// The selected row's `(kind, namespace, name)`.
-    fn selected_kind_object(&self) -> Option<(String, String, String)> {
+    pub(super) fn selected_kind_object(&self) -> Option<(String, String, String)> {
         let kind = self.async_state.kind_list.key()?.spec.gvk.kind.clone();
         let row = self
             .filtered_kind_rows()
@@ -244,21 +244,10 @@ impl App {
         }
     }
 
-    /// `r`: confirm a rollout restart of the selected workload.
-    pub(super) fn kind_restart_selected(&mut self) {
-        if let Some((kind, namespace, name)) = self.selected_kind_object() {
-            self.confirm_workload_action(WorkloadAction::Restart {
-                kind,
-                namespace,
-                name,
-            });
-        }
-    }
-
     /// `Ctrl+d`: confirm deleting the selected pod.
     pub(super) fn kind_delete_pod_selected(&mut self) {
         if let Some((_, namespace, name)) = self.selected_kind_object() {
-            self.confirm_workload_action(WorkloadAction::DeletePod { namespace, name });
+            self.confirm_object_action(ObjectAction::DeletePod { namespace, name });
         }
     }
 
