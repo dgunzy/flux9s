@@ -1563,7 +1563,10 @@ fn edit_on_native_objects_explains_and_suggests_kubectl() {
     assert_eq!(app.view_state.current_view, View::KindList, "no edit view");
     let (message, is_error) = app.ui_state.status_message.clone().unwrap();
     assert!(is_error);
-    assert!(message.contains("Editing IPAddressPool isn't supported yet"));
+    assert!(
+        message.contains("IPAddressPool can't be edited here"),
+        "{message}"
+    );
     assert!(message.contains("kubectl edit ipaddresspool.metallb.io/main-pool -n metallb-system"));
 }
 
@@ -1976,7 +1979,7 @@ fn late_async_results_dont_navigate_away_from_where_the_user_went() {
     app.back_from(View::ResourceGraph);
     assert_eq!(app.view_state.current_view, View::ResourceList);
 
-    app.async_state.edit_pending = Some(ResourceKey::new("Kustomization", "a", "b"));
+    app.async_state.edit_pending = Some(ResourceKey::new("Kustomization", "a", "b").into());
     app.leave_edit();
     assert_eq!(app.view_state.current_view, View::ResourceList);
     assert!(app.async_state.edit_pending.is_none(), "edit state cleared");
@@ -2086,7 +2089,6 @@ fn deploy_list_enter_opens_the_shared_workload_detail_and_back_returns() {
 
 #[test]
 fn deploy_list_r_confirms_a_restart_like_the_workload_views() {
-    use crate::kube::workloads::WorkloadAction;
     let mut app = create_test_app(false);
     open_list(
         &mut app,
@@ -2100,18 +2102,14 @@ fn deploy_list_r_confirms_a_restart_like_the_workload_views() {
     app.handle_key(make_key(KeyCode::Char('r')));
 
     assert_eq!(
-        pending_workload_action(&app),
-        Some(WorkloadAction::Restart {
-            kind: "Deployment".into(),
-            namespace: "apps".into(),
-            name: "web".into(),
-        })
+        pending_restart(&app),
+        Some(("Deployment".into(), "apps".into(), "web".into()))
     );
 }
 
 #[test]
 fn pod_list_offers_logs_and_delete_but_not_restart() {
-    use crate::kube::workloads::WorkloadAction;
+    use crate::kube::workloads::ObjectAction;
     let mut app = create_test_app(false);
     open_list(&mut app, "", "Pod", "pods", &[("apps", "web-abc")]);
     let footer = footer_keys(&app);
@@ -2122,7 +2120,7 @@ fn pod_list_offers_logs_and_delete_but_not_restart() {
     app.handle_key(make_ctrl_key(KeyCode::Char('d')));
     assert_eq!(
         pending_workload_action(&app),
-        Some(WorkloadAction::DeletePod {
+        Some(ObjectAction::DeletePod {
             namespace: "apps".into(),
             name: "web-abc".into(),
         })
@@ -2345,10 +2343,34 @@ fn kind_commands_while_off_point_at_native() {
     }
 }
 
-fn pending_workload_action(app: &App) -> Option<crate::kube::workloads::WorkloadAction> {
+/// The pending restart's (kind, namespace, name), checking it is the
+/// action table's restart patch.
+fn pending_restart(app: &App) -> Option<(String, String, String)> {
+    match pending_workload_action(app)? {
+        crate::kube::workloads::ObjectAction::Patch {
+            target,
+            verb,
+            patch,
+            ..
+        } if verb == "Restart" => {
+            assert!(
+                patch
+                    .pointer(
+                        "/spec/template/metadata/annotations/kubectl.kubernetes.io~1restartedAt"
+                    )
+                    .is_some(),
+                "restart patches the pod template: {patch}"
+            );
+            Some((target.kind, target.namespace, target.name))
+        }
+        _ => None,
+    }
+}
+
+fn pending_workload_action(app: &App) -> Option<crate::kube::workloads::ObjectAction> {
     match app.async_state.confirmation_pending.as_ref()? {
-        Confirmation::Workload(action) => Some(action.clone()),
-        Confirmation::Flux(_) => None,
+        Confirmation::Object(action) => Some(action.clone()),
+        Confirmation::Flux(_) | Confirmation::Edit(_) => None,
     }
 }
 
@@ -2359,17 +2381,15 @@ fn open_workload_list(app: &mut App) {
 
 #[test]
 fn r_in_workload_list_confirms_then_runs_restart() {
-    use crate::kube::workloads::WorkloadAction;
     let mut app = app_on_graph_with_workloads();
     open_workload_list(&mut app);
 
     app.handle_key(make_key(KeyCode::Char('r')));
-    let expected = WorkloadAction::Restart {
-        kind: "Deployment".into(),
-        namespace: "flux-system".into(),
-        name: "podinfo".into(),
-    };
-    assert_eq!(pending_workload_action(&app), Some(expected.clone()));
+    assert_eq!(
+        pending_restart(&app),
+        Some(("Deployment".into(), "flux-system".into(), "podinfo".into()))
+    );
+    let expected = pending_workload_action(&app).unwrap();
     assert!(
         app.confirmation_message()
             .is_some_and(|m| m.contains("Restart Deployment 'podinfo'"))
@@ -2377,7 +2397,7 @@ fn r_in_workload_list_confirms_then_runs_restart() {
 
     app.handle_key(make_key(KeyCode::Char('y')));
     assert!(app.async_state.confirmation_pending.is_none());
-    assert_eq!(app.async_state.workload_action.pending(), Some(&expected));
+    assert_eq!(app.async_state.object_action.pending(), Some(&expected));
 }
 
 #[test]
@@ -2389,7 +2409,7 @@ fn restart_can_be_cancelled() {
     app.handle_key(make_key(KeyCode::Char('n')));
 
     assert!(app.async_state.confirmation_pending.is_none());
-    assert!(!app.async_state.workload_action.is_loading());
+    assert!(!app.async_state.object_action.is_loading());
     assert_eq!(app.view_state.current_view, View::WorkloadList);
 }
 
@@ -2425,7 +2445,7 @@ fn restart_rejects_cronjobs() {
 
 #[test]
 fn ctrl_d_in_workload_detail_deletes_the_only_pod() {
-    use crate::kube::workloads::WorkloadAction;
+    use crate::kube::workloads::ObjectAction;
     let mut app = app_on_graph_with_workloads();
     app.view_state.current_view = View::WorkloadDetail;
     app.async_state
@@ -2436,7 +2456,7 @@ fn ctrl_d_in_workload_detail_deletes_the_only_pod() {
 
     assert_eq!(
         pending_workload_action(&app),
-        Some(WorkloadAction::DeletePod {
+        Some(ObjectAction::DeletePod {
             namespace: "flux-system".into(),
             name: "podinfo-abc".into(),
         })
@@ -2445,7 +2465,7 @@ fn ctrl_d_in_workload_detail_deletes_the_only_pod() {
 
 #[test]
 fn ctrl_d_with_several_pods_picks_one_then_confirms() {
-    use crate::kube::workloads::WorkloadAction;
+    use crate::kube::workloads::ObjectAction;
     let mut app = app_on_graph_with_workloads();
     app.view_state.current_view = View::WorkloadDetail;
     app.async_state
@@ -2466,7 +2486,7 @@ fn ctrl_d_with_several_pods_picks_one_then_confirms() {
 
     assert_eq!(
         pending_workload_action(&app),
-        Some(WorkloadAction::DeletePod {
+        Some(ObjectAction::DeletePod {
             namespace: "flux-system".into(),
             name: "podinfo-def".into(),
         })
@@ -3188,4 +3208,280 @@ fn help_overlay_scrolls_to_reach_everything() {
     assert_eq!(app.ui_state.help_scroll, 0);
     app.handle_key(make_key(KeyCode::Esc));
     assert!(!app.ui_state.show_help);
+}
+
+/// A kind list of a patchable kind (as discovery would build it).
+fn open_editable_list(app: &mut App, group: &str, kind_name: &str, plural: &str) {
+    app.view_state.current_view = View::ResourceList;
+    app.open_kind_list(kind(group, kind_name, plural).with_patch_verb(true));
+    with_rows(app, &[("apps", "web")]);
+}
+
+fn preflight(manager: crate::kube::ownership::ManagerLookup) -> super::state::EditPreflight {
+    super::state::EditPreflight {
+        object: serde_json::json!({"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": "web", "namespace": "apps"}}),
+        manager,
+        manager_suspended: None,
+    }
+}
+
+fn flux_ks(name: &str) -> crate::kube::ownership::Manager {
+    crate::kube::ownership::Manager::Flux {
+        kind: "Kustomization".into(),
+        namespace: "flux-system".into(),
+        name: name.into(),
+    }
+}
+
+#[test]
+fn e_on_a_patchable_native_kind_checks_ownership_before_editing() {
+    let mut app = create_test_app(false);
+    open_editable_list(&mut app, "", "ConfigMap", "configmaps");
+    assert!(footer_keys(&app).contains(&("e", "Edit")));
+
+    app.handle_key(make_key(KeyCode::Char('e')));
+    assert_eq!(app.view_state.current_view, View::ResourceEdit);
+    let target = app.async_state.edit_preflight.pending().cloned().unwrap();
+    assert_eq!(target, ObjectRef::native("v1", "ConfigMap", "apps", "web"));
+    assert_eq!(app.async_state.edit_pending.as_ref(), Some(&target));
+
+    // Unmanaged: straight to the editor.
+    let _ = app.async_state.edit_preflight.dispatch();
+    app.on_edit_preflight(preflight(crate::kube::ownership::ManagerLookup::Unmanaged));
+    assert!(app.async_state.confirmation_pending.is_none());
+    assert!(app.async_state.edit_full_yaml.is_some());
+}
+
+#[test]
+fn editing_a_flux_managed_object_warns_and_respects_the_answer() {
+    use crate::kube::ownership::ManagerLookup;
+    let mut app = create_test_app(false);
+    add_resource(&mut app); // Kustomization flux-system/my-kustomization, not suspended
+    open_editable_list(&mut app, "", "ConfigMap", "configmaps");
+    app.handle_key(make_key(KeyCode::Char('e')));
+    let _ = app.async_state.edit_preflight.dispatch();
+    app.on_edit_preflight(preflight(ManagerLookup::Managed(flux_ks(
+        "my-kustomization",
+    ))));
+
+    let message = app.confirmation_message().unwrap();
+    assert!(
+        message.contains("managed by Flux Kustomization flux-system/my-kustomization"),
+        "{message}"
+    );
+    assert!(message.contains("next reconcile will revert"), "{message}");
+    assert!(
+        app.async_state.edit_full_yaml.is_none(),
+        "editor waits for y"
+    );
+
+    // n backs out of the edit entirely.
+    app.handle_key(make_key(KeyCode::Char('n')));
+    assert_eq!(app.view_state.current_view, View::KindList);
+    assert!(app.async_state.edit_pending.is_none());
+
+    // y opens the editor.
+    app.handle_key(make_key(KeyCode::Char('e')));
+    let _ = app.async_state.edit_preflight.dispatch();
+    app.on_edit_preflight(preflight(ManagerLookup::Managed(flux_ks(
+        "my-kustomization",
+    ))));
+    app.handle_key(make_key(KeyCode::Char('y')));
+    assert!(app.async_state.edit_full_yaml.is_some());
+    assert_eq!(app.view_state.current_view, View::ResourceEdit);
+}
+
+#[test]
+fn a_suspended_flux_manager_gets_its_own_warning() {
+    use crate::kube::ownership::{ManagerLookup, OwnerRef, Resolved};
+    let mut app = create_test_app(false);
+    add_resource(&mut app);
+    let key = "Kustomization:flux-system:my-kustomization";
+    let mut suspended = app.state.get(key).unwrap();
+    suspended.suspended = Some(true);
+    app.state.upsert(key.to_string(), suspended);
+    let target = ObjectRef::native("v1", "Pod", "apps", "web-abc");
+
+    // Through an owner chain: the pod's Deployment is Flux-managed.
+    let owned = ManagerLookup::Owned {
+        owner: OwnerRef {
+            api_version: "apps/v1".into(),
+            kind: "ReplicaSet".into(),
+            name: "web-7b5".into(),
+            uid: "rs-1".into(),
+        },
+        resolved: Some(Resolved::Manager(flux_ks("my-kustomization"))),
+        timed_out: false,
+    };
+    let message = app.edit_warning(&target, &owned, None).unwrap();
+    assert!(message.contains("(via ReplicaSet/web-7b5)"), "{message}");
+    assert!(message.contains("which is suspended"), "{message}");
+    assert!(
+        message.contains("stays until Kustomization my-kustomization is resumed"),
+        "{message}"
+    );
+
+    // A Flux manager outside the watched namespaces: can't know.
+    let unknown = app
+        .edit_warning(&target, &ManagerLookup::Managed(flux_ks("elsewhere")), None)
+        .unwrap();
+    assert!(unknown.contains("unless it's suspended"), "{unknown}");
+
+    // Other managers.
+    let helm = app
+        .edit_warning(
+            &target,
+            &ManagerLookup::Managed(crate::kube::ownership::Manager::Helm {
+                namespace: "apps".into(),
+                release: "web".into(),
+            }),
+            None,
+        )
+        .unwrap();
+    assert!(helm.contains("helm upgrade"), "{helm}");
+    let top_owner = app
+        .edit_warning(
+            &target,
+            &ManagerLookup::Owned {
+                owner: OwnerRef {
+                    api_version: "apps/v1".into(),
+                    kind: "ReplicaSet".into(),
+                    name: "web-7b5".into(),
+                    uid: "rs-1".into(),
+                },
+                resolved: Some(Resolved::Owner {
+                    kind: "Deployment".into(),
+                    name: "web".into(),
+                }),
+                timed_out: false,
+            },
+            None,
+        )
+        .unwrap();
+    assert!(top_owner.contains("owned by Deployment/web"), "{top_owner}");
+    assert_eq!(
+        app.edit_warning(&target, &ManagerLookup::Unmanaged, None),
+        None
+    );
+}
+
+#[test]
+fn secrets_and_read_only_never_reach_the_editor() {
+    let mut app = create_test_app(false);
+    open_editable_list(&mut app, "", "Secret", "secrets");
+    assert!(!footer_keys(&app).contains(&("e", "Edit")), "no Edit hint");
+    app.handle_key(make_key(KeyCode::Char('e')));
+    assert_eq!(app.view_state.current_view, View::KindList);
+    let (message, _) = app.ui_state.status_message.clone().unwrap();
+    assert!(message.contains("Secrets can't be edited"), "{message}");
+
+    let mut app = create_test_app(true);
+    open_editable_list(&mut app, "", "ConfigMap", "configmaps");
+    app.handle_key(make_key(KeyCode::Char('e')));
+    assert_eq!(app.view_state.current_view, View::KindList);
+    assert!(app.async_state.edit_preflight.pending().is_none());
+}
+
+#[test]
+fn a_late_preflight_after_leaving_the_edit_is_ignored() {
+    let mut app = create_test_app(false);
+    open_editable_list(&mut app, "", "ConfigMap", "configmaps");
+    app.handle_key(make_key(KeyCode::Char('e')));
+    app.handle_key(make_key(KeyCode::Esc)); // leave before it lands
+    app.on_edit_preflight(preflight(crate::kube::ownership::ManagerLookup::Managed(
+        flux_ks("x"),
+    )));
+    assert!(app.async_state.confirmation_pending.is_none());
+    assert_eq!(app.view_state.current_view, View::KindList);
+}
+
+#[test]
+fn annotate_actions_build_a_metadata_patch() {
+    use super::actions::{ActionSpec, Write};
+    let spec = ActionSpec::Annotate {
+        key: "example.com/reconcile-at",
+        value: "{{now}}",
+        write: Write {
+            verb: "Reconcile",
+            done: "Requested reconcile of",
+            detail: "",
+            kinds: &[],
+        },
+    };
+    let patch = spec
+        .patch_document("2026-10-12T00:00:00Z")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        patch,
+        serde_json::json!({"metadata": {"annotations": {"example.com/reconcile-at": "2026-10-12T00:00:00Z"}}})
+    );
+    let bad = ActionSpec::Patch {
+        patch: "{not json",
+        write: Write {
+            verb: "X",
+            done: "X",
+            detail: "",
+            kinds: &[],
+        },
+    };
+    assert!(bad.patch_document("now").unwrap().is_err());
+}
+
+#[test]
+fn restart_on_a_cronjob_explains_it_does_not_apply() {
+    use crate::kube::workloads::WorkloadRef;
+    let mut app = create_test_app(false);
+    app.view_state.workload_rows = vec![WorkloadRef {
+        kind: "CronJob".into(),
+        name: "nightly".into(),
+        namespace: "apps".into(),
+        indicator: "●".into(),
+        status: String::new(),
+        api_version: "batch/v1".into(),
+    }];
+    app.view_state.current_view = View::WorkloadList;
+    app.handle_key(make_key(KeyCode::Char('r')));
+    assert!(app.async_state.confirmation_pending.is_none());
+    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+    assert!(
+        is_error && message.contains("CronJob does not support restart"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_suspended_manager_outside_the_watched_namespaces_is_still_recognised() {
+    use crate::kube::ownership::ManagerLookup;
+    // flux9s scoped to the app's namespace: the Kustomization isn't watched,
+    // but the pre-check read it from the cluster.
+    let app = create_test_app(false);
+    let target = ObjectRef::native("apps/v1", "Deployment", "cabot-cup", "cabot-cup");
+    let lookup = ManagerLookup::Managed(flux_ks("apps"));
+    let suspended = app.edit_warning(&target, &lookup, Some(true)).unwrap();
+    assert!(suspended.contains("which is suspended"), "{suspended}");
+    let active = app.edit_warning(&target, &lookup, Some(false)).unwrap();
+    assert!(
+        active.contains(" — its next reconcile will revert"),
+        "{active}"
+    );
+    let unknown = app.edit_warning(&target, &lookup, None).unwrap();
+    assert!(unknown.contains("unless it's suspended"), "{unknown}");
+}
+
+#[test]
+fn the_watched_state_wins_over_the_fetched_suspend_flag() {
+    use crate::kube::ownership::ManagerLookup;
+    let mut app = create_test_app(false);
+    add_resource(&mut app); // watched, not suspended
+    let target = ObjectRef::native("v1", "ConfigMap", "apps", "web");
+    let message = app
+        .edit_warning(
+            &target,
+            &ManagerLookup::Managed(flux_ks("my-kustomization")),
+            Some(true),
+        )
+        .unwrap();
+    assert!(!message.contains("suspended"), "{message}");
 }

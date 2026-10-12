@@ -26,6 +26,7 @@ mod resource_list;
 pub mod scroll;
 mod splash;
 mod submenu;
+pub mod text;
 pub mod trace;
 mod workloads;
 mod yaml;

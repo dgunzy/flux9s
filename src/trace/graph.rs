@@ -90,16 +90,17 @@ impl GraphNode {
             }
             NodeType::WorkloadGroup => {
                 if let Some(desc) = &self.description {
-                    let lines: Vec<&str> = desc.lines().collect();
-                    let count = lines.len();
+                    let workloads: Vec<_> = desc
+                        .lines()
+                        .filter_map(crate::kube::workloads::WorkloadRef::parse_graph_line)
+                        .collect();
+                    let count = workloads.len();
                     if count > 0 {
                         // A namespace line is shown per workload only when they differ.
-                        let show_namespace = count > 1 && {
-                            let first = lines[0].split('|').nth(2).unwrap_or("");
-                            !lines
+                        let show_namespace = count > 1
+                            && !workloads
                                 .iter()
-                                .all(|l| l.split('|').nth(2).unwrap_or("") == first)
-                        };
+                                .all(|w| w.namespace == workloads[0].namespace);
                         let per_workload = if show_namespace { 4 } else { 3 };
                         let blanks = count.saturating_sub(1);
                         height += (count * per_workload + blanks) as u16;

@@ -202,7 +202,7 @@ impl App {
     /// Workload pod delete popup: the value is "namespace/pod".
     fn select_pod_delete(&mut self, value: String) {
         if let Some((namespace, pod)) = value.split_once('/') {
-            self.confirm_workload_action(crate::kube::workloads::WorkloadAction::DeletePod {
+            self.confirm_object_action(crate::kube::workloads::ObjectAction::DeletePod {
                 namespace: namespace.to_string(),
                 name: pod.to_string(),
             });

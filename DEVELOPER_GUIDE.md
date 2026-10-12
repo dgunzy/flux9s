@@ -612,7 +612,16 @@ goes through the **action table**, `ACTIONS`. An `Action` is data:
 - `keys` (Control is the only significant modifier), `when` (view and kind
   capabilities; deny by default), `spec` (`Builtin(fn)` or
   `Operation(key)` → the `FluxOperation` registry with its read-only gate
-  and confirmation), a `footer` hint, a `help` line, and `sets_status`.
+  and confirmation, or the data-only writes `Patch { patch, write }` /
+  `Annotate { key, value, write }` → `App::request_write`: kind filter,
+  read-only gate, confirmation, `ObjectAction::Patch`), a `footer` hint, a
+  `help` line, and `sets_status`. Workload restart is a `Patch`.
+- **Native edit**: `Capabilities::edit` comes from discovery's `patch` verb
+  (never Secrets). `e` on a native target runs an `edit_preflight` (fetch +
+  `ownership::lookup_manager`, bounded) and `App::edit_warning` words the
+  confirmation by manager — Flux (suspended or not), Helm, Argo CD, or a
+  controller owner — before the editor opens. Save goes through
+  `operations::apply_object_yaml` (SSA, `ObjectRef`).
 - Dispatch runs the first action whose key matches and whose `when` holds —
   table order is precedence.
 - Footers are per-view layouts of action ids (`view_layout`), filtered by
@@ -642,6 +651,15 @@ the ids in `tui::commands::submenu_ids`.
   over the block's right border, sized to the visible share, hidden when
   everything fits.
 - A test checks `scroll_model` and `scroll_offset_mut` agree for every view.
+
+## Wrapping Long Text (`src/tui/views/text.rs`)
+
+`text::wrapped(lines)` is a word-wrapping paragraph for anything that can be
+wider than the screen — the confirmation dialog, empty/loading states, the
+footer's status line. `text::wrapped_height(lines, width)` counts the rows the
+same wrap produces (a test checks it against what ratatui draws), so layouts
+can reserve space: the footer grows (up to 4 rows) to fit a long status
+message instead of cutting it off.
 
 ## Back Navigation (`src/tui/app/navigation.rs`)
 

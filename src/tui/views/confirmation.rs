@@ -6,7 +6,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders},
 };
 
 /// Render the confirmation dialog
@@ -69,7 +69,8 @@ pub fn render_confirmation(f: &mut Frame, area: Rect, message: &str, theme: &The
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.text_label))
         .border_style(Style::default().fg(theme.operation_warning));
-    let paragraph = Paragraph::new(lines)
+    // Warnings can be long (e.g. why an edit will be reverted): wrap them.
+    let paragraph = crate::tui::views::text::wrapped(lines)
         .block(block)
         .alignment(ratatui::layout::Alignment::Center);
     f.render_widget(paragraph, area);

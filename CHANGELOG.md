@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- (preview) `e` edits non-Flux objects (#276): any kind the API server lists as patchable, in kind lists, inventory/event rows, and native YAML/describe views. Before the editor opens, flux9s resolves who manages the object and asks first — Flux (with different wording when the managing Kustomization/HelmRelease/ResourceSet is suspended: the change sticks until it's resumed), Helm, Argo CD, or a controller owner. Secrets are never editable (flux9s holds them redacted); `e` suggests `kubectl edit` there and for kinds the API won't patch
+- Action table: `ActionSpec::Patch` / `ActionSpec::Annotate` describe write actions as data — a merge-patch template (`{{now}}`), the kinds it applies to, and its confirmation/status wording — sharing the confirmation and read-only gate. Workload restart (`r`) is now one of them; config-defined actions build on this in #277
+
 ### Changed
 
 - Keys, footer hints, and help now come from one action table (#276), so they can't drift. Each view's footer shows only the keys that work there (e.g. the YAML/describe views no longer advertise `Enter`, `f`, or sort keys), and the help overlay is generated from the same table and the `:` command table. `Ctrl`+letter no longer triggers the plain letter's action
@@ -16,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Long confirmation, status, and empty-state messages ran off the screen; they now wrap (one shared helper), and the footer grows to fit a long status message. The confirmation footer shows only the keys — the question is in the dialog
+- Editing an object whose Flux manager is outside the watched namespaces couldn't tell whether that manager was suspended ("unless it's suspended…"); the edit pre-check now reads the manager from the cluster, so the suspended wording appears whenever RBAC allows reading it
+- The graph's workload group node drew empty after the workload list gained live status (unreleased regression): the renderer decoded workload lines by hand and dropped the new format. It now uses the shared `WorkloadRef` decoder, like the list
 - The help overlay (`?`) was cut off on short terminals with no way to see the rest; it now scrolls with `j`/`k`, `PgUp`/`PgDn`, `Ctrl+f`/`b`, `g`/`G`
 - The graph's workload list showed readiness from when the graph was built; READY and STATUS are now watched live, so a restart or scale is visible immediately
 - A kind list whose first listing stalled (e.g. a request stuck on a dead connection to a remote API server) showed "Listing…" for up to ~5 minutes; it now reports the stall after 10s and retries with a fresh watch (backing off to 60s)

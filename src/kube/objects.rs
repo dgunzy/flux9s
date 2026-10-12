@@ -124,6 +124,35 @@ pub(crate) fn api_for(
     }
 }
 
+/// The API for any object: Flux kinds (no `api_version`) through the
+/// version-fallback path, native kinds through discovery.
+pub(crate) async fn object_api(
+    client: &kube::Client,
+    target: &ObjectRef,
+) -> anyhow::Result<Api<DynamicObject>> {
+    match target.api_version.as_deref() {
+        Some(api_version) => {
+            let (resource, scope) = discover(client, api_version, &target.kind).await?;
+            Ok(api_for(client, &resource, &scope, &target.namespace))
+        }
+        None => {
+            let resource = crate::kube::get_api_resource_with_fallback(
+                client,
+                &target.kind,
+                &target.namespace,
+                &target.name,
+            )
+            .await
+            .with_context(|| format!("Failed to resolve the API for {target}"))?;
+            Ok(Api::namespaced_with(
+                client.clone(),
+                &target.namespace,
+                &resource,
+            ))
+        }
+    }
+}
+
 /// Fetch any object as JSON. Flux resources (no `api_version`) go through the
 /// Flux fetch path; native objects through discovery. Secret values are
 /// redacted before they leave this function.
