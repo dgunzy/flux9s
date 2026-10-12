@@ -822,7 +822,7 @@ async fn extract_helmrelease_inventory_from_secrets(
         }
 
         // Parse YAML document
-        let resource: serde_json::Value = match serde_yaml::from_str(doc) {
+        let resource: serde_json::Value = match crate::yaml::from_str(doc) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("Failed to parse YAML document: {}", e);

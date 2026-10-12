@@ -35,7 +35,7 @@ notoc: true
     <!-- Demo Video -->
     <div class="row justify-content-center mb-5">
       <div class="col-lg-10">
-        <div class="ratio ratio-16x9" style="background: transparent;">
+        <div class="ratio demo-ratio" style="background: transparent;">
           <video autoplay loop muted playsinline class="w-100 h-100" style="object-fit: contain; background: transparent;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
             <source src="/images/demo-main.mp4" type="video/mp4">
             Your browser does not support the video tag.

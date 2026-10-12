@@ -345,6 +345,10 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
 
 - Don't forget to invalidate layout cache when state affecting layout changes
 - Always check `config.read_only` before write operations
+- **YAML goes through `crate::yaml`** (`src/yaml.rs`, serde-saphyr): `yaml::from_str` /
+  `yaml::to_string`, with `serde_json::Value` (`preserve_order`) as the dynamic type. It pins
+  the parse rules (YAML 1.2 booleans, kubectl-style octal) in one place — never call
+  serde-saphyr directly or add `serde_yaml` (deprecated, unmaintained parser; #296)
 - **Never edit Secrets**: `objects::fetch_object` redacts them, so applying an edited copy
   would overwrite real values. `KindSpec::with_patch_verb` denies `caps.edit` for Secrets and
   `apply_object_yaml` refuses them as a second guard

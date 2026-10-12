@@ -239,7 +239,7 @@ fn apply_ref(
         };
     }
 
-    let mut parsed: Value = match serde_yaml::from_str(raw) {
+    let mut parsed: Value = match crate::yaml::from_str(raw) {
         Ok(Value::Object(map)) => Value::Object(map),
         Ok(Value::Null) => Value::Object(Map::new()), // empty document
         Ok(_) => return SourceOutcome::Failed("values are not a YAML mapping".to_string()),

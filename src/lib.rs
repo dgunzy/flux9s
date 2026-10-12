@@ -52,6 +52,7 @@ pub mod trace;
 #[cfg(feature = "tui")]
 pub mod tui;
 pub mod watcher;
+pub mod yaml;
 
 // Re-export headless entry point
 pub use services::ClusterSession;

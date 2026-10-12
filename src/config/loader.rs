@@ -20,9 +20,9 @@ impl ConfigLoader {
     /// 4. Root config
     /// 5. Built-in defaults
     pub fn load(cluster: Option<&str>, context: Option<&str>) -> Result<Config> {
-        let mut merged_yaml = match serde_yaml::to_value(Self::load_defaults()) {
+        let mut merged_yaml = match serde_json::to_value(Self::load_defaults()) {
             Ok(v) => v,
-            Err(_) => serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+            Err(_) => serde_json::Value::Object(serde_json::Map::new()),
         };
 
         // Load root config
@@ -51,7 +51,7 @@ impl ConfigLoader {
 
         // Deserialize the fully merged YAML value into Config
         let mut config: Config =
-            serde_yaml::from_value(merged_yaml).context("Failed to parse merged configuration")?;
+            serde_json::from_value(merged_yaml).context("Failed to parse merged configuration")?;
 
         // Apply environment variable overrides
         config = Self::apply_env_overrides(config);
@@ -68,14 +68,14 @@ impl ConfigLoader {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 
-        let config: Config = serde_yaml::from_str(&contents)
+        let config: Config = crate::yaml::from_str(&contents)
             .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
 
         Ok(config)
     }
 
     /// Load a YAML value from a file
-    fn load_yaml_file(path: &PathBuf) -> Result<serde_yaml::Value> {
+    fn load_yaml_file(path: &PathBuf) -> Result<serde_json::Value> {
         if !path.exists() {
             return Err(anyhow::anyhow!("Config file not found: {}", path.display()));
         }
@@ -84,25 +84,25 @@ impl ConfigLoader {
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 
         if contents.trim().is_empty() {
-            return Ok(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+            return Ok(serde_json::Value::Object(serde_json::Map::new()));
         }
 
-        let val: serde_yaml::Value = serde_yaml::from_str(&contents)
+        let val: serde_json::Value = crate::yaml::from_str(&contents)
             .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
 
         Ok(val)
     }
 
     /// Recursively merge two YAML values, with `other` taking precedence over `base`.
-    fn merge_yaml(base: &mut serde_yaml::Value, other: serde_yaml::Value) {
+    fn merge_yaml(base: &mut serde_json::Value, other: serde_json::Value) {
         match (base, other) {
-            (serde_yaml::Value::Mapping(base_map), serde_yaml::Value::Mapping(other_map)) => {
+            (serde_json::Value::Object(base_map), serde_json::Value::Object(other_map)) => {
                 for (k, v) in other_map {
                     if v.is_null() {
                         continue;
                     }
                     // Special case for sequence fields: if empty, inherit from base
-                    if let serde_yaml::Value::Sequence(ref seq) = v {
+                    if let serde_json::Value::Array(ref seq) = v {
                         if seq.is_empty() {
                             continue;
                         }
@@ -144,8 +144,8 @@ impl ConfigLoader {
             let contents = std::fs::read_to_string(&root_path)
                 .with_context(|| format!("Failed to read config file: {}", root_path.display()))?;
 
-            // Parse with serde_yaml - this will catch YAML syntax errors
-            let config: Config = serde_yaml::from_str(&contents)
+            // Parse the YAML - this will catch syntax errors
+            let config: Config = crate::yaml::from_str(&contents)
                 .with_context(|| format!("Failed to parse config file: {}", root_path.display()))?;
 
             // Validate namespace_hotkeys length
@@ -214,7 +214,7 @@ impl ConfigLoader {
         }
 
         let yaml =
-            serde_yaml::to_string(config).context("Failed to serialize configuration to YAML")?;
+            crate::yaml::to_string(config).context("Failed to serialize configuration to YAML")?;
 
         std::fs::write(path, yaml)
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
@@ -238,10 +238,10 @@ mod tests {
     use super::*;
 
     fn merge_config(base: Config, other: Config) -> Config {
-        let mut base_val = serde_yaml::to_value(base).unwrap();
-        let other_val = serde_yaml::to_value(other).unwrap();
+        let mut base_val = serde_json::to_value(base).unwrap();
+        let other_val = serde_json::to_value(other).unwrap();
         ConfigLoader::merge_yaml(&mut base_val, other_val);
-        serde_yaml::from_value(base_val).unwrap()
+        serde_json::from_value(base_val).unwrap()
     }
 
     #[test]
@@ -400,12 +400,12 @@ mod tests {
         let base_yaml_str = "connectTimeoutSeconds: 30\nreadOnly: true";
         let other_yaml_str = "defaultNamespace: my-ns"; // omits connectTimeoutSeconds and readOnly
 
-        let mut base_val: serde_yaml::Value = serde_yaml::from_str(base_yaml_str).unwrap();
-        let other_val: serde_yaml::Value = serde_yaml::from_str(other_yaml_str).unwrap();
+        let mut base_val: serde_json::Value = crate::yaml::from_str(base_yaml_str).unwrap();
+        let other_val: serde_json::Value = crate::yaml::from_str(other_yaml_str).unwrap();
 
         ConfigLoader::merge_yaml(&mut base_val, other_val);
 
-        let merged_config: Config = serde_yaml::from_value(base_val).unwrap();
+        let merged_config: Config = serde_json::from_value(base_val).unwrap();
         assert_eq!(merged_config.connect_timeout_seconds, 30);
         assert!(merged_config.read_only);
         assert_eq!(merged_config.default_namespace, "my-ns");

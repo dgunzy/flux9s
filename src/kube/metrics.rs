@@ -979,7 +979,7 @@ container_memory_working_set_bytes{container="app",namespace="ns",pod="unrelated
             Some(MetricsSourceSetting::MetricsServer)
         );
         assert_eq!(MetricsSourceSetting::parse("prometheus"), None);
-        let yaml: MetricsSourceSetting = serde_yaml::from_str("kubelet").unwrap();
+        let yaml: MetricsSourceSetting = crate::yaml::from_str("kubelet").unwrap();
         assert_eq!(yaml, MetricsSourceSetting::Kubelet);
     }
 }

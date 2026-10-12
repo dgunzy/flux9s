@@ -19,7 +19,7 @@ fn test_config_favorites_serialization() {
         ..Config::default()
     };
 
-    let yaml = serde_yaml::to_string(&config).unwrap();
+    let yaml = flux9s::yaml::to_string(&config).unwrap();
     assert!(yaml.contains("favorites"));
     assert!(yaml.contains("Kustomization:flux-system:my-app"));
     assert!(yaml.contains("HelmRelease:production:nginx"));
@@ -35,7 +35,7 @@ favorites:
   - "HelmRelease:production:nginx"
 "#;
 
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = flux9s::yaml::from_str(yaml).unwrap();
     assert_eq!(config.favorites.len(), 2);
     assert!(
         config
@@ -52,7 +52,7 @@ favorites:
 #[test]
 fn test_config_favorites_empty_skipped() {
     let config = Config::default();
-    let yaml = serde_yaml::to_string(&config).unwrap();
+    let yaml = flux9s::yaml::to_string(&config).unwrap();
     // Empty favorites should be skipped in serialization
     assert!(!yaml.contains("favorites"));
 }

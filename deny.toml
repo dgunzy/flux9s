@@ -8,9 +8,9 @@ all-features = true
 
 [advisories]
 version = 2
-# No ignores currently: the graph is clean (the former RUSTSEC-2024-0436 `paste`
-# ignore is gone now that `paste` dropped out of the dependency tree). Add IDs
-# here — with a comment and a revisit note — only when unavoidable.
+# No ignores: the graph is clean (serde_yaml / unsafe-libyaml were replaced by
+# serde-saphyr, #296). Add IDs here — with a comment and a revisit note — only
+# when unavoidable.
 ignore = []
 
 [licenses]

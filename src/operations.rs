@@ -801,8 +801,8 @@ pub async fn apply_object_yaml(
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
-    let mut value: serde_json::Value =
-        serde_yaml::from_str(yaml_str).context("Failed to parse edited YAML as valid YAML/JSON")?;
+    let mut value: serde_json::Value = crate::yaml::from_str(yaml_str)
+        .context("Failed to parse edited YAML as valid YAML/JSON")?;
 
     // Secrets are fetched redacted (objects::fetch_object), so applying an
     // edited copy would overwrite real values with the placeholder.
@@ -1173,7 +1173,7 @@ spec:
 "#;
 
         let mut value: serde_json::Value =
-            serde_yaml::from_str(yaml_with_managed_fields).expect("valid yaml");
+            crate::yaml::from_str(yaml_with_managed_fields).expect("valid yaml");
 
         // Apply the same stripping logic used in apply_resource_yaml
         if let Some(meta) = value.get_mut("metadata").and_then(|m| m.as_object_mut()) {
