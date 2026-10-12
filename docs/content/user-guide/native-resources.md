@@ -1,0 +1,114 @@
+---
+title: "Native Resources (preview)"
+linkTitle: "Native Resources"
+weight: 4
+description: "Browse and act on any Kubernetes kind or CRD"
+type: docs
+---
+
+{{% alert title="Preview — off by default" color="info" %}}
+Browsing native resources and CRDs is a **preview** while it matures, so
+flux9s stays Flux-only unless you opt in:
+
+- **For one session:** `:native` (again to turn it off)
+- **Permanently:** `flux9s config set nativeResources true` (flux9s 1.2.0+)
+
+While it's off, flux9s makes no discovery calls and no extra watches, and
+`:deploy` and friends explain how to turn it on. Feedback is welcome — it
+becomes the default once it has had some mileage.
+{{% /alert %}}
+
+## Browsing any kind {#browsing-any-kind}
+
+`:<kind>` opens a live list of any kind the cluster serves — built-in
+resources and third-party CRDs alike — by the names `kubectl` accepts: the
+kind, its plural, or a short name (`:deploy`, `:po`, `:svc`, `:httproutes`).
+When two API groups serve the same name, use `plural.group`
+(`:clusters.postgresql.cnpg.io`).
+
+- **Scope:** lists follow `:ns`; cluster-scoped kinds (nodes, CRDs) always
+  show everything. A watch keeps the list live while it's on screen.
+- **Columns:** STATUS is kstatus health (the same rules Flux health checks
+  use). CRDs add the columns their authors declared — what `kubectl get`
+  shows. MANAGED-BY says what manages each object ([below](#managed-by)).
+- **Keys:** `d` describes, `y` shows YAML (Secret values redacted), `/`
+  filters by name or namespace. The footer shows only the keys a kind
+  supports:
+  - **Deployments, StatefulSets, DaemonSets:** `Enter` opens the
+    [workload detail](../views/#workloads), `r` restarts, `l` streams pod logs
+  - **CronJobs:** `Enter` opens the workload detail
+  - **Pods:** `l` streams logs, `Ctrl+d` deletes the pod so its controller
+    replaces it
+  - **Anything patchable:** `e` edits ([below](#editing-non-flux-objects))
+- **Getting back:** `Esc` walks back through the lists you opened, and
+  `:flux` returns to the Flux list from anywhere.
+
+![A :deploy list across all namespaces, with what manages each Deployment](/images/kind-list.png)
+
+Flux names keep their meaning — `:ks` and `:hr` still filter the Flux list —
+and flux9s commands win over kind names (`:ns`, `:events`, `:logs`); use the
+plural (`:namespaces`) for the kind. Kinds are discovered on connect and
+after `:ctx`, and an unknown `:<kind>` re-checks, so a CRD installed while
+flux9s runs is found on the next try.
+
+Very large lists show the first 5,000 rows and say so — narrow with `:ns`
+or `/`. Only what's displayed is kept in memory (listing Secrets holds no
+secret data).
+
+## MANAGED-BY {#managed-by}
+
+What kind of manager owns each object, using the conventions the tools write
+themselves; first match wins:
+
+1. **Flux** — `Flux ks`, `Flux hr`, `Flux rset`, `Flux instance`
+2. **Argo CD** — tracking annotation or instance label
+3. **An owner chain** — controller-created objects are followed up
+   (`Pod → ReplicaSet → Deployment`) to whatever manages the top, so a
+   Flux-managed Deployment's pods read `Flux ks`. With nothing at the top,
+   the top owner's kind is shown (e.g. `DaemonSet`).
+4. **Helm** — release annotations, on objects nothing owns
+5. Any other `app.kubernetes.io/managed-by`, else `-`
+
+Describe (`d`) and the workload detail show the full answer, e.g.
+`Flux HelmRelease cert-manager/cert-manager (via ReplicaSet/cert-manager-857cf84654)`.
+
+## Editing non-Flux objects {#editing-non-flux-objects}
+
+`e` edits any object whose kind the API server lists as patchable — in kind
+lists, inventory and event rows, and native YAML / describe views — through
+the same [editor flow](../flux-resources/#editing) as Flux resources. RBAC
+still decides on save.
+
+Before the editor opens, flux9s checks who manages the object and asks
+first when something does:
+
+- **Flux:** "its next reconcile will revert your change". If the managing
+  Kustomization, HelmRelease, ResourceSet, or FluxInstance is **suspended**,
+  it says so instead: your change stays until it's resumed. flux9s reads the
+  manager from the cluster when it's outside the namespaces you're watching.
+- **Helm, Argo CD, or another manager:** that tool may overwrite or revert
+  the change.
+- **A controller owner** with nothing above it: its controller may overwrite
+  the change.
+
+![The warning before editing a Flux-managed Deployment](/images/edit-warning.png)
+
+`y` opens the editor; `n` or `Esc` backs out. Unmanaged objects open
+straight away.
+
+**Secrets are never editable** — flux9s only holds their values redacted, so
+saving would overwrite them. `e` suggests the matching `kubectl edit`
+instead, as it does for kinds the API won't patch.
+
+## All namespaces
+
+With native resources on, the `:ns` menu lists every namespace in the
+cluster, with namespaces holding Flux resources first and marked `◆ flux`.
+If your RBAC can't list namespaces, it shows the Flux namespaces.
+
+## Flux-adjacent CRDs
+
+CRDs labeled `app.kubernetes.io/part-of=flux` (Flagger, tofu-controller,
+ExternalArtifact controllers) can join the Flux list itself, view-only — turn
+it on with `discoverFluxResources` or `:discover` for a session. See
+[Discovering Flux-adjacent kinds](/configuration/#discovering-flux-adjacent-resource-kinds).

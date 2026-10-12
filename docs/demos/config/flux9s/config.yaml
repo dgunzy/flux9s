@@ -1,0 +1,8 @@
+# flux9s config used only while recording the docs demos (docs/demos/record.sh).
+readOnly: false
+defaultNamespace: flux-resources
+defaultControllerNamespace: flux-system
+nativeResources: false
+ui:
+  skin: default
+  splashless: true

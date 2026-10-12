@@ -36,7 +36,7 @@ jobs:
           # break the docs build unannounced. Dependabot cannot track an action
           # input, so bump this by hand alongside the docsy pin in docs/go.mod
           # (docsy documents the Hugo versions it supports per release).
-          hugo-version: '0.164.0'
+          hugo-version: '0.166.0'
           extended: true
 
       - name: Setup Go
@@ -83,12 +83,11 @@ jobs:
 
       - name: Build Hugo site
         working-directory: docs
-        # Hugo resolves the theme module itself, so it too must not be allowed
-        # to move the docsy pin recorded in docs/go.mod.
-        env:
-          GOFLAGS: -mod=readonly
+        # scripts/hugo.sh puts the Dart Sass that `npm ci` installed (pinned in
+        # package.json) on PATH — docsy 0.17+ needs it — and sets
+        # GOFLAGS=-mod=readonly so Hugo can't move the docsy pin in docs/go.mod.
         run: |
-          hugo --minify --baseURL "https://flux9s.ca/"
+          scripts/hugo.sh --minify --baseURL "https://flux9s.ca/"
 
       - name: Copy metadata.json to public
         working-directory: docs
