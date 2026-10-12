@@ -78,17 +78,21 @@ build:
 build-release:
     cargo build --release
 
-# Install local dependencies for the Hugo docs site
+# Install docs site dependencies (npm: Dart Sass, Bootstrap, Font Awesome; Go: pinned docsy)
 docs-deps:
-    cd docs && npm ci && hugo mod get
+    cd docs && npm ci && GOFLAGS=-mod=readonly go mod download
 
-# Build the Hugo docs site
+# Build the Hugo docs site (scripts/hugo.sh puts the pinned Dart Sass on PATH)
 docs-build:
-    cd docs && hugo --minify
+    cd docs && scripts/hugo.sh --minify
 
 # Serve the Hugo docs site locally
 docs-serve:
-    cd docs && hugo server
+    cd docs && scripts/hugo.sh server
+
+# Re-record the docs demo videos with VHS (all, or some: just docs-demos main native)
+docs-demos *tapes:
+    ./docs/demos/record.sh {{tapes}}
 
 # Check the project (without building)
 check:

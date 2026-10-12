@@ -303,15 +303,26 @@ Commands can provide interactive selection menus using the `CommandSubmenu` trai
   Open a PR so CI validates the bump before it lands.
 - **Docs-site toolchain pins are also hand-managed.** Two more things Dependabot
   cannot track, both in `.github/workflows/docs.yml` / `docs/go.mod`:
-  - `hugo-version: '0.164.0'` — an action *input*, invisible to Dependabot.
-  - `require github.com/google/docsy vX.Y.Z` in `docs/go.mod` — the Hugo theme is
-    referenced only from `docs/config.toml`, so **`go mod tidy` deletes the
-    require line** and Hugo then floats the theme to its latest release. Never
-    run `go mod tidy` in `docs/`; the workflow sets `GOFLAGS: -mod=readonly` so
-    a lost pin fails loudly instead of silently upgrading.
+  - `hugo-version: '0.166.0'` — an action *input*, invisible to Dependabot.
+  - `require github.com/docsy/docsy/theme vX.Y.Z` in `docs/go.mod` — the Hugo
+    theme is referenced only from `docs/config.toml`, so **`go mod tidy` (and
+    `hugo mod tidy`) delete the require line** and Hugo then floats the theme
+    to its latest release. Never run either in `docs/`; builds set
+    `GOFLAGS=-mod=readonly` so a lost pin fails loudly instead of silently
+    upgrading.
 
   Bump the two together (docsy documents its supported Hugo versions per
-  release) and let the docs workflow validate it in a PR.
+  release) and let the docs workflow validate it in a PR. Upgrading docsy:
+  `hugo mod get github.com/docsy/docsy/theme@vX.Y.Z`, then
+  `hugo mod npm pack && npm install` (the theme's Bootstrap / Font Awesome come
+  from npm via the generated `docs/packages/hugoautogen` workspace), and read
+  that release's upgrade guide.
+- **Build the docs with `docs/scripts/hugo.sh`** (after `npm ci` in `docs/`), locally
+  and in CI. Docsy 0.17+ compiles SCSS with Dart Sass, pinned as the
+  `sass-embedded` npm dev dependency (so Dependabot tracks it); the wrapper puts
+  that native binary on PATH and sets `GOFLAGS=-mod=readonly`. Don't override
+  docsy's `scripts.html` (a plugin dispatcher since 0.18) — add scripts through
+  the `hooks/body-end.html` hook.
 - **Rust deps**: `cargo audit` + `cargo deny` gate CI; keep `deny.toml`'s license
   allow-list tight (a new license fails CI on purpose — review before allowing).
 

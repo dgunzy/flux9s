@@ -12,15 +12,15 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 
 ### Full View
 
-![flux9s screenshot](docs/images/screenshot.png)
+![flux9s screenshot](docs/static/images/screenshot.png)
 
 ### Flux9s Graph View 
 
-![flux9s graph view](docs/images/graph-screenshot.png)
+![flux9s graph view](docs/static/images/graph-screenshot.png)
 
 ### Flux9s Name filter
 
-![flux9s filter](docs/images/filter-screenshot.png)
+![flux9s filter](docs/static/images/filter-screenshot.png)
 
 ## Overview
 

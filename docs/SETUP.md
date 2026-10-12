@@ -82,8 +82,10 @@ description: "Page description"
 
 The Docsy theme is included as a Hugo module. To customize:
 
-1. Override partials in `layouts/partials/`
-2. Add custom CSS/JS in `static/`
+1. Override partials in `layouts/_partials/` — but prefer Docsy's hooks
+   (`hooks/head-end.html`, `hooks/body-end.html`) for scripts; never override
+   `scripts.html`, Docsy's plugin dispatcher
+2. Add custom styles in `assets/scss/_styles_project.scss` and static files in `static/`
 3. Modify `config.toml` for theme parameters
 
 ## Troubleshooting
@@ -95,8 +97,10 @@ If you encounter module issues:
 ```bash
 cd docs
 hugo mod clean
-hugo mod get
+GOFLAGS=-mod=readonly go mod download
 ```
+
+Don't run `go mod tidy` or `hugo mod tidy` here — they drop the docsy pin.
 
 ### Metadata Not Loading
 

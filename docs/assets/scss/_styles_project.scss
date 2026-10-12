@@ -347,48 +347,7 @@ code:not(pre code) {
       border-radius: $border-radius-sm;
     }
   }
-  
-  // Dark mode toggle in purple navbar
-  .theme-toggle {
-    color: var(--bs-white) !important;
-    margin-right: 1rem;
-    
-    &:hover {
-      background-color: rgba(255, 255, 255, 0.2);
-      color: var(--bs-white) !important;
-    }
-  }
-}
 
-// Dark mode toggle
-.theme-toggle {
-  cursor: pointer;
-  padding: 0.5rem 0.75rem;
-  border-radius: $border-radius-sm;
-  transition: all 0.2s ease;
-  border: none;
-  background: transparent;
-  color: var(--bs-white);
-  font-size: 1.2rem;
-  
-  &:hover {
-    background-color: rgba(255, 255, 255, 0.2);
-    color: var(--bs-white);
-    transform: scale(1.1);
-  }
-  
-  &:focus {
-    outline: 2px solid rgba(255, 255, 255, 0.5);
-    outline-offset: 2px;
-  }
-  
-  i {
-    transition: transform 0.3s ease;
-  }
-  
-  &:hover i {
-    transform: rotate(15deg);
-  }
 }
 
 // Cover block improvements
@@ -678,60 +637,8 @@ code:not(pre code) {
   position: relative;
 }
 
-// Text fallbacks for icons - shown when fonts fail to load (via JavaScript detection)
-.icon-fallback-text {
-  display: none;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  font-size: 0.9em;
-  margin-left: 0.25em;
-  
-  // Show fallback text when fonts fail
-  .fonts-failed & {
-    display: inline;
-  }
-  
-  // Hide icon when showing fallback text
-  .fonts-failed + & {
-    display: inline;
-  }
-}
-
-// When fonts fail, hide icon and show text
-.fonts-failed {
-  .fab, .fas, .far {
-    // Make icon invisible but keep space
-    visibility: hidden;
-    width: 0;
-    min-width: 0;
-    margin: 0;
-  }
-  
-  .icon-fallback-text {
-    display: inline;
-  }
-}
-
-// Specific icon text fallbacks
-.fa-github + .icon-fallback-text::before {
-  content: '[GitHub]';
-}
-
-.fa-arrow-alt-circle-right + .icon-fallback-text::before {
-  content: '→';
-}
-
-.fa-box + .icon-fallback-text::before {
-  content: '[Box]';
-}
-
-.fa-beer + .icon-fallback-text::before {
-  content: '[Beer]';
-}
-
-.fa-moon + .icon-fallback-text::before {
-  content: '🌙';
-}
-
-.fa-sun + .icon-fallback-text::before {
-  content: '☀️';
+// Page-meta links: keep "View page source" and "Create documentation issue";
+// "Create child page" is only useful to docs contributors.
+.td-page-meta__child {
+  display: none !important;
 }

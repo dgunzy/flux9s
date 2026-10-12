@@ -25,10 +25,10 @@ notoc: true
     <!-- Action Buttons -->
     <div class="d-flex flex-wrap justify-content-center gap-3 mb-5">
       <a class="btn btn-lg btn-primary" href="{{< relref \"getting-started/\" >}}">
-        Get Started <i class="fas fa-arrow-alt-circle-right ms-2" aria-label="Arrow"></i><span class="icon-fallback-text">→</span>
+        Get Started <i class="fa-solid fa-circle-right ms-2" aria-hidden="true"></i>
       </a>
       <a class="btn btn-lg btn-outline-primary" href="https://github.com/dgunzy/flux9s">
-        <i class="fab fa-github me-2" aria-label="GitHub"></i><span class="icon-fallback-text">[GitHub]</span><span>View on GitHub</span>
+        <i class="fa-brands fa-github me-2" aria-hidden="true"></i><span>View on GitHub</span>
       </a>
     </div>
     
@@ -41,7 +41,7 @@ notoc: true
             Your browser does not support the video tag.
           </video>
           <div style="display:none; padding: 2rem; text-align: center; background: #f8f9fa; color: #6c757d;">
-            <i class="fas fa-video fa-3x mb-3"></i>
+            <i class="fa-solid fa-video fa-3x mb-3"></i>
             <p class="mb-0"><strong>Demo Video</strong></p>
             <p class="small mb-2">Main interface demonstration showing navigation, resource viewing, and operations</p>
             <p class="small text-muted">Video playback is not available. The demo shows flux9s navigating resources, viewing details, and managing Flux deployments.</p>
