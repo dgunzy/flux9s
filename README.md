@@ -27,6 +27,7 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 `flux9s` provides a terminal-based interface for monitoring and managing Flux CD resources, inspired by the excellent [K9s](https://github.com/derailed/k9s) project. It offers real-time monitoring of Flux Custom Resources (CRDs) including Kustomizations, GitRepositories, HelmReleases, and more.
 
 > flux9s is listed as a community UI in the [Flux ecosystem](https://fluxcd.io/ecosystem/#flux-uis--guis).
+> Read the [flux9s GA announcement](https://fluxcd.io/blog/2026/10/flux9s-ga/) on the Flux blog.
 
 ### Features
 
