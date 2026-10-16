@@ -13,6 +13,8 @@ type: docs
 
 That includes core Flux resources such as `Kustomization`, `HelmRelease`, and source objects, plus Flux Operator resources such as `FluxInstance` and `ResourceSet`. From the same interface you can inspect YAML, trace ownership, open graph and history views, and run common actions like suspend, resume, and reconcile.
 
+flux9s reached 1.0 in October 2026 — see the [GA announcement on the Flux blog](https://fluxcd.io/blog/2026/10/flux9s-ga/).
+
 ## Why Use It If Flux Operator Has a Web UI?
 
 The [Flux Operator Web UI](https://fluxoperator.dev/web-ui/) is excellent for browser-based visibility. `flux9s` complements it with a terminal-first workflow: keyboard navigation, quick context switching, namespace-scoped live watches, and operational actions without leaving your current shell session.

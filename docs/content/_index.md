@@ -20,7 +20,10 @@ notoc: true
     </div>
     
     <!-- Tagline -->
-    <p class="lead mb-5">A <a href="https://github.com/derailed/k9s" target="_blank" rel="noopener noreferrer">K9s</a>-inspired terminal UI for Flux resources, controller health, and GitOps state</p>
+    <p class="lead mb-3">A <a href="https://github.com/derailed/k9s" target="_blank" rel="noopener noreferrer">K9s</a>-inspired terminal UI for Flux resources, controller health, and GitOps state</p>
+
+    <!-- GA announcement -->
+    <p class="mb-5"><a href="https://fluxcd.io/blog/2026/10/flux9s-ga/" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-bullhorn me-2" aria-hidden="true"></i>flux9s 1.0 is generally available — read the announcement on the Flux blog</a></p>
     
     <!-- Action Buttons -->
     <div class="d-flex flex-wrap justify-content-center gap-3 mb-5">

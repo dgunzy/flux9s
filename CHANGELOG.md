@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`defaultMode: 0644` applies 420)
 - Minimum supported Rust version is now 1.89
 - Dependency refresh, including `quinn-proto` 0.11.19 for RUSTSEC-2026-0338 to 0342
+- `serde-saphyr` 2.0 and a second dependency refresh, including `rustls` 0.23.46 for
+  RUSTSEC-2026-0346 to 0349 and `kube` 4.2
+- Kubernetes API types target 1.36 (`k8s-openapi` `v1_36`, was `v1_33`)
 
 ### Fixed
 - YAML views showed list items without the space after the dash (`-item` instead of `- item`)
