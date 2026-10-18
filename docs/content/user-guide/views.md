@@ -50,17 +50,29 @@ values always redacted).
 
 ## Trace (`t`)
 
-What manages a resource, step by step: its controller owners, the Flux
-object that applies it (Kustomization, HelmRelease, ResourceSet, or
-FluxInstance), and that object's source.
+What manages a resource, step by step: its controller owners
+(`Pod → ReplicaSet → Deployment`, the same chain MANAGED-BY follows), the Flux object that applies it
+(Kustomization, HelmRelease, ResourceSet, or FluxInstance), and that object's
+source and revision. When something other than Flux manages the chain —
+Argo CD, Helm, another tool — or nothing does, the trace ends there and says
+so.
 
-`t` traces the selected resource; `:trace <kind>/<name>` traces one by name
-in the current namespace (`default` when watching all namespaces):
+`t` traces the selected resource, and any Kubernetes object Flux manages
+([native resources](../native-resources/#to-the-flux-manager)). On a native
+object's trace, `g` and `m` go on to its Flux manager's graph and detail.
+
+`:trace <kind>/<name>` traces an object by name — anything, whatever manages
+it:
 
 - Flux kinds and aliases: `:trace ks/apps`, `:trace hr/podinfo`
 - Exact Kubernetes kind names: `:trace Deployment/web`
 - Plurals and short names (`:trace deploy/web`, `:trace sts/db`) need
   [native resources](../native-resources/) on
+- `-n <namespace>` picks the namespace (`:trace deploy/flux-operator -n flux-system`).
+  Without it, flux9s looks in the current namespace; watching all
+  namespaces, it searches them — one match is traced, several are listed so
+  you can pick with `-n`. With native resources on, cluster-scoped kinds
+  (`:trace clusterrole/flux-view`) need no namespace.
 
 ![Trace view](/images/trace-screenshot.png)
 

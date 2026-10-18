@@ -228,6 +228,7 @@ mod tests {
             cells: vec![health.label().into(), "3d".into(), "Replicas: 1/1".into()],
             created: None,
             ownership: crate::kube::ownership::Ownership::Unmanaged,
+            resolved: None,
         }
     }
 

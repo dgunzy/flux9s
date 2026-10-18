@@ -429,15 +429,17 @@ pub async fn run_tui_with_async_init(
                         let client = client.clone();
                         tokio::spawn(async move {
                             // Bounded by MANAGER_TIMEOUT: always answers.
-                            let text =
+                            let managed_by =
                                 crate::kube::ownership::describe_manager(&client, &object).await;
                             let uid = object
                                 .pointer("/metadata/uid")
                                 .and_then(serde_json::Value::as_str)
                                 .unwrap_or_default()
                                 .to_string();
-                            let _ = tx
-                                .send(Ok(crate::tui::app::state::ManagerResolution { uid, text }));
+                            let _ = tx.send(Ok(crate::tui::app::state::ManagerResolution {
+                                uid,
+                                managed_by,
+                            }));
                         });
                     }
 
@@ -524,34 +526,39 @@ pub async fn run_tui_with_async_init(
                         });
                     }
 
-                    if let Some((rk, tx)) = app.async_state.trace.dispatch() {
+                    if let Some((request, tx)) = app.async_state.trace.dispatch() {
                         let client = client.clone();
                         tokio::spawn(async move {
-                            tracing::debug!("Tracing {}", rk);
-                            let result = crate::tui::trace::trace_object(
-                                &client,
-                                &rk.resource_type,
-                                &rk.namespace,
-                                &rk.name,
-                            )
-                            .await;
+                            tracing::debug!("Tracing {:?}", request);
+                            let result = run_trace(&client, request).await;
                             if let Err(ref e) = result {
-                                tracing::warn!("Failed to trace {}: {}", rk, e);
+                                tracing::warn!("Trace failed: {:#}", e);
                             }
                             let _ = tx.send(result);
                         });
                     }
 
-                    if let Some((rk, tx)) = app.async_state.graph.dispatch() {
+                    if let Some((request, tx)) = app.async_state.graph.dispatch() {
                         let client = client.clone();
                         tokio::spawn(async move {
+                            let rk = &request.root;
                             tracing::debug!("Building graph for {}", rk);
-                            let result = crate::trace::build_resource_graph(
-                                &client,
-                                &rk.resource_type,
-                                &rk.namespace,
-                                &rk.name,
-                            )
+                            let result = async {
+                                let graph = crate::trace::build_resource_graph(
+                                    &client,
+                                    &rk.resource_type,
+                                    &rk.namespace,
+                                    &rk.name,
+                                )
+                                .await?;
+                                let highlight = match &request.highlight {
+                                    Some(target) => {
+                                        crate::trace::locate_in_graph(&client, &graph, target).await
+                                    }
+                                    None => None,
+                                };
+                                Ok(crate::tui::app::state::GraphResult { graph, highlight })
+                            }
                             .await;
                             if let Err(ref e) = result {
                                 tracing::warn!("Failed to build graph for {}: {}", rk, e);
@@ -598,7 +605,7 @@ pub async fn run_tui_with_async_init(
                         {
                             app.async_state.edit_full_yaml = Some(yaml);
                         } else {
-                            app.async_state.yaml.set_result(yaml);
+                            app.set_yaml_result(yaml);
                         }
                     }
                     Err(e) => {
@@ -723,16 +730,7 @@ pub async fn run_tui_with_async_init(
             }
 
             if let Some(result) = app.async_state.trace.try_recv() {
-                match result {
-                    Ok(trace_result) => {
-                        app.async_state.trace.set_result(trace_result);
-                        app.set_view_trace();
-                    }
-                    Err(e) => {
-                        app.async_state.trace.set_error();
-                        app.set_status_message((format!("Trace failed: {}", e), true));
-                    }
-                }
+                app.set_trace_response(result);
             }
 
             if let Some(result) = app.async_state.graph.try_recv() {
@@ -1238,4 +1236,45 @@ pub async fn run_tui_with_async_init(
     }
 
     Ok(())
+}
+
+/// Trace `target`, keeping it as the trace view's subject.
+async fn traced(
+    client: &kube::Client,
+    target: crate::kube::objects::ObjectRef,
+) -> anyhow::Result<crate::tui::app::state::TraceResponse> {
+    let trace = crate::trace::trace_target(client, &target).await?;
+    Ok(crate::tui::app::state::TraceResponse::Traced {
+        target,
+        trace: Box::new(trace),
+    })
+}
+
+/// Run a trace request: trace one object, or (all namespaces, no `-n`)
+/// find it first — one match is traced, several are reported (#266).
+async fn run_trace(
+    client: &kube::Client,
+    request: crate::tui::app::state::TraceRequest,
+) -> anyhow::Result<crate::tui::app::state::TraceResponse> {
+    use crate::tui::app::state::{TraceRequest, TraceResponse};
+    match request {
+        TraceRequest::Object(target) => traced(client, target).await,
+        TraceRequest::Search {
+            kind,
+            api_version,
+            name,
+        } => {
+            let found =
+                crate::kube::objects::find_by_name(client, &kind, api_version.as_deref(), &name)
+                    .await?;
+            match found.as_slice() {
+                [] => Err(anyhow::anyhow!("no {kind} named {name} in any namespace")),
+                [one] => traced(client, one.clone()).await,
+                many => Ok(TraceResponse::Ambiguous {
+                    target: format!("{kind}/{name}"),
+                    namespaces: many.iter().map(|o| o.namespace.clone()).collect(),
+                }),
+            }
+        }
+    }
 }

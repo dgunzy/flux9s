@@ -9,9 +9,9 @@ mod graph;
 mod graph_builder;
 mod models;
 
-pub use core::trace_object;
-pub use graph_builder::{build_resource_graph, is_resource_type_with_graph};
+pub use core::{trace_object, trace_target};
+pub use graph_builder::{build_resource_graph, is_resource_type_with_graph, locate_in_graph};
 // These types are exported for library consumers (tests, etc.)
-pub use models::{SourceRef, TraceNode, TraceResult, TraceSpec, TraceStatus};
+pub use models::{SourceRef, TraceNode, TraceOutcome, TraceResult, TraceSpec, TraceStatus};
 // Graph types
 pub use graph::{GraphEdge, GraphNode, NodeType, RelationshipType, ResourceGraph};

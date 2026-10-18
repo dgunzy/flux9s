@@ -142,6 +142,9 @@ pub(crate) enum ActionId {
     Resume,
     Reconcile,
     ReconcileWithSource,
+    NativeTrace,
+    NativeGraph,
+    JumpToManager,
     Trace,
     CommandMode,
     LogsFollow,
@@ -214,6 +217,12 @@ fn on_flux_resource(app: &App) -> bool {
                 View::EventList,
             ],
         )
+}
+
+/// A native object whose Flux manager is known (#266): `t`, `g`, and `m`
+/// act on that manager, so they show only once it has resolved.
+fn has_flux_manager(app: &App) -> bool {
+    app.target_flux_manager().is_some()
 }
 
 /// Whether `e` would edit the current target: always for Flux resources;
@@ -466,6 +475,48 @@ pub(crate) const ACTIONS: &[Action] = &[
         help: Some((HelpColumn::Resource, "<W>", "Reconcile with source")),
         sets_status: true,
     },
+    // Native objects (#266): trace / graph / open what manages them.
+    Action {
+        id: ActionId::NativeTrace,
+        keys: &[key('t')],
+        // Already on its trace: nothing more to trace.
+        when: |app| app.view_state.current_view != View::ResourceTrace && has_flux_manager(app),
+        spec: ActionSpec::Builtin(|app, _| {
+            app.trace_native_subject();
+            None
+        }),
+        footer: Some(("t", "Trace")),
+        help: None,
+        sets_status: false,
+    },
+    Action {
+        id: ActionId::NativeGraph,
+        keys: &[key('g')],
+        when: has_flux_manager,
+        spec: ActionSpec::Builtin(|app, _| {
+            app.open_manager_graph();
+            None
+        }),
+        footer: Some(("g", "Graph")),
+        help: None,
+        sets_status: false,
+    },
+    Action {
+        id: ActionId::JumpToManager,
+        keys: &[key('m')],
+        when: has_flux_manager,
+        spec: ActionSpec::Builtin(|app, _| {
+            app.jump_to_manager();
+            None
+        }),
+        footer: Some(("m", "Manager")),
+        help: Some((
+            HelpColumn::Resource,
+            "<m>",
+            "Open the Flux object managing it (Kubernetes objects)",
+        )),
+        sets_status: false,
+    },
     Action {
         id: ActionId::Trace,
         keys: &[key('t')],
@@ -475,7 +526,11 @@ pub(crate) const ACTIONS: &[Action] = &[
             None
         }),
         footer: Some(("t", "Trace")),
-        help: Some((HelpColumn::Resource, "<t>", "Trace ownership chain")),
+        help: Some((
+            HelpColumn::Resource,
+            "<t>",
+            "Trace ownership chain (any object Flux manages)",
+        )),
         sets_status: false,
     },
     Action {
@@ -842,7 +897,11 @@ pub(crate) const ACTIONS: &[Action] = &[
             None
         }),
         footer: Some(("g", "Graph")),
-        help: Some((HelpColumn::Resource, "<g>", "View resource graph")),
+        help: Some((
+            HelpColumn::Resource,
+            "<g>",
+            "View resource graph (of the managing Flux object)",
+        )),
         sets_status: false,
     },
     // Backspace mirrors Esc, minus the quit prompt at the top.
@@ -934,6 +993,9 @@ const WORKLOAD_DETAIL_LAYOUT: &[FooterItem] = &[
     Act(A::WorkloadLogs),
     Act(A::Restart),
     Act(A::WorkloadDeletePod),
+    Act(A::NativeTrace),
+    Act(A::NativeGraph),
+    Act(A::JumpToManager),
     TAIL[0],
     TAIL[1],
     TAIL[2],
@@ -950,7 +1012,8 @@ const INVENTORY_LAYOUT: &[FooterItem] = &[
     TAIL[2],
 ];
 
-/// YAML/describe of a native (non-Flux) object (#262): viewing keys only.
+/// YAML / describe / trace of a native (non-Flux) object (#262): viewing
+/// keys, and the way to its Flux manager once known (#266).
 const NATIVE_OBJECT_LAYOUT: &[FooterItem] = &[
     Relabel(A::Move, "Scroll"),
     Act(A::Page),
@@ -959,6 +1022,9 @@ const NATIVE_OBJECT_LAYOUT: &[FooterItem] = &[
     Act(A::Yaml),
     Act(A::Describe),
     Act(A::Edit),
+    Act(A::NativeTrace),
+    Act(A::NativeGraph),
+    Act(A::JumpToManager),
     TAIL[0],
     TAIL[1],
     TAIL[2],
@@ -998,6 +1064,9 @@ const KIND_LIST_LAYOUT: &[FooterItem] = &[
     Act(A::Describe),
     Act(A::Yaml),
     Act(A::Edit),
+    Act(A::NativeTrace),
+    Act(A::NativeGraph),
+    Act(A::JumpToManager),
     Act(A::KindLogs),
     Act(A::Restart),
     Act(A::KindDeletePod),
@@ -1093,7 +1162,10 @@ impl App {
         }
         let view = self.view_state.current_view;
         if self.selection_state.native_object.is_some()
-            && matches!(view, View::ResourceYAML | View::ResourceDescribe)
+            && matches!(
+                view,
+                View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace
+            )
         {
             return NATIVE_OBJECT_LAYOUT;
         }

@@ -367,7 +367,8 @@ pub fn render_resource_describe(
 
     let managed_by = describe_fetched.and_then(|d| {
         d.managed_by
-            .as_deref()
+            .as_ref()
+            .map(|m| m.text.as_str())
             .or(managed_by_pending.then_some("resolving…"))
     });
     let all_lines =

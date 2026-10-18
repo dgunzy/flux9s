@@ -319,6 +319,52 @@ pub fn is_trace_command(cmd: &str) -> bool {
     cmd_lower == "trace" || cmd_lower.starts_with("trace ")
 }
 
+/// `:trace` usage, shown for malformed arguments.
+pub const TRACE_USAGE: &str = "Usage: :trace [<kind>/<name> [-n <namespace>]]";
+
+/// Parsed `:trace` arguments (#266).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceArgs {
+    /// `(kind token, name)`; `None` traces what the current view shows.
+    pub target: Option<(String, String)>,
+    /// kubectl-style `-n` / `--namespace`.
+    pub namespace: Option<String>,
+}
+
+/// Parse `:trace [<kind>/<name>] [-n <namespace>]` — `-n <ns>`,
+/// `--namespace <ns>`, or `--namespace=<ns>`, before or after the target.
+/// `Err` carries the message to show.
+pub fn parse_trace_args(cmd: &str) -> Result<TraceArgs, String> {
+    let mut tokens = cmd.split_whitespace().skip(1);
+    let mut target = None;
+    let mut namespace = None;
+    while let Some(token) = tokens.next() {
+        let value = match token {
+            "-n" | "--namespace" => Some(tokens.next().ok_or("-n needs a namespace")?),
+            _ => token.strip_prefix("--namespace="),
+        };
+        if let Some(value) = value {
+            if value.is_empty() || namespace.is_some() {
+                return Err(TRACE_USAGE.to_string());
+            }
+            namespace = Some(value.to_string());
+            continue;
+        }
+        if token.starts_with('-') || target.is_some() {
+            return Err(TRACE_USAGE.to_string());
+        }
+        let (kind, name) = token
+            .split_once('/')
+            .filter(|(kind, name)| !kind.is_empty() && !name.is_empty() && !name.contains('/'))
+            .ok_or_else(|| TRACE_USAGE.to_string())?;
+        target = Some((kind.to_string(), name.to_string()));
+    }
+    if target.is_none() && namespace.is_some() {
+        return Err("-n needs a <kind>/<name> to trace".to_string());
+    }
+    Ok(TraceArgs { target, namespace })
+}
+
 /// Check if command is context command (handles both "ctx" and "context")
 pub fn is_context_command(cmd: &str) -> bool {
     let cmd_lower = cmd.to_lowercase();
@@ -583,6 +629,51 @@ pub fn get_command_submenu(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trace_args_take_kubectl_style_namespaces() {
+        let parsed = |cmd: &str| parse_trace_args(cmd);
+        let target = |kind: &str, name: &str| Some((kind.to_string(), name.to_string()));
+        assert_eq!(
+            parsed("trace"),
+            Ok(TraceArgs {
+                target: None,
+                namespace: None
+            })
+        );
+        for cmd in [
+            "trace deploy/web -n apps",
+            "trace -n apps deploy/web",
+            "trace deploy/web --namespace apps",
+            "trace deploy/web --namespace=apps",
+        ] {
+            assert_eq!(
+                parsed(cmd),
+                Ok(TraceArgs {
+                    target: target("deploy", "web"),
+                    namespace: Some("apps".into()),
+                }),
+                "{cmd}"
+            );
+        }
+        for bad in [
+            "trace deploy",
+            "trace deploy/a/b",
+            "trace /web",
+            "trace deploy/web extra/thing",
+            "trace deploy/web -n a -n b",
+            "trace deploy/web --namespace=",
+            "trace deploy/web -A",
+        ] {
+            assert_eq!(parsed(bad), Err(TRACE_USAGE.to_string()), "{bad}");
+        }
+        assert!(parsed("trace deploy/web -n").is_err());
+        assert!(
+            parsed("trace -n apps")
+                .unwrap_err()
+                .contains("<kind>/<name>")
+        );
+    }
 
     #[test]
     fn test_theme_submenu_creation() {

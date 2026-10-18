@@ -60,6 +60,7 @@ mode.
 | `c` | Logs | Switch container |
 | `G` | Logs | Jump to the newest line and follow |
 | `x` | HelmRelease values | Reveal / hide Secret values |
+| `t` / `g` / `m` | Kind lists, native YAML / describe / trace, workload detail | Trace an object Flux manages, open its manager's graph, or the manager itself ([more](../native-resources/#to-the-flux-manager)) |
 
 ## Commands
 
@@ -77,7 +78,7 @@ Press `:` and type a command. `Tab` autocompletes.
 | `:events` (`:ev`) | Live Kubernetes events feed |
 | `:pulse` (`:dashboard`) | Cluster health dashboard |
 | `:logs` / `:logs <pod>` | Stream a Flux controller's logs |
-| `:trace` / `:trace <kind>/<name>` | Trace what manages a resource |
+| `:trace` / `:trace <kind>/<name> [-n <ns>]` | Trace what manages an object; watching all namespaces, finds it without `-n` |
 | `:skin` / `:skin <name>` | Pick or switch the theme |
 | `:native` | Toggle [native resources](../native-resources/) for this session |
 | `:discover` | Toggle [Flux-adjacent CRD discovery](/configuration/#discovering-flux-adjacent-resource-kinds) for this session |

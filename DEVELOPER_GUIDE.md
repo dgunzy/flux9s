@@ -212,9 +212,27 @@ Resource ownership chain tracing.
 
 **Key Design Decisions:**
 
-- Recursive resource relationship discovery
-- Support for Kustomization → HelmRelease → Deployment chains
-- Visual representation of ownership hierarchy
+- `trace_target(&ObjectRef)` traces **any** object (#266): native objects by
+  their `apiVersion` (CRDs and cluster-scoped kinds included), owners by the
+  `apiVersion` their owner reference names, Flux kinds by name with version
+  fallback. `trace_object(kind, ns, name)` is the by-name wrapper.
+- Flux ownership labels are followed first (the same `detect_manager` as the
+  MANAGED-BY column), then the **controller** owner reference only (the same
+  `controller_owner` MANAGED-BY follows); a Kustomization or HelmRelease ends
+  the walk and its source is resolved.
+- "Is this Flux" checks the API group as well as the kind name
+  (`trace::models::is_flux_kind`, `TraceNode::is_flux`): a Crossplane
+  `Bucket` is not a Flux `Bucket`. A node's namespace is the object's own
+  (empty for cluster-scoped), never inherited from the dependent.
+- `TraceResult::outcome` says where it ended: `Flux`, `Other(Manager)` (Argo
+  CD, Helm, a `managed-by` claim — the trace stops there), `Unmanaged`, or
+  `OwnerUnreadable` (RBAC, deleted).
+- The TUI commits a trace's subject (`selected_resource_key`,
+  `native_object`) only when it succeeds: `TraceResponse::Traced` carries the
+  object traced, so a failed or ambiguous `:trace` leaves the view untouched.
+  `TraceResult::flux_manager()` is the first Flux manager above the object —
+  what `g` / `m` open from a trace.
+- Hops are capped (`MAX_TRACE_DEPTH`) so an owner-reference cycle can't loop.
 
 #### 6. CLI Module (`src/cli/`)
 
@@ -713,6 +731,18 @@ Design rules:
   the controller owner chain wins over Helm annotations (ReplicaSets inherit
   their Deployment's annotations but not its labels) and over the generic
   `managed-by` label (pods inherit it from templates).
+- **From an object to its Flux manager (#266):** Managed By is structured —
+  `ownership::ManagedBy { text, flux }`, where `flux` is the managing Flux
+  object's key, directly or through the owner chain. Kind rows carry it via
+  `KindRow::flux_manager()` (from the resolved chain), describe and workload
+  detail via `ManagedBy`, the native YAML view via the same background
+  resolution as describe, and a native trace via `flux_manager()`.
+  `App::target_flux_manager()` (`tui/app/managers.rs`) reads whichever
+  applies; the `t` / `g` / `m` actions are gated on it, so the footer offers
+  them only once a Flux manager is known. `g` builds the manager's graph with
+  a highlight: `trace::locate_in_graph` finds the object, or the first owner
+  the graph lists (`ResourceGraph::node_containing` also searches workload /
+  resource group entries), and focus starts there.
 - `nativeResources` is an **opt-in preview** (default `false`; `:native`
   toggles it per session). While off it must leave flux9s exactly Flux-only: no discovery
   (`request_kind_discovery` returns early), empty catalog, no kind watches.

@@ -62,7 +62,7 @@ pub struct DescribeData {
     /// kind lists' short MANAGED-BY column. `None` while an owner chain is
     /// still being resolved in the background, so a slow cluster never holds
     /// up the object and its events.
-    pub managed_by: Option<String>,
+    pub managed_by: Option<crate::kube::ownership::ManagedBy>,
 }
 
 /// Fetch a resource and its Events for the describe view.

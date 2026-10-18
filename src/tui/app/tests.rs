@@ -2,7 +2,7 @@
 
 use super::core::App;
 use super::events::native_edit_message;
-use super::state::{Confirmation, PendingOperation, View};
+use super::state::{Confirmation, PendingOperation, TraceRequest, View};
 use crate::config::{Config, UiConfig};
 use crate::kube::objects::ObjectRef;
 use crate::tui::Theme;
@@ -1223,6 +1223,7 @@ fn workload_data(pods: &[&str]) -> crate::kube::workloads::WorkloadData {
         events_error: None,
         pod_selector: None,
         managed_by: None,
+        api_version: Some("apps/v1".to_string()),
     }
 }
 
@@ -1398,6 +1399,7 @@ fn with_rows(app: &mut App, rows: &[(&str, &str)]) {
                     cells: vec![],
                     created: None,
                     ownership: crate::kube::ownership::Ownership::Unmanaged,
+                    resolved: None,
                 })
                 .collect(),
             total: rows.len(),
@@ -1599,6 +1601,7 @@ fn live_updates_keep_the_cursor_on_the_same_object() {
         cells: vec![],
         created: None,
         ownership: crate::kube::ownership::Ownership::Unmanaged,
+        resolved: None,
     };
     app.on_kind_list_snapshot(crate::kube::kind_list::KindListSnapshot {
         columns: vec![],
@@ -2002,11 +2005,15 @@ fn edit_returns_to_the_exact_view_it_was_opened_from() {
     assert_eq!(app.view_state.current_view, View::ResourceList);
 }
 
-fn trace_command(app: &mut App, cmd: &str) -> Option<ResourceKey> {
+fn trace_command(app: &mut App, cmd: &str) -> Option<TraceRequest> {
     app.async_state.trace.clear();
     app.ui_state.command_buffer = cmd.to_string();
     app.execute_command();
     app.async_state.trace.pending().cloned()
+}
+
+fn traces(kind: &str, namespace: &str, name: &str) -> Option<TraceRequest> {
+    Some(ResourceKey::new(kind, namespace, name).into())
 }
 
 #[test]
@@ -2015,16 +2022,16 @@ fn trace_command_resolves_kinds_through_the_registry() {
     app.namespace = Some("apps".into());
     assert_eq!(
         trace_command(&mut app, "trace ks/podinfo"),
-        Some(ResourceKey::new("Kustomization", "apps", "podinfo"))
+        traces("Kustomization", "apps", "podinfo")
     );
     assert_eq!(
         trace_command(&mut app, "trace helmrelease/podinfo"),
-        Some(ResourceKey::new("HelmRelease", "apps", "podinfo"))
+        traces("HelmRelease", "apps", "podinfo")
     );
     // Exact kind names pass through (resolved when the trace runs).
     assert_eq!(
         trace_command(&mut app, "trace Deployment/web"),
-        Some(ResourceKey::new("Deployment", "apps", "web"))
+        traces("Deployment", "apps", "web")
     );
     assert_eq!(trace_command(&mut app, "trace ks"), None, "usage");
     assert_eq!(trace_command(&mut app, "trace ks/a/b"), None, "usage");
@@ -3484,4 +3491,456 @@ fn the_watched_state_wins_over_the_fetched_suspend_flag() {
         )
         .unwrap();
     assert!(!message.contains("suspended"), "{message}");
+}
+
+// --- #266: trace, graph, and jump to what manages a native object -------
+
+/// A Deployment list whose rows are managed as given.
+fn deploy_list(app: &mut App, rows: &[(&str, crate::kube::ownership::Ownership)]) {
+    open_list(app, "apps", "Deployment", "deployments", &[]);
+    let snapshot = crate::kube::kind_list::KindListSnapshot {
+        columns: vec![],
+        rows: rows
+            .iter()
+            .map(|(name, ownership)| crate::kube::kind_list::KindRow {
+                namespace: "apps".into(),
+                name: name.to_string(),
+                health: crate::kube::object_status::ObjectHealth::Current,
+                cells: vec![],
+                created: None,
+                ownership: ownership.clone(),
+                resolved: None,
+            })
+            .collect(),
+        total: rows.len(),
+    };
+    app.async_state.kind_list.set_result(snapshot);
+    app.view_state.selected_index = 0;
+}
+
+fn has_hint(app: &App, key: &str) -> bool {
+    footer_keys(app).iter().any(|(k, _)| *k == key)
+}
+
+#[test]
+fn native_trace_graph_and_manager_keys_show_only_for_flux_managed_objects() {
+    use crate::kube::ownership::{Manager, OwnerRef, Ownership, Resolved};
+    let mut app = create_test_app(false);
+    let owned = OwnerRef {
+        api_version: "apps/v1".into(),
+        kind: "ReplicaSet".into(),
+        name: "web-7b5".into(),
+        uid: "rs-1".into(),
+    };
+    deploy_list(
+        &mut app,
+        &[
+            ("flux", Ownership::Managed(flux_ks("apps"))),
+            (
+                "helm",
+                Ownership::Managed(Manager::Helm {
+                    namespace: "apps".into(),
+                    release: "helm".into(),
+                }),
+            ),
+            ("bare", Ownership::Unmanaged),
+            ("owned", Ownership::Owned(owned)),
+        ],
+    );
+
+    // Flux-managed: t / g / m offered and wired to that manager.
+    assert!(has_hint(&app, "t") && has_hint(&app, "g") && has_hint(&app, "m"));
+    assert_eq!(
+        app.target_flux_manager(),
+        Some(ResourceKey::new("Kustomization", "flux-system", "apps"))
+    );
+
+    // Helm, unmanaged, and a chain still resolving: nothing to act on.
+    for index in 1..=3 {
+        app.view_state.selected_index = index;
+        assert_eq!(app.target_flux_manager(), None, "row {index}");
+        assert!(!has_hint(&app, "t") && !has_hint(&app, "g") && !has_hint(&app, "m"));
+        assert!(app.action_for(&make_key(KeyCode::Char('g'))).is_none());
+    }
+
+    // Once the owner chain resolves to Flux, the keys appear.
+    let mut snapshot = app.async_state.kind_list.result().cloned().unwrap();
+    snapshot.rows[3].resolved = Some(Resolved::Manager(flux_ks("apps")));
+    app.async_state.kind_list.set_result(snapshot);
+    assert!(has_hint(&app, "g"));
+}
+
+#[test]
+fn g_on_a_native_object_opens_its_managers_graph_marking_it() {
+    use crate::kube::ownership::Ownership;
+    let mut app = create_test_app(false);
+    deploy_list(&mut app, &[("web", Ownership::Managed(flux_ks("apps")))]);
+
+    app.handle_key(make_key(KeyCode::Char('g')));
+    assert_eq!(app.view_state.current_view, View::ResourceGraph);
+    let request = app.async_state.graph.pending().cloned().unwrap();
+    assert_eq!(
+        request.root,
+        ResourceKey::new("Kustomization", "flux-system", "apps")
+    );
+    assert_eq!(
+        request.highlight,
+        Some(ObjectRef::native("apps/v1", "Deployment", "apps", "web"))
+    );
+    assert!(
+        app.selection_state.native_object.is_none(),
+        "the graph is the manager's: Flux keys apply"
+    );
+
+    // The graph lands focused on the workload group listing the Deployment.
+    use crate::trace::{NodeType, ResourceGraph};
+    let mut graph = ResourceGraph::new();
+    graph.add_node(graph_node("Kustomization", "apps", NodeType::Object));
+    let mut group = graph_node("Workloads", "Workloads (1)", NodeType::WorkloadGroup);
+    group.id = "workloadgroup:apps".into();
+    group.description = Some(
+        crate::kube::workloads::WorkloadRef {
+            kind: "Deployment".into(),
+            name: "web".into(),
+            namespace: "apps".into(),
+            indicator: "●".into(),
+            status: "Replicas: 1/1".into(),
+            api_version: "apps/v1".into(),
+        }
+        .to_graph_line(),
+    );
+    graph.add_node(group);
+    let web = ResourceKey::new("Deployment", "apps", "web");
+    app.set_graph_result(super::state::GraphResult {
+        graph,
+        highlight: Some(web.clone()),
+    });
+    assert_eq!(app.view_state.graph_focus_index, Some(1));
+    assert_eq!(app.view_state.graph_highlight, Some(web));
+
+    // Back returns to the list it came from.
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::KindList);
+}
+
+#[test]
+fn a_kind_list_filter_is_not_a_flux_filter_in_views_opened_from_it() {
+    use crate::kube::ownership::Ownership;
+    let mut app = create_test_app(false);
+    add_resource(&mut app);
+    deploy_list(&mut app, &[("web", Ownership::Managed(flux_ks("apps")))]);
+    app.view_state.filter = "web".into();
+    app.handle_key(make_key(KeyCode::Char('g')));
+    assert_eq!(app.view_state.current_view, View::ResourceGraph);
+    assert_eq!(app.flux_filter(), "", "the filter belongs to the kind list");
+    assert_eq!(app.get_filtered_resources().len(), 1);
+
+    // Back on the list, the filter is still applied there.
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::KindList);
+    assert_eq!(app.view_state.filter, "web");
+}
+
+#[test]
+fn m_opens_the_manager_detail_when_watched_else_its_describe() {
+    use crate::kube::ownership::Ownership;
+    let mut app = create_test_app(false);
+    add_resource(&mut app); // Kustomization flux-system/my-kustomization
+    deploy_list(
+        &mut app,
+        &[
+            ("web", Ownership::Managed(flux_ks("my-kustomization"))),
+            ("api", Ownership::Managed(flux_ks("elsewhere"))),
+        ],
+    );
+
+    app.handle_key(make_key(KeyCode::Char('m')));
+    assert_eq!(app.view_state.current_view, View::ResourceDetail);
+    assert_eq!(
+        app.selection_state.selected_resource_key.as_deref(),
+        Some("Kustomization:flux-system:my-kustomization")
+    );
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::KindList);
+
+    // Not watched (another namespace): fetched into describe.
+    app.view_state.selected_index = 1;
+    app.handle_key(make_key(KeyCode::Char('m')));
+    assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+    assert_eq!(
+        app.async_state.describe.pending().cloned(),
+        Some(ResourceKey::new("Kustomization", "flux-system", "elsewhere").into())
+    );
+    assert!(app.selection_state.native_object.is_none());
+}
+
+#[test]
+fn t_on_a_native_object_traces_it_by_api_version() {
+    use crate::kube::ownership::Ownership;
+    let mut app = create_test_app(false);
+    deploy_list(&mut app, &[("web", Ownership::Managed(flux_ks("apps")))]);
+    app.handle_key(make_key(KeyCode::Char('t')));
+    let target = ObjectRef::native("apps/v1", "Deployment", "apps", "web");
+    assert_eq!(
+        app.async_state.trace.pending().cloned(),
+        Some(TraceRequest::Object(target.clone()))
+    );
+    assert_eq!(
+        app.selection_state.native_object, None,
+        "nothing changes until the trace answers"
+    );
+
+    // The result opens the trace; from there g / m follow its manager.
+    app.set_trace_response(Ok(traced(target.clone())));
+    assert_eq!(app.selection_state.native_object, Some(target.clone()));
+    assert_eq!(app.view_state.current_view, View::ResourceTrace);
+    assert!(!has_hint(&app, "t"), "already on its trace");
+    assert!(has_hint(&app, "g") && has_hint(&app, "m"));
+    assert_eq!(
+        app.target_flux_manager(),
+        Some(ResourceKey::new("Kustomization", "flux-system", "apps"))
+    );
+    // y / d from the trace open the same native object.
+    app.handle_key(make_key(KeyCode::Char('y')));
+    assert_eq!(app.view_state.current_view, View::ResourceYAML);
+    assert_eq!(app.async_state.yaml.pending().cloned(), Some(target));
+}
+
+fn trace_node(kind: &str, namespace: &str, name: &str) -> crate::trace::TraceNode {
+    crate::trace::TraceNode {
+        kind: kind.into(),
+        api_version: None,
+        name: name.into(),
+        namespace: namespace.into(),
+        status: None,
+        spec: None,
+    }
+}
+
+/// Deployment apps/web, managed by Kustomization flux-system/apps.
+fn native_trace() -> crate::trace::TraceResult {
+    crate::trace::TraceResult {
+        object: trace_node("Deployment", "apps", "web"),
+        chain: vec![
+            trace_node("Deployment", "apps", "web"),
+            trace_node("Kustomization", "flux-system", "apps"),
+        ],
+        source: Some(trace_node("GitRepository", "flux-system", "flux-system")),
+        outcome: crate::trace::TraceOutcome::Flux,
+    }
+}
+
+#[test]
+fn trace_command_takes_a_namespace() {
+    let mut app = create_test_app(false);
+    app.namespace = Some("apps".into());
+    assert_eq!(
+        trace_command(&mut app, "trace ks/podinfo -n flux-system"),
+        traces("Kustomization", "flux-system", "podinfo")
+    );
+    assert_eq!(
+        trace_command(&mut app, "trace --namespace=team ks/podinfo"),
+        traces("Kustomization", "team", "podinfo")
+    );
+    assert_eq!(trace_command(&mut app, "trace ks/podinfo -n"), None);
+    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+    assert!(is_error && message.contains("-n"), "{message}");
+}
+
+#[test]
+fn trace_command_searches_all_namespaces_without_n() {
+    let mut app = create_test_app(false);
+    app.namespace = None;
+
+    // Anything that isn't a Flux kind asks the cluster (by name here; a
+    // discovered alias would carry its apiVersion).
+    assert_eq!(
+        trace_command(&mut app, "trace Deployment/flux-operator"),
+        Some(TraceRequest::Search {
+            kind: "Deployment".into(),
+            api_version: None,
+            name: "flux-operator".into(),
+        })
+    );
+
+    // Flux kinds are answered from the watched state.
+    add_resource(&mut app); // Kustomization flux-system/my-kustomization
+    assert_eq!(
+        trace_command(&mut app, "trace ks/my-kustomization"),
+        traces("Kustomization", "flux-system", "my-kustomization")
+    );
+    assert_eq!(trace_command(&mut app, "trace ks/missing"), None);
+    let (message, _) = app.ui_state.status_message.clone().unwrap();
+    assert!(
+        message.contains("No Kustomization named missing"),
+        "{message}"
+    );
+
+    // Several matches: listed, with the way to pick one.
+    let mut other = app
+        .state
+        .get("Kustomization:flux-system:my-kustomization")
+        .unwrap();
+    other.namespace = "team".into();
+    app.state.upsert(
+        resource_key("team", "my-kustomization", "Kustomization"),
+        other,
+    );
+    assert_eq!(trace_command(&mut app, "trace ks/my-kustomization"), None);
+    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+    assert!(
+        is_error && message.contains("flux-system, team") && message.contains("-n <namespace>"),
+        "{message}"
+    );
+}
+
+fn traced(target: ObjectRef) -> super::state::TraceResponse {
+    super::state::TraceResponse::Traced {
+        target,
+        trace: Box::new(native_trace()),
+    }
+}
+
+#[test]
+fn a_search_commits_the_object_it_found_as_the_subject() {
+    let mut app = create_test_app(false);
+    let found = ObjectRef::native("apps/v1", "Deployment", "apps", "web");
+    app.set_trace_response(Ok(traced(found.clone())));
+    assert_eq!(app.selection_state.native_object, Some(found));
+    assert_eq!(
+        app.selection_state.selected_resource_key.as_deref(),
+        Some("Deployment:apps:web")
+    );
+}
+
+/// A failed or ambiguous trace leaves the current view exactly as it was —
+/// the Flux YAML keeps its subject and its Flux keys.
+#[test]
+fn a_failed_trace_changes_nothing_on_screen() {
+    let mut app = create_test_app(false);
+    add_resource(&mut app);
+    app.view_state.current_view = View::ResourceList;
+    app.handle_key(make_key(KeyCode::Char('y')));
+    assert_eq!(app.view_state.current_view, View::ResourceYAML);
+    let subject = app.selection_state.selected_resource_key.clone();
+    let footer = footer_keys(&app);
+
+    // :trace of a native object that turns out not to exist…
+    trace_command(&mut app, "trace Deployment/typo -n apps");
+    assert_eq!(app.selection_state.native_object, None);
+    app.set_trace_response(Err(anyhow::anyhow!("deployments \"typo\" not found")));
+    assert_eq!(app.view_state.current_view, View::ResourceYAML);
+    assert_eq!(app.selection_state.selected_resource_key, subject);
+    assert_eq!(app.selection_state.native_object, None);
+    assert_eq!(
+        footer_keys(&app),
+        footer,
+        "the Flux footer, not the native one"
+    );
+    assert!(app.action_for(&make_key(KeyCode::Char('R'))).is_some());
+
+    // …or a search with several matches, from a Flux detail view.
+    app.view_state.current_view = View::ResourceDetail;
+    app.namespace = None;
+    trace_command(&mut app, "trace Deployment/web");
+    app.set_trace_response(Ok(super::state::TraceResponse::Ambiguous {
+        target: "Deployment/web".into(),
+        namespaces: vec!["a".into(), "b".into()],
+    }));
+    assert_eq!(app.selection_state.selected_resource_key, subject);
+    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+    assert!(
+        is_error && message.contains("2 namespaces (a, b)"),
+        "{message}"
+    );
+}
+
+/// `t` on a kind-list row whose trace fails leaves nothing behind: back on
+/// the Flux list, `t` traces a Kustomization with the Flux keys.
+#[test]
+fn a_failed_native_trace_does_not_leak_into_flux_traces() {
+    use crate::kube::ownership::Ownership;
+    let mut app = create_test_app(false);
+    add_resource(&mut app);
+    deploy_list(&mut app, &[("web", Ownership::Managed(flux_ks("apps")))]);
+    app.handle_key(make_key(KeyCode::Char('t')));
+    app.set_trace_response(Err(anyhow::anyhow!("forbidden")));
+    assert_eq!(app.selection_state.native_object, None);
+
+    // The first Esc dismisses the error, the second goes back.
+    app.handle_key(make_key(KeyCode::Esc));
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::ResourceList);
+    app.handle_key(make_key(KeyCode::Char('t')));
+    let target = match app.async_state.trace.pending().cloned() {
+        Some(TraceRequest::Object(target)) => target,
+        other => panic!("expected an object trace, got {other:?}"),
+    };
+    assert_eq!(target.api_version, None, "a Flux resource");
+    app.set_trace_response(Ok(traced(target)));
+    assert_eq!(app.view_state.current_view, View::ResourceTrace);
+    assert_eq!(app.selection_state.native_object, None);
+    assert!(has_hint(&app, "R"), "Flux operations still apply");
+}
+
+#[test]
+fn workload_detail_offers_its_flux_manager() {
+    let mut app = create_test_app(false);
+    let mut data = workload_data(&["web-1"]);
+    app.view_state.current_view = View::WorkloadDetail;
+    app.async_state.workload.set_result(data.clone());
+    assert!(!has_hint(&app, "m"), "Managed By not known yet");
+
+    data.managed_by = Some(crate::kube::ownership::ManagedBy {
+        text: "Flux Kustomization flux-system/apps".into(),
+        flux: Some(ResourceKey::new("Kustomization", "flux-system", "apps")),
+    });
+    app.async_state.workload.set_result(data.clone());
+    assert!(has_hint(&app, "t") && has_hint(&app, "g") && has_hint(&app, "m"));
+    assert_eq!(
+        app.native_subject(),
+        Some(ObjectRef::native(
+            "apps/v1",
+            &data.kind,
+            &data.namespace,
+            &data.name
+        ))
+    );
+}
+
+#[test]
+fn native_yaml_resolves_its_manager_in_the_background() {
+    use super::state::ManagerResolution;
+    let mut app = create_test_app(false);
+    app.view_state.current_view = View::ResourceYAML;
+    app.selection_state.native_object = Some(ObjectRef::native("v1", "Pod", "apps", "web-1"));
+
+    // Labelled: known at once.
+    app.set_yaml_result(
+        serde_json::json!({"metadata": {"name": "cm", "uid": "u0", "labels": {
+        "kustomize.toolkit.fluxcd.io/name": "apps",
+        "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}}}),
+    );
+    assert!(app.async_state.describe_manager.pending().is_none());
+    assert!(has_hint(&app, "m"));
+
+    // Owned: resolved in the background, then offered.
+    app.set_yaml_result(
+        serde_json::json!({"metadata": {"name": "web-1", "uid": "u1",
+        "namespace": "apps", "ownerReferences": [{"apiVersion": "apps/v1",
+        "kind": "ReplicaSet", "name": "web-7b5", "uid": "rs", "controller": true}]}}),
+    );
+    assert!(app.async_state.describe_manager.pending().is_some());
+    assert!(!has_hint(&app, "m"));
+    let resolved = |uid: &str| ManagerResolution {
+        uid: uid.into(),
+        managed_by: crate::kube::ownership::ManagedBy {
+            text: "Flux Kustomization flux-system/apps (via ReplicaSet/web-7b5)".into(),
+            flux: Some(ResourceKey::new("Kustomization", "flux-system", "apps")),
+        },
+    };
+    app.set_manager_resolution(resolved("someone-else"));
+    assert!(!has_hint(&app, "m"), "a late answer for another object");
+    app.set_manager_resolution(resolved("u1"));
+    assert!(has_hint(&app, "m"));
 }

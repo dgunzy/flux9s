@@ -39,6 +39,28 @@ pub struct GraphNode {
 }
 
 impl GraphNode {
+    /// Whether this workload or resource group node lists `key` among its
+    /// entries (decoded with the same encoders that wrote them).
+    pub fn group_lists(&self, key: &crate::watcher::ResourceKey) -> bool {
+        let Some(description) = &self.description else {
+            return false;
+        };
+        let matches = |kind: &str, namespace: &str, name: &str| {
+            kind == key.resource_type && namespace == key.namespace && name == key.name
+        };
+        match self.node_type {
+            NodeType::WorkloadGroup => description
+                .lines()
+                .filter_map(crate::kube::workloads::WorkloadRef::parse_graph_line)
+                .any(|w| matches(&w.kind, &w.namespace, &w.name)),
+            NodeType::ResourceGroup => description
+                .lines()
+                .filter_map(crate::kube::inventory::InventoryEntry::parse_graph_line)
+                .any(|e| matches(&e.kind, &e.namespace, &e.name)),
+            _ => false,
+        }
+    }
+
     /// Width of the widest line of content this node will render, in columns.
     fn content_width(&self) -> u16 {
         // Multi-line descriptions render one line at a time, so the widest
@@ -229,6 +251,16 @@ impl ResourceGraph {
         order
     }
 
+    /// The node showing `key` (#266): its own node, else the workload or
+    /// resource group that lists it.
+    pub fn node_containing(&self, key: &crate::watcher::ResourceKey) -> Option<usize> {
+        let id = format!("{}:{}:{}", key.resource_type, key.namespace, key.name);
+        if let Some(&index) = self.node_index.get(&id) {
+            return Some(index);
+        }
+        self.nodes.iter().position(|node| node.group_lists(key))
+    }
+
     /// Index of the primary "object" node (the resource being viewed), if any.
     /// Used as the initial focus target so the graph is navigable immediately.
     pub fn object_node_index(&self) -> Option<usize> {
@@ -355,6 +387,80 @@ impl Default for ResourceGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_containing_finds_the_node_or_the_group_listing_it() {
+        use crate::watcher::ResourceKey;
+        let node =
+            |id: &str, kind: &str, node_type: NodeType, description: Option<String>| GraphNode {
+                id: id.into(),
+                kind: kind.into(),
+                name: id.into(),
+                namespace: "apps".into(),
+                node_type,
+                ready: None,
+                position: None,
+                description,
+            };
+        let workloads = crate::kube::workloads::WorkloadRef {
+            kind: "Deployment".into(),
+            name: "web".into(),
+            namespace: "apps".into(),
+            indicator: "●".into(),
+            status: "Replicas: 1/1".into(),
+            api_version: "apps/v1".into(),
+        }
+        .to_graph_line();
+        let resources = crate::kube::inventory::InventoryEntry {
+            kind: "ConfigMap".into(),
+            namespace: "apps".into(),
+            name: "settings".into(),
+            api_version: "v1".into(),
+        }
+        .to_graph_line();
+        let mut graph = ResourceGraph::new();
+        graph.add_node(node(
+            "Kustomization:flux-system:apps",
+            "Kustomization",
+            NodeType::Object,
+            None,
+        ));
+        graph.add_node(node(
+            "HelmRelease:apps:web",
+            "HelmRelease",
+            NodeType::FluxResource,
+            None,
+        ));
+        graph.add_node(node(
+            "workloadgroup:apps",
+            "Workloads",
+            NodeType::WorkloadGroup,
+            Some(workloads),
+        ));
+        graph.add_node(node(
+            "resourcegroup:apps",
+            "Resources",
+            NodeType::ResourceGroup,
+            Some(resources),
+        ));
+
+        let at = |kind: &str, namespace: &str, name: &str| {
+            graph.node_containing(&ResourceKey::new(kind, namespace, name))
+        };
+        assert_eq!(at("HelmRelease", "apps", "web"), Some(1), "its own node");
+        assert_eq!(
+            at("Deployment", "apps", "web"),
+            Some(2),
+            "the workload group"
+        );
+        assert_eq!(
+            at("ConfigMap", "apps", "settings"),
+            Some(3),
+            "the resource group"
+        );
+        assert_eq!(at("Deployment", "other", "web"), None, "namespace matters");
+        assert_eq!(at("Pod", "apps", "web-abc"), None);
+    }
 
     fn node(id: &str, node_type: NodeType) -> GraphNode {
         GraphNode {

@@ -68,7 +68,7 @@ pub use kube::{
 // Re-export trace types
 pub use trace::{
     GraphEdge, GraphNode, NodeType, RelationshipType, ResourceGraph, SourceRef, TraceNode,
-    TraceResult, TraceSpec, TraceStatus, trace_object,
+    TraceOutcome, TraceResult, TraceSpec, TraceStatus, trace_object, trace_target,
 };
 
 // Re-export watcher types

@@ -3,33 +3,95 @@
 use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
 use crate::tui::trace::{TraceNode, TraceResult};
+use crate::tui::views::text::{wrapped, wrapped_height};
 use crate::tui::views::yaml::decorate_title_with_search;
 use ratatui::{
     Frame,
+    buffer::Buffer,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Widget},
 };
 
-/// Whether any of a trace node's displayed text matches the search query.
-fn node_matches(node: &TraceNode, query_lower: &str) -> bool {
-    let mut haystacks: Vec<&str> = vec![&node.kind, &node.name, &node.namespace];
-    if let Some(ref spec) = node.spec {
-        haystacks.extend(spec.path.as_deref());
-        haystacks.extend(spec.url.as_deref());
-        haystacks.extend(spec.branch.as_deref());
-    }
-    if let Some(ref status) = node.status {
-        haystacks.extend(status.revision.as_deref());
-        haystacks.extend(status.message.as_deref());
-    }
-    haystacks
-        .iter()
-        .any(|text| text.to_lowercase().contains(query_lower))
+/// Rows between blocks, for the arrow and its label.
+const ARROW_HEIGHT: u16 = 3;
+
+/// One block of the trace view.
+#[derive(Debug, Clone)]
+pub(crate) enum TraceBlock {
+    /// An object on the path, or the source.
+    Node(Box<TraceNode>),
+    /// Where the trace stopped short of Flux (#266): what manages the chain
+    /// instead, or why it ends.
+    Stop { title: String, detail: String },
 }
 
-/// Render the trace view
+impl TraceBlock {
+    /// Whether any of the block's displayed text matches the search query.
+    fn matches(&self, query_lower: &str) -> bool {
+        let haystacks: Vec<&str> = match self {
+            TraceBlock::Node(node) => {
+                let mut haystacks: Vec<&str> = vec![&node.kind, &node.name, &node.namespace];
+                if let Some(ref spec) = node.spec {
+                    haystacks.extend(spec.path.as_deref());
+                    haystacks.extend(spec.url.as_deref());
+                    haystacks.extend(spec.branch.as_deref());
+                }
+                if let Some(ref status) = node.status {
+                    haystacks.extend(status.revision.as_deref());
+                    haystacks.extend(status.message.as_deref());
+                }
+                haystacks
+            }
+            TraceBlock::Stop { title, detail } => vec![title, detail],
+        };
+        haystacks
+            .iter()
+            .any(|text| text.to_lowercase().contains(query_lower))
+    }
+
+    /// The block's text, before wrapping. `is_primary` marks the traced
+    /// object itself.
+    fn lines(&self, is_primary: bool, theme: &Theme) -> Vec<Line<'static>> {
+        match self {
+            TraceBlock::Node(node) => node_lines(node, is_primary, theme),
+            TraceBlock::Stop { title, detail } => vec![
+                Line::from(Span::styled(
+                    title.clone(),
+                    Style::default()
+                        .fg(theme.text_primary)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    detail.clone(),
+                    Style::default()
+                        .fg(theme.text_secondary)
+                        .add_modifier(Modifier::ITALIC),
+                )),
+            ],
+        }
+    }
+
+    /// Border style: the current search match stands out, the traced
+    /// object is labelled, the rest recede.
+    fn border(&self, is_primary: bool, is_current_match: bool, theme: &Theme) -> Style {
+        if is_current_match {
+            Style::default()
+                .fg(theme.text_value)
+                .add_modifier(Modifier::BOLD)
+        } else if is_primary && matches!(self, TraceBlock::Node(_)) {
+            Style::default().fg(theme.text_label)
+        } else {
+            Style::default().fg(theme.text_secondary)
+        }
+    }
+}
+
+/// Render the trace view. The blocks are laid out at their wrapped height
+/// and drawn off screen at full size; only the viewport's rows are copied
+/// onto the frame, so any trace scrolls to its end and a block scrolled
+/// partly off the top shows its lower rows.
 pub fn render_resource_trace(
     f: &mut Frame,
     area: Rect,
@@ -51,69 +113,29 @@ pub fn render_resource_trace(
         return;
     }
 
-    let trace_result = match trace_result {
-        Some(result) => result,
-        None => {
-            crate::tui::views::helpers::render_empty_state(
-                f,
-                area,
-                "Trace",
-                "No trace data available",
-                "Select a resource and press 't' to trace",
-                theme,
-            );
-            return;
-        }
+    let Some(trace_result) = trace_result else {
+        crate::tui::views::helpers::render_empty_state(
+            f,
+            area,
+            "Trace",
+            "No trace data available",
+            "Select a resource and press 't' to trace",
+            theme,
+        );
+        return;
     };
 
-    // Build list of nodes to display
-    let mut nodes: Vec<(&TraceNode, &str)> = Vec::new();
+    let blocks = trace_blocks(trace_result);
 
-    // Add the main object
-    nodes.push((&trace_result.object, "Object"));
-
-    // Add chain nodes: the Flux objects that manage it (Kustomization,
-    // HelmRelease, ResourceSet, FluxInstance — the managers MANAGED-BY
-    // knows) and HelmCharts. Skip nodes that match the object being traced
-    // (avoid duplicates).
-    for node in &trace_result.chain {
-        use crate::models::FluxResourceKind;
-        if matches!(
-            FluxResourceKind::parse_optional(&node.kind),
-            Some(
-                FluxResourceKind::Kustomization
-                    | FluxResourceKind::HelmRelease
-                    | FluxResourceKind::HelmChart
-                    | FluxResourceKind::ResourceSet
-                    | FluxResourceKind::FluxInstance
-            )
-        ) {
-            // Skip if this node matches the object being traced (already shown as "Object")
-            if node.kind == trace_result.object.kind
-                && node.name == trace_result.object.name
-                && node.namespace == trace_result.object.namespace
-            {
-                continue;
-            }
-            nodes.push((node, "managed by"));
-        }
-    }
-
-    // Add source node
-    if let Some(source) = &trace_result.source {
-        nodes.push((source, "sourced from"));
-    }
-
-    // Text search: match whole nodes (the trace view is block-based, not line-based)
-    let arrow_height = 3; // Space for arrow between blocks
+    // Text search: match whole blocks (the trace view is block-based, not line-based)
     let query_lower = search.query.to_lowercase();
     let match_indexes: Vec<usize> = if query_lower.is_empty() {
         Vec::new()
     } else {
-        nodes
+        blocks
             .iter()
             .enumerate()
-            .filter(|(_, (node, _))| node_matches(node, &query_lower))
+            .filter(|(_, (block, _))| block.matches(&query_lower))
             .map(|(idx, _)| idx)
             .collect()
     };
@@ -121,168 +143,180 @@ pub fn render_resource_trace(
     if !match_indexes.is_empty() {
         search.current_match = search.current_match.min(match_indexes.len() - 1);
     }
-    let current_match_node = match_indexes.get(search.current_match).copied();
+    let current_match_block = match_indexes.get(search.current_match).copied();
 
     let mut title = "Trace".to_string();
     decorate_title_with_search(&mut title, search);
     let outer_block = crate::tui::views::helpers::create_themed_block(&title, theme);
-
-    // Inner area (excluding border)
     let inner_area = outer_block.inner(area);
     f.render_widget(outer_block, area);
+
+    // Lay out: each block at its wrapped height (inside its borders), with
+    // an arrow between consecutive blocks.
+    let width = inner_area.width;
+    let laid: Vec<(Vec<Line<'static>>, u16)> = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, (block, _))| {
+            let lines = block.lines(i == 0, theme);
+            let height = wrapped_height(&lines, width.saturating_sub(2)).saturating_add(2);
+            (lines, height)
+        })
+        .collect();
+    let mut tops = Vec::with_capacity(laid.len());
+    let mut total: u16 = 0;
+    for (i, (_, height)) in laid.iter().enumerate() {
+        if i > 0 {
+            total = total.saturating_add(ARROW_HEIGHT);
+        }
+        tops.push(total);
+        total = total.saturating_add(*height);
+    }
 
     // Jump the scroll offset to the start of the current match's block
     if search.pending_jump {
         search.pending_jump = false;
-        if let Some(node_idx) = current_match_node {
-            let mut y_offset: u16 = 0;
-            for (node, _) in nodes.iter().take(node_idx) {
-                y_offset += calculate_block_height(node, inner_area.width) + arrow_height;
-            }
-            *scroll_offset = y_offset as usize;
+        if let Some(&top) = current_match_block.and_then(|i| tops.get(i)) {
+            *scroll_offset = usize::from(top);
         }
     }
 
-    // Calculate required height for all nodes
-    let block_min_height = 4; // Minimum height for a block
-    let total_height: u16 = nodes
-        .iter()
-        .map(|_| block_min_height + arrow_height)
-        .sum::<u16>()
-        - arrow_height; // Last node doesn't need arrow after it
-
-    // Calculate scroll
-    let available_height = inner_area.height;
     let viewport = crate::tui::views::scroll::Viewport::text(
         scroll_offset,
-        total_height as usize,
-        available_height as usize,
+        usize::from(total),
+        usize::from(inner_area.height),
     );
-    let max_scroll = total_height.saturating_sub(available_height) as usize;
-    let scroll_offset_u16 = *scroll_offset as u16;
 
-    // Render nodes with scrolling
-    let mut current_y = inner_area.y.saturating_sub(scroll_offset_u16);
-
-    for (i, (node, relationship)) in nodes.iter().enumerate() {
-        let is_first = i == 0;
-        let is_current_match = Some(i) == current_match_node;
-
-        // Draw arrow before this node (except for the first)
-        if !is_first {
-            let arrow_y_start = current_y;
-            let arrow_y_end = (arrow_y_start + arrow_height).min(inner_area.y + inner_area.height);
-
-            // Only render if arrow is visible
-            if arrow_y_end > inner_area.y {
-                let arrow_area = Rect {
-                    x: inner_area.x,
-                    y: arrow_y_start.max(inner_area.y),
-                    width: inner_area.width,
-                    height: arrow_y_end.saturating_sub(arrow_y_start.max(inner_area.y)),
-                };
-
-                render_arrow(f, arrow_area, relationship, theme);
-            }
-
-            current_y += arrow_height;
+    // Draw the whole trace off screen…
+    let mut canvas = Buffer::empty(Rect::new(0, 0, width, total));
+    for (i, ((block, relationship), (lines, height))) in blocks.iter().zip(laid).enumerate() {
+        let top = tops[i];
+        if i > 0 {
+            let arrow = Rect::new(0, top - ARROW_HEIGHT, width, ARROW_HEIGHT);
+            render_arrow(&mut canvas, arrow, relationship, theme);
         }
-
-        // Calculate block height based on content
-        let block_height = calculate_block_height(node, inner_area.width);
-        let block_y_start = current_y;
-        let block_y_end = (block_y_start + block_height).min(inner_area.y + inner_area.height);
-
-        // Only render if block is visible
-        if block_y_end > inner_area.y && block_y_start < inner_area.y + inner_area.height {
-            let block_area = Rect {
-                x: inner_area.x,
-                y: block_y_start.max(inner_area.y),
-                width: inner_area.width,
-                height: block_y_end.saturating_sub(block_y_start.max(inner_area.y)),
-            };
-
-            render_trace_node(f, block_area, node, is_first, is_current_match, theme);
+        let mut frame = Block::default()
+            .borders(Borders::ALL)
+            .border_style(block.border(i == 0, Some(i) == current_match_block, theme));
+        if matches!(block, TraceBlock::Stop { .. }) {
+            frame = frame.border_type(BorderType::Rounded);
         }
+        wrapped(lines)
+            .block(frame)
+            .render(Rect::new(0, top, width, height), &mut canvas);
+    }
 
-        current_y += block_height;
-
-        // Stop if we've scrolled past the visible area
-        if current_y >= inner_area.y + inner_area.height {
+    // …and copy the rows the viewport shows.
+    let screen = f.buffer_mut();
+    for (screen_row, row) in viewport.range().enumerate() {
+        let (Ok(row), Ok(screen_row)) = (u16::try_from(row), u16::try_from(screen_row)) else {
             break;
+        };
+        for x in 0..width {
+            if let (Some(cell), Some(target)) = (
+                canvas.cell((x, row)),
+                screen.cell_mut((inner_area.x + x, inner_area.y + screen_row)),
+            ) {
+                *target = cell.clone();
+            }
         }
     }
 
     viewport.render_scrollbar(f, area, theme);
+}
 
-    // Show scroll indicator if needed
-    if total_height > available_height {
-        let scroll_info = format!(
-            "Scroll: {}/{} (j/k to navigate, Esc to close)",
-            *scroll_offset + 1,
-            max_scroll + 1
-        );
-        let scroll_line = Line::from(Span::styled(
-            scroll_info,
-            Style::default().fg(theme.text_label),
+/// A trace node with every cluster-supplied string made safe to draw
+/// (control characters and escapes stripped, newlines flattened, capped).
+fn sanitized(node: &TraceNode) -> TraceNode {
+    use crate::kube::kind_list::sanitize_cell as clean;
+    let opt = |text: &Option<String>| text.as_deref().map(clean);
+    TraceNode {
+        kind: clean(&node.kind),
+        api_version: node.api_version.clone(),
+        name: clean(&node.name),
+        namespace: clean(&node.namespace),
+        status: node.status.as_ref().map(|s| crate::trace::TraceStatus {
+            ready: s.ready,
+            message: opt(&s.message),
+            last_reconciled: opt(&s.last_reconciled),
+            revision: opt(&s.revision),
+        }),
+        spec: node.spec.as_ref().map(|s| crate::trace::TraceSpec {
+            path: opt(&s.path),
+            url: opt(&s.url),
+            branch: opt(&s.branch),
+            source_ref: s.source_ref.clone(),
+        }),
+    }
+}
+
+/// The blocks a trace shows, top to bottom, with the label of the arrow
+/// leading into each: the object, its controller owners ("owned by"), the
+/// Flux objects managing it ("managed by"), the source ("sourced from"),
+/// and — when the trace ended somewhere other than Flux — where it stopped.
+/// Everything read from the cluster is sanitized here.
+pub(crate) fn trace_blocks(result: &TraceResult) -> Vec<(TraceBlock, &'static str)> {
+    use crate::kube::kind_list::sanitize_cell;
+    use crate::trace::TraceOutcome;
+    let path = result.path();
+    let mut blocks: Vec<(TraceBlock, &'static str)> = path
+        .iter()
+        .enumerate()
+        .map(|(i, node)| {
+            let relationship = match i {
+                0 => "Object",
+                _ if node.is_flux() => "managed by",
+                _ => "owned by",
+            };
+            (TraceBlock::Node(Box::new(sanitized(node))), relationship)
+        })
+        .collect();
+    if let Some(source) = &result.source {
+        blocks.push((
+            TraceBlock::Node(Box::new(sanitized(source))),
+            "sourced from",
         ));
-        let scroll_area = Rect {
-            x: area.x + 1,
-            y: area.y + area.height - 1,
-            width: area.width.saturating_sub(2),
-            height: 1,
-        };
-        f.render_widget(Paragraph::new(scroll_line), scroll_area);
     }
+    let top = path
+        .last()
+        .map(|n| sanitize_cell(&format!("{}/{}", n.kind, n.name)))
+        .unwrap_or_else(|| "the object".to_string());
+    let stop = match &result.outcome {
+        TraceOutcome::Flux => None,
+        TraceOutcome::Other(manager) => Some((
+            TraceBlock::Stop {
+                title: sanitize_cell(&manager.describe()),
+                detail: "Not managed by Flux — the trace stops here".to_string(),
+            },
+            "managed by",
+        )),
+        TraceOutcome::Unmanaged => Some((
+            TraceBlock::Stop {
+                title: "No manager".to_string(),
+                detail: format!(
+                    "Nothing manages {top}: no Flux, Argo CD, or Helm marks, and no owner above it"
+                ),
+            },
+            "",
+        )),
+        TraceOutcome::OwnerUnreadable(owner) => Some((
+            TraceBlock::Stop {
+                title: sanitize_cell(owner),
+                detail: "This owner couldn't be read (RBAC, or deleted) — the trace stops here"
+                    .to_string(),
+            },
+            "owned by",
+        )),
+    };
+    blocks.extend(stop);
+    blocks
 }
 
-/// Calculate the height needed for a trace node block
-fn calculate_block_height(node: &TraceNode, _width: u16) -> u16 {
-    let mut lines = 2; // Kind/Name and Namespace
-
-    if let Some(ref spec) = node.spec {
-        if spec.path.is_some() {
-            lines += 1;
-        }
-        if spec.url.is_some() {
-            lines += 1;
-        }
-        if spec.branch.is_some() {
-            lines += 1;
-        }
-    }
-
-    if let Some(ref status) = node.status {
-        if status.revision.is_some() {
-            lines += 1;
-        }
-        if status.last_reconciled.is_some() {
-            lines += 1;
-        }
-        if status.message.is_some() {
-            lines += 1;
-        }
-    }
-
-    // Add padding and borders (top + bottom borders = 2)
-    (lines + 2).max(4) as u16
-}
-
-/// Render a trace node as a block
-fn render_trace_node(
-    f: &mut Frame,
-    area: Rect,
-    node: &TraceNode,
-    is_primary: bool,
-    is_current_match: bool,
-    theme: &Theme,
-) {
-    let mut content = Vec::new();
-
-    // Title line: Kind/Name
-    let title = format!("{}: {}", node.kind, node.name);
-    content.push(Line::from(vec![Span::styled(
-        title,
+/// A trace node's lines: kind and name, then the namespace and whatever
+/// spec and status it carries. Long values wrap (the block grows to fit).
+fn node_lines(node: &TraceNode, is_primary: bool, theme: &Theme) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(
+        format!("{}: {}", node.kind, node.name),
         Style::default()
             .fg(if is_primary {
                 theme.text_label
@@ -290,186 +324,64 @@ fn render_trace_node(
                 theme.text_primary
             })
             .add_modifier(Modifier::BOLD),
-    )]));
-
-    // Namespace
-    content.push(Line::from(vec![
-        Span::styled("Namespace: ", Style::default().fg(theme.text_label)),
-        Span::styled(&node.namespace, Style::default().fg(theme.text_value)),
-    ]));
-
-    // Spec information
-    if let Some(ref spec) = node.spec {
-        if let Some(ref path) = spec.path {
-            content.push(Line::from(vec![
-                Span::styled("Path: ", Style::default().fg(theme.text_label)),
-                Span::styled(path, Style::default().fg(theme.text_value)),
-            ]));
-        }
-        if let Some(ref url) = spec.url {
-            content.push(Line::from(vec![
-                Span::styled("URL: ", Style::default().fg(theme.text_label)),
-                Span::styled(url, Style::default().fg(theme.text_value)),
-            ]));
-        }
-        if let Some(ref branch) = spec.branch {
-            content.push(Line::from(vec![
-                Span::styled("Branch: ", Style::default().fg(theme.text_label)),
-                Span::styled(branch, Style::default().fg(theme.text_value)),
-            ]));
-        }
-    }
-
-    // Status information
-    if let Some(ref status) = node.status {
-        if let Some(ref revision) = status.revision {
-            content.push(Line::from(vec![
-                Span::styled("Revision: ", Style::default().fg(theme.text_label)),
-                Span::styled(revision, Style::default().fg(theme.text_value)),
-            ]));
-        }
-        if let Some(ref last_reconciled) = status.last_reconciled {
-            content.push(Line::from(vec![
-                Span::styled("Last reconciled: ", Style::default().fg(theme.text_label)),
-                Span::styled(last_reconciled, Style::default().fg(theme.text_value)),
-            ]));
-        }
-        if let Some(ref message) = status.message {
-            // Truncate long messages
-            let max_len = (area.width.saturating_sub(15)) as usize;
-            let display_message: String = if message.len() > max_len {
-                format!("{}...", &message[..max_len])
-            } else {
-                message.clone()
-            };
-            content.push(Line::from(vec![
-                Span::styled("Message: ", Style::default().fg(theme.text_label)),
-                Span::styled(display_message, Style::default().fg(theme.text_value)),
-            ]));
-        }
-    }
-
-    // Create block with appropriate styling; the current search match is emphasized
-    let block_style = if is_current_match {
-        Style::default()
-            .fg(theme.text_value)
-            .add_modifier(Modifier::BOLD)
-    } else if is_primary {
-        Style::default().fg(theme.text_label)
-    } else {
-        Style::default().fg(theme.text_secondary)
+    ))];
+    let mut field = |label: &str, value: &str| {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{label}: "), Style::default().fg(theme.text_label)),
+            Span::styled(value.to_string(), Style::default().fg(theme.text_value)),
+        ]));
     };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(block_style);
-
-    let paragraph = Paragraph::new(content)
-        .block(block)
-        .wrap(Wrap { trim: true });
-
-    f.render_widget(paragraph, area);
+    // Cluster-scoped objects have no namespace.
+    if !node.namespace.is_empty() {
+        field("Namespace", &node.namespace);
+    }
+    if let Some(spec) = &node.spec {
+        for (label, value) in [
+            ("Path", &spec.path),
+            ("URL", &spec.url),
+            ("Branch", &spec.branch),
+        ] {
+            if let Some(value) = value {
+                field(label, value);
+            }
+        }
+    }
+    if let Some(status) = &node.status {
+        for (label, value) in [
+            ("Revision", &status.revision),
+            ("Last reconciled", &status.last_reconciled),
+            ("Message", &status.message),
+        ] {
+            if let Some(value) = value {
+                field(label, value);
+            }
+        }
+    }
+    lines
 }
 
-/// Render an arrow between blocks
-fn render_arrow(f: &mut Frame, area: Rect, relationship: &str, theme: &Theme) {
+/// Draw an arrow between blocks: a vertical line down the middle, ending
+/// in `▼` with the relationship beside it ("owned by", "managed by").
+fn render_arrow(buf: &mut Buffer, area: Rect, relationship: &str, theme: &Theme) {
     if area.height == 0 {
         return;
     }
-
-    let center_x = area.x + area.width / 2;
-    let mut arrow_lines = Vec::new();
-
-    // Create arrow lines - vertical line(s) + arrow head
-    if area.height >= 3 {
-        // Multiple lines: vertical line, arrow head, label
-        for _i in 0..(area.height - 1) {
-            let mut line_chars = vec![' '; area.width as usize];
-            if center_x >= area.x && center_x < area.x + area.width {
-                let idx = (center_x - area.x) as usize;
-                line_chars[idx] = '│';
-            }
-            arrow_lines.push(Line::from(vec![Span::styled(
-                line_chars.iter().collect::<String>(),
-                Style::default().fg(theme.text_label),
-            )]));
-        }
-        // Arrow head line with label
-        let mut arrow_line_chars = vec![' '; area.width as usize];
-        if center_x >= area.x && center_x < area.x + area.width {
-            let idx = (center_x - area.x) as usize;
-            arrow_line_chars[idx] = '▼';
-        }
-        let arrow_line_str: String = arrow_line_chars.iter().collect();
-
-        // Create line with arrow and label as separate spans for better styling
-        let mut spans = vec![Span::styled(
-            arrow_line_str,
-            Style::default().fg(theme.text_label),
-        )];
-
-        // Add relationship label to the right of arrow
-        if center_x + 3 < area.x + area.width {
-            let label_x = center_x + 3;
-            if label_x < area.x + area.width
-                && relationship.len() as u16 <= area.width.saturating_sub(label_x - area.x)
-            {
-                spans.push(Span::styled(
-                    format!(" {}", relationship),
-                    Style::default()
-                        .fg(theme.text_label)
-                        .add_modifier(Modifier::ITALIC),
-                ));
-            }
-        }
-
-        arrow_lines.push(Line::from(spans));
-    } else if area.height >= 2 {
-        // Just arrow head and label
-        let mut arrow_line_chars = vec![' '; area.width as usize];
-        if center_x >= area.x && center_x < area.x + area.width {
-            let idx = (center_x - area.x) as usize;
-            arrow_line_chars[idx] = '▼';
-        }
-        let arrow_line_str: String = arrow_line_chars.iter().collect();
-
-        let mut spans = vec![Span::styled(
-            arrow_line_str,
-            Style::default().fg(theme.text_label),
-        )];
-
-        // Add relationship label
-        if center_x + 3 < area.x + area.width {
-            let label_x = center_x + 3;
-            if label_x < area.x + area.width
-                && relationship.len() as u16 <= area.width.saturating_sub(label_x - area.x)
-            {
-                spans.push(Span::styled(
-                    format!(" {}", relationship),
-                    Style::default()
-                        .fg(theme.text_label)
-                        .add_modifier(Modifier::ITALIC),
-                ));
-            }
-        }
-
-        arrow_lines.push(Line::from(spans));
-    } else {
-        // Single line - just arrow
-        let mut arrow_line_chars = vec![' '; area.width as usize];
-        if center_x >= area.x && center_x < area.x + area.width {
-            let idx = (center_x - area.x) as usize;
-            arrow_line_chars[idx] = '▼';
-        }
-        arrow_lines.push(Line::from(vec![Span::styled(
-            arrow_line_chars.iter().collect::<String>(),
-            Style::default().fg(theme.text_label),
-        )]));
+    let style = Style::default().fg(theme.text_label);
+    let pad = " ".repeat(usize::from(area.width / 2));
+    let mut lines: Vec<Line> = (1..area.height)
+        .map(|_| Line::from(Span::styled(format!("{pad}│"), style)))
+        .collect();
+    // The label follows the head on the same line — padding the line to the
+    // full width first (as this once did) pushed the label out of view.
+    let mut head = vec![Span::styled(format!("{pad}▼"), style)];
+    if area.height >= 2 && !relationship.is_empty() {
+        head.push(Span::styled(
+            format!("  {relationship}"),
+            style.add_modifier(Modifier::ITALIC),
+        ));
     }
-
-    // Render the arrow
-    let arrow_para = Paragraph::new(arrow_lines).style(Style::default().fg(theme.text_label));
-    f.render_widget(arrow_para, area);
+    lines.push(Line::from(head));
+    Paragraph::new(lines).render(area, buf);
 }
 
 #[cfg(test)]
@@ -480,11 +392,218 @@ mod tests {
     fn node(kind: &str, name: &str) -> TraceNode {
         TraceNode {
             kind: kind.into(),
+            api_version: None,
             name: name.into(),
             namespace: "flux-system".into(),
             status: None,
             spec: None,
         }
+    }
+
+    #[test]
+    fn trace_blocks_show_owners_managers_source_and_where_it_stopped() {
+        use crate::kube::ownership::Manager;
+        use crate::trace::TraceOutcome;
+        let pod = TraceResult {
+            object: node("Pod", "web-abc"),
+            chain: vec![
+                node("Pod", "web-abc"),
+                node("ReplicaSet", "web-7b5"),
+                node("Deployment", "web"),
+                node("Kustomization", "apps"),
+            ],
+            source: Some(node("GitRepository", "flux-system")),
+            outcome: TraceOutcome::Flux,
+        };
+        let labels: Vec<(String, &str)> = trace_blocks(&pod)
+            .into_iter()
+            .map(|(block, rel)| match block {
+                TraceBlock::Node(n) => (n.kind, rel),
+                TraceBlock::Stop { title, .. } => (title, rel),
+            })
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("Pod".to_string(), "Object"),
+                ("ReplicaSet".to_string(), "owned by"),
+                ("Deployment".to_string(), "owned by"),
+                ("Kustomization".to_string(), "managed by"),
+                ("GitRepository".to_string(), "sourced from"),
+            ]
+        );
+        assert_eq!(
+            pod.flux_manager().map(|n| n.name.as_str()),
+            Some("apps"),
+            "g / m from the trace open the Kustomization"
+        );
+
+        let stop_of = |result: &TraceResult| match trace_blocks(result).pop() {
+            Some((TraceBlock::Stop { title, detail }, rel)) => (title, detail, rel),
+            other => panic!("expected a stop block, got {other:?}"),
+        };
+
+        // Argo CD tracking ids are free-form: sanitized before display.
+        let argo = TraceResult {
+            object: node("Deployment", "guestbook"),
+            chain: vec![node("Deployment", "guestbook")],
+            source: None,
+            outcome: TraceOutcome::Other(Manager::ArgoCd {
+                app: "guest\x1b[31mbook".into(),
+            }),
+        };
+        let (title, detail, rel) = stop_of(&argo);
+        assert_eq!(title, "Argo CD application guest[31mbook");
+        assert!(detail.contains("stops here"));
+        assert_eq!(rel, "managed by");
+        assert!(argo.flux_manager().is_none());
+
+        let bare = TraceResult {
+            object: node("ConfigMap", "settings"),
+            chain: vec![node("ConfigMap", "settings")],
+            source: None,
+            outcome: TraceOutcome::Unmanaged,
+        };
+        assert_eq!(trace_blocks(&bare).len(), 2);
+        let (title, detail, rel) = stop_of(&bare);
+        assert_eq!(title, "No manager");
+        assert!(detail.contains("ConfigMap/settings"), "{detail}");
+        assert_eq!(rel, "", "no 'managed by' leading to 'no manager'");
+
+        let unreadable = TraceResult {
+            object: node("Pod", "web-abc"),
+            chain: vec![node("Pod", "web-abc")],
+            source: None,
+            outcome: TraceOutcome::OwnerUnreadable("ReplicaSet/web-7b5".into()),
+        };
+        let (title, detail, rel) = stop_of(&unreadable);
+        assert_eq!((title.as_str(), rel), ("ReplicaSet/web-7b5", "owned by"));
+        assert!(detail.contains("couldn't be read"));
+    }
+
+    #[test]
+    fn a_kind_named_like_flux_from_another_group_is_not_flux() {
+        let mut bucket = node("Bucket", "data");
+        bucket.api_version = Some("s3.aws.upbound.io/v1beta1".into());
+        assert!(!bucket.is_flux());
+        bucket.api_version = Some("source.toolkit.fluxcd.io/v1".into());
+        assert!(bucket.is_flux());
+        bucket.api_version = None;
+        assert!(bucket.is_flux(), "by name when the group is unknown");
+    }
+
+    /// Screen text of `result` drawn at `width`×`height`, scrolled to
+    /// `offset` (clamped by the viewport, as in the app).
+    fn screen(result: &TraceResult, width: u16, height: u16, offset: usize) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut offset = offset;
+        terminal
+            .draw(|f| {
+                render_resource_trace(
+                    f,
+                    f.area(),
+                    &None,
+                    Some(result),
+                    false,
+                    &mut offset,
+                    &mut TextSearchState::default(),
+                    &Theme::default(),
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    fn long_chain() -> TraceResult {
+        TraceResult {
+            object: node("Pod", "web-abc"),
+            chain: vec![
+                node("Pod", "web-abc"),
+                node("ReplicaSet", "web-7b5"),
+                node("Deployment", "web"),
+                node("Kustomization", "apps"),
+            ],
+            source: Some(node("GitRepository", "flux-system")),
+            outcome: crate::trace::TraceOutcome::Flux,
+        }
+    }
+
+    #[test]
+    fn a_trace_taller_than_the_screen_scrolls_to_its_end() {
+        let result = long_chain();
+        let top = screen(&result, 60, 12, 0).join("\n");
+        assert!(top.contains("Pod: web-abc"), "{top}");
+        assert!(!top.contains("GitRepository"), "{top}");
+
+        // Far past the end: the viewport clamps to the last screenful.
+        let bottom = screen(&result, 60, 12, 1_000);
+        let bottom_text = bottom.join("\n");
+        assert!(
+            bottom_text.contains("GitRepository: flux-system"),
+            "{bottom_text}"
+        );
+        assert!(!bottom_text.contains("Pod: web-abc"), "{bottom_text}");
+        // The last block's bottom border is the last content row.
+        assert!(bottom[bottom.len() - 2].contains('└'), "{bottom_text}");
+    }
+
+    #[test]
+    fn a_block_scrolled_partly_off_the_top_shows_its_lower_rows() {
+        // One row in: the first block's top border is off screen, its
+        // title is the first row shown.
+        let rows = screen(&long_chain(), 60, 12, 1);
+        assert!(rows[1].contains("Pod: web-abc"), "{rows:#?}");
+        let rows = screen(&long_chain(), 60, 12, 2);
+        assert!(rows[1].contains("Namespace: flux-system"), "{rows:#?}");
+    }
+
+    #[test]
+    fn stop_blocks_grow_to_fit_their_wrapped_text() {
+        let unreadable = TraceResult {
+            object: node("Pod", "web-abc"),
+            chain: vec![node("Pod", "web-abc")],
+            source: None,
+            outcome: crate::trace::TraceOutcome::OwnerUnreadable("ReplicaSet/web-7b5".into()),
+        };
+        // Narrow: the ~70-character detail wraps over several rows.
+        let text = screen(&unreadable, 34, 30, 0).join("\n");
+        assert!(text.contains("stops here"), "{text}");
+        assert!(text.contains("couldn't be"), "{text}");
+    }
+
+    #[test]
+    fn long_multibyte_messages_wrap_without_panicking() {
+        let mut n = node("Kustomization", "apps");
+        n.status = Some(crate::trace::TraceStatus {
+            ready: Some(false),
+            message: Some("é".repeat(200)),
+            last_reconciled: None,
+            revision: None,
+        });
+        let result = TraceResult {
+            object: n,
+            chain: vec![],
+            source: None,
+            outcome: crate::trace::TraceOutcome::Flux,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
+        terminal
+            .draw(|f| {
+                render_resource_trace(
+                    f,
+                    f.area(),
+                    &None,
+                    Some(&result),
+                    false,
+                    &mut 0,
+                    &mut TextSearchState::default(),
+                    &Theme::default(),
+                )
+            })
+            .unwrap();
     }
 
     #[test]
@@ -496,6 +615,7 @@ mod tests {
                 node("FluxInstance", "flux"),
             ],
             source: None,
+            outcome: crate::trace::TraceOutcome::Flux,
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
         terminal
@@ -520,5 +640,9 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(out.contains("FluxInstance: flux"), "{out}");
+        assert!(
+            out.contains("managed by"),
+            "arrow labels are visible: {out}"
+        );
     }
 }

@@ -303,6 +303,12 @@ pub struct ViewState {
     /// Index (into the graph's node list) of the currently focused graph node.
     /// `None` until a graph is built; set to the object node when one loads.
     pub graph_focus_index: Option<usize>,
+    /// The object `g` was pressed on, marked inside the manager's graph
+    /// (#266) — the object itself or the owner the graph lists.
+    pub graph_highlight: Option<ResourceKey>,
+    /// Managed By of the native object in the YAML view, once its owner
+    /// chain resolves (immediate managers are read from the object).
+    pub yaml_manager: Option<ManagerResolution>,
     /// Active submenu state (if a submenu is currently being displayed)
     pub submenu_state: Option<SubmenuState>,
     /// Original theme name when previewing themes in submenu (for restoration on cancel)
@@ -342,6 +348,8 @@ impl Default for ViewState {
             inventory_rows: Vec::new(),
             graph_scroll_offset: 0,
             graph_focus_index: None,
+            graph_highlight: None,
+            yaml_manager: None,
             submenu_state: None,
             preview_original_theme: None,
             page_size: 10,
@@ -429,7 +437,88 @@ impl UIState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ManagerResolution {
     pub uid: String,
-    pub text: String,
+    pub managed_by: crate::kube::ownership::ManagedBy,
+}
+
+/// What a trace is asked for (#266).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraceRequest {
+    /// One object: a Flux resource by kind, a native one by `apiVersion`.
+    Object(ObjectRef),
+    /// `:trace <kind>/<name>` while watching all namespaces: look the
+    /// object up first. One match is traced; several ask for `-n`.
+    Search {
+        kind: String,
+        api_version: Option<String>,
+        name: String,
+    },
+}
+
+impl From<ResourceKey> for TraceRequest {
+    fn from(rk: ResourceKey) -> Self {
+        Self::Object(rk.into())
+    }
+}
+
+/// What a trace found.
+#[derive(Debug, Clone)]
+pub enum TraceResponse {
+    /// `target` is the object traced (for a search, the one found): the
+    /// trace view's subject, committed only now so a failed trace leaves
+    /// the current view as it was.
+    Traced {
+        target: ObjectRef,
+        trace: Box<crate::trace::TraceResult>,
+    },
+    /// A search matched objects in several namespaces.
+    Ambiguous {
+        target: String,
+        namespaces: Vec<String>,
+    },
+}
+
+impl TraceResponse {
+    /// The trace, when one object was traced.
+    pub fn traced(&self) -> Option<&crate::trace::TraceResult> {
+        match self {
+            Self::Traced { trace, .. } => Some(trace.as_ref()),
+            Self::Ambiguous { .. } => None,
+        }
+    }
+}
+
+/// A graph to build: `root`'s, with `highlight` (the object `g` was pressed
+/// on, #266) located inside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphRequest {
+    pub root: ResourceKey,
+    pub highlight: Option<ObjectRef>,
+}
+
+impl From<ResourceKey> for GraphRequest {
+    fn from(root: ResourceKey) -> Self {
+        Self {
+            root,
+            highlight: None,
+        }
+    }
+}
+
+/// A built graph, and where the highlighted object appears in it: the
+/// object itself or the first of its owners the graph lists.
+#[derive(Debug, Clone)]
+pub struct GraphResult {
+    pub graph: crate::trace::ResourceGraph,
+    pub highlight: Option<ResourceKey>,
+}
+
+impl From<crate::trace::ResourceGraph> for GraphResult {
+    fn from(graph: crate::trace::ResourceGraph) -> Self {
+        Self {
+            graph,
+            highlight: None,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -438,14 +527,15 @@ pub struct AsyncOperationState {
     pub yaml: AsyncTask<ObjectRef, serde_json::Value>,
     /// Object + events fetch backing the describe view (Flux or native object).
     pub describe: AsyncTask<ObjectRef, crate::kube::fetch::DescribeData>,
-    /// Owner-chain resolution filling the describe view's Managed By after
-    /// the object is shown. Keyed by the object; the result carries its UID
-    /// so a late answer for a previous describe is dropped.
+    /// Owner-chain resolution filling the describe view's Managed By (and
+    /// the YAML view's Flux manager, #266) after the object is shown. Keyed
+    /// by the object; the result carries its UID so a late answer for a
+    /// previous object is dropped.
     pub describe_manager: AsyncTask<serde_json::Value, ManagerResolution>,
     /// Ownership-chain trace backing the trace view.
-    pub trace: AsyncTask<ResourceKey, crate::trace::TraceResult>,
+    pub trace: AsyncTask<TraceRequest, TraceResponse>,
     /// Relationship graph backing the graph view.
-    pub graph: AsyncTask<ResourceKey, crate::trace::ResourceGraph>,
+    pub graph: AsyncTask<GraphRequest, GraphResult>,
     /// Workload drill-down fetch backing the workload detail view (#194).
     /// Live (watch-driven) data for the workload detail view (#194).
     pub workload: LiveTask<ResourceKey, crate::kube::workloads::WorkloadData>,

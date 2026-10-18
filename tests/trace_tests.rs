@@ -53,6 +53,7 @@ fn test_trace_result_structure() {
     let result = TraceResult {
         object: TraceNode {
             kind: "Kustomization".to_string(),
+            api_version: None,
             name: "test".to_string(),
             namespace: "flux-system".to_string(),
             status: Some(TraceStatus {
@@ -70,6 +71,7 @@ fn test_trace_result_structure() {
         },
         chain: vec![],
         source: None,
+        outcome: flux9s::trace::TraceOutcome::Flux,
     };
 
     verify_trace_structure(&result);
@@ -90,6 +92,7 @@ fn test_trace_kustomization_managed_by_kustomization_structure() {
     let result = TraceResult {
         object: TraceNode {
             kind: "Kustomization".to_string(),
+            api_version: None,
             name: "cabot-book".to_string(),
             namespace: "flux-system".to_string(),
             status: Some(TraceStatus {
@@ -107,6 +110,7 @@ fn test_trace_kustomization_managed_by_kustomization_structure() {
         },
         chain: vec![TraceNode {
             kind: "Kustomization".to_string(),
+            api_version: None,
             name: "flux-system".to_string(),
             namespace: "flux-system".to_string(),
             status: Some(TraceStatus {
@@ -128,6 +132,7 @@ fn test_trace_kustomization_managed_by_kustomization_structure() {
         }],
         source: Some(TraceNode {
             kind: "GitRepository".to_string(),
+            api_version: None,
             name: "flux-system".to_string(),
             namespace: "flux-system".to_string(),
             status: Some(TraceStatus {
@@ -143,6 +148,7 @@ fn test_trace_kustomization_managed_by_kustomization_structure() {
                 source_ref: None,
             }),
         }),
+        outcome: flux9s::trace::TraceOutcome::Flux,
     };
 
     // Verify structure
@@ -177,6 +183,7 @@ fn test_trace_helmrelease_managed_by_kustomization_structure() {
     let result = TraceResult {
         object: TraceNode {
             kind: "HelmRelease".to_string(),
+            api_version: None,
             name: "podinfo".to_string(),
             namespace: "default".to_string(),
             status: Some(TraceStatus {
@@ -194,6 +201,7 @@ fn test_trace_helmrelease_managed_by_kustomization_structure() {
         },
         chain: vec![TraceNode {
             kind: "Kustomization".to_string(),
+            api_version: None,
             name: "infrastructure".to_string(),
             namespace: "flux-system".to_string(),
             status: Some(TraceStatus {
@@ -215,6 +223,7 @@ fn test_trace_helmrelease_managed_by_kustomization_structure() {
         }],
         source: Some(TraceNode {
             kind: "GitRepository".to_string(),
+            api_version: None,
             name: "flux-system".to_string(),
             namespace: "flux-system".to_string(),
             status: Some(TraceStatus {
@@ -230,6 +239,7 @@ fn test_trace_helmrelease_managed_by_kustomization_structure() {
                 source_ref: None,
             }),
         }),
+        outcome: flux9s::trace::TraceOutcome::Flux,
     };
 
     // Verify structure
@@ -263,6 +273,7 @@ fn test_trace_deployment_managed_by_helmrelease_structure() {
     let result = TraceResult {
         object: TraceNode {
             kind: "Deployment".to_string(),
+            api_version: None,
             name: "podinfo".to_string(),
             namespace: "default".to_string(),
             status: None,
@@ -271,6 +282,7 @@ fn test_trace_deployment_managed_by_helmrelease_structure() {
         chain: vec![
             TraceNode {
                 kind: "HelmRelease".to_string(),
+                api_version: None,
                 name: "podinfo".to_string(),
                 namespace: "default".to_string(),
                 status: Some(TraceStatus {
@@ -288,6 +300,7 @@ fn test_trace_deployment_managed_by_helmrelease_structure() {
             },
             TraceNode {
                 kind: "HelmChart".to_string(),
+                api_version: None,
                 name: "podinfo-podinfo".to_string(),
                 namespace: "flux-system".to_string(),
                 status: Some(TraceStatus {
@@ -310,6 +323,7 @@ fn test_trace_deployment_managed_by_helmrelease_structure() {
         ],
         source: Some(TraceNode {
             kind: "HelmRepository".to_string(),
+            api_version: None,
             name: "podinfo".to_string(),
             namespace: "flux-system".to_string(),
             status: Some(TraceStatus {
@@ -325,6 +339,7 @@ fn test_trace_deployment_managed_by_helmrelease_structure() {
                 source_ref: None,
             }),
         }),
+        outcome: flux9s::trace::TraceOutcome::Flux,
     };
 
     // Verify structure
@@ -363,6 +378,7 @@ fn test_trace_kustomization_direct_structure() {
     let result = TraceResult {
         object: TraceNode {
             kind: "Kustomization".to_string(),
+            api_version: None,
             name: "infrastructure".to_string(),
             namespace: "flux-system".to_string(),
             status: Some(TraceStatus {
@@ -385,6 +401,7 @@ fn test_trace_kustomization_direct_structure() {
         chain: vec![], // Empty chain - no managing Kustomization
         source: Some(TraceNode {
             kind: "GitRepository".to_string(),
+            api_version: None,
             name: "flux-system".to_string(),
             namespace: "flux-system".to_string(),
             status: Some(TraceStatus {
@@ -400,6 +417,7 @@ fn test_trace_kustomization_direct_structure() {
                 source_ref: None,
             }),
         }),
+        outcome: flux9s::trace::TraceOutcome::Flux,
     };
 
     // Verify structure

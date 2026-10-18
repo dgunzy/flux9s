@@ -225,7 +225,11 @@ pub struct WorkloadData {
     /// Label selector the pods were listed with; the live view watches it.
     pub pod_selector: Option<String>,
     /// Who manages the workload, in full (Flux / Argo CD / Helm / owner).
-    pub managed_by: Option<String>,
+    pub managed_by: Option<crate::kube::ownership::ManagedBy>,
+    /// The workload's `apiVersion` (`apps/v1`, `batch/v1`) as the API
+    /// returned it, so trace and graph can address it like any other
+    /// object. `None` if it was missing — then the kind resolves by name.
+    pub api_version: Option<String>,
 }
 
 /// Fetch a workload and everything its detail view shows. The object fetch
@@ -284,6 +288,10 @@ pub async fn fetch_workload_data(
         events_error,
         pod_selector,
         managed_by: Some(crate::kube::ownership::describe_manager(client, &obj).await),
+        api_version: obj
+            .get("apiVersion")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 
