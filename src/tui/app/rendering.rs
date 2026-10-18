@@ -89,7 +89,7 @@ impl App {
             // +1 if filter is active (filter status line)
             // Plus 2 for borders
             let base_content_lines: u16 = 2; // Context line + Flux9s/Total line
-            let filter_line: u16 = if !self.view_state.filter.is_empty()
+            let filter_line: u16 = if !self.flux_filter().is_empty()
                 || self.view_state.selected_resource_type.is_some()
             {
                 1
@@ -211,7 +211,7 @@ impl App {
                 &self.controller_pods,
                 &self.context,
                 &self.namespace,
-                &self.view_state.filter,
+                self.flux_filter(),
                 &self.view_state.selected_resource_type,
                 resources.len(),
                 health_percentage,
@@ -445,7 +445,10 @@ impl App {
                         f,
                         area,
                         &self.selection_state.selected_resource_key,
-                        self.async_state.trace.result(),
+                        self.async_state
+                            .trace
+                            .result()
+                            .and_then(super::state::TraceResponse::traced),
                         self.async_state.trace.is_loading(),
                         &mut self.view_state.trace_scroll_offset,
                         &mut self.view_state.text_search,
@@ -477,10 +480,11 @@ impl App {
                         f,
                         area,
                         &self.selection_state.selected_resource_key,
-                        self.async_state.graph.result(),
+                        self.async_state.graph.result().map(|r| &r.graph),
                         self.async_state.graph.is_loading(),
                         &mut self.view_state.graph_scroll_offset,
                         self.view_state.graph_focus_index,
+                        self.view_state.graph_highlight.as_ref(),
                         &self.theme,
                     );
                 }

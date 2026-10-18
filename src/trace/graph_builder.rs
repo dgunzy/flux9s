@@ -23,6 +23,36 @@ pub fn is_resource_type_with_graph(resource_type: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Where `target` shows up in `graph` (#266): the object itself, else the
+/// first of its owners the graph lists — a Pod's Deployment sits in the
+/// Kustomization's workload group. `None` when neither appears.
+pub async fn locate_in_graph(
+    client: &kube::Client,
+    graph: &ResourceGraph,
+    target: &crate::kube::objects::ObjectRef,
+) -> Option<crate::watcher::ResourceKey> {
+    let own = target.to_resource_key();
+    if graph.node_containing(&own).is_some() {
+        return Some(own);
+    }
+    let trace = match crate::trace::trace_target(client, target).await {
+        Ok(trace) => trace,
+        Err(e) => {
+            tracing::debug!(
+                "Couldn't trace {} to place it in the graph: {:#}",
+                target,
+                e
+            );
+            return None;
+        }
+    };
+    trace
+        .path()
+        .into_iter()
+        .map(crate::trace::TraceNode::key)
+        .find(|key| graph.node_containing(key).is_some())
+}
+
 /// Build a complete resource graph for a Flux resource
 /// This discovers both upstream (sources) and downstream (child resources) relationships
 pub async fn build_resource_graph(

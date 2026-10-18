@@ -22,6 +22,7 @@
 //!    weaker evidence than the owner chain.
 
 use crate::models::FluxResourceKind;
+use crate::watcher::ResourceKey;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -110,6 +111,52 @@ impl Manager {
             Manager::Other(name) => format!("{name} (app.kubernetes.io/managed-by)"),
         }
     }
+
+    /// The managing Flux object's key, for trace / graph / jump (#266).
+    /// `None` for non-Flux managers. A Flux label without a namespace means
+    /// the managed object's own (`fallback_namespace`).
+    pub fn flux_key(&self, fallback_namespace: &str) -> Option<ResourceKey> {
+        match self {
+            Manager::Flux {
+                kind,
+                namespace,
+                name,
+            } => Some(ResourceKey::new(
+                kind.clone(),
+                if namespace.is_empty() {
+                    fallback_namespace.to_string()
+                } else {
+                    namespace.clone()
+                },
+                name.clone(),
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// Who manages an object, as shown and as acted on: the full Managed By
+/// text, plus the Flux object behind it (directly or through the owner
+/// chain) — what `t`, `g`, and `m` act on (#266).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedBy {
+    pub text: String,
+    pub flux: Option<ResourceKey>,
+}
+
+impl ManagedBy {
+    fn new(text: String, manager: Option<&Manager>, namespace: &str) -> Self {
+        Self {
+            text,
+            flux: manager.and_then(|m| m.flux_key(namespace)),
+        }
+    }
+}
+
+fn object_namespace(obj: &Value) -> &str {
+    obj.pointer("/metadata/namespace")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 /// A controller owner reference.
@@ -253,6 +300,14 @@ pub enum Resolved {
 }
 
 impl Resolved {
+    /// The manager the chain reached, if any.
+    pub fn manager(&self) -> Option<&Manager> {
+        match self {
+            Resolved::Manager(manager) => Some(manager),
+            Resolved::Owner { .. } => None,
+        }
+    }
+
     /// Short form for the MANAGED-BY column.
     pub fn short_label(&self) -> String {
         match self {
@@ -278,25 +333,36 @@ pub fn managed_by_text(own: &Ownership, resolved: Option<&Resolved>) -> String {
 /// Managed By text that needs no API calls — `None` when the object has an
 /// owner chain to walk (see [`describe_manager`]). Lets describe render at
 /// once and fill the chain in afterwards.
-pub fn immediate_manager(obj: &Value) -> Option<String> {
+pub fn immediate_manager(obj: &Value) -> Option<ManagedBy> {
+    let namespace = object_namespace(obj);
     match ownership(obj) {
-        Ownership::Managed(manager) => Some(manager.describe()),
-        Ownership::Unmanaged => Some(UNMANAGED_TEXT.to_string()),
+        Ownership::Managed(manager) => Some(ManagedBy::new(
+            manager.describe(),
+            Some(&manager),
+            namespace,
+        )),
+        Ownership::Unmanaged => Some(ManagedBy::new(UNMANAGED_TEXT.to_string(), None, namespace)),
         Ownership::Owned(_) => None,
     }
 }
 
 const UNMANAGED_TEXT: &str = "not managed (no Flux, Argo CD, Helm, or owner)";
 
-/// Full Managed By text for one object (describe, workload detail),
-/// resolving its owner chain if it has one, bounded by [`MANAGER_TIMEOUT`]
-/// overall so a slow API server can't stall the caller.
-pub async fn describe_manager(client: &kube::Client, obj: &Value) -> String {
+/// Full Managed By for one object (describe, workload detail), resolving
+/// its owner chain if it has one, bounded by [`MANAGER_TIMEOUT`] overall so
+/// a slow API server can't stall the caller.
+pub async fn describe_manager(client: &kube::Client, obj: &Value) -> ManagedBy {
     describe_manager_within(client, obj, MANAGER_TIMEOUT).await
 }
 
-async fn describe_manager_within(client: &kube::Client, obj: &Value, limit: Duration) -> String {
-    match lookup_manager_within(client, obj, limit).await {
+async fn describe_manager_within(client: &kube::Client, obj: &Value, limit: Duration) -> ManagedBy {
+    let lookup = lookup_manager_within(client, obj, limit).await;
+    managed_by_of(&lookup, object_namespace(obj))
+}
+
+/// [`ManagedBy`] for a finished lookup.
+pub fn managed_by_of(lookup: &ManagerLookup, namespace: &str) -> ManagedBy {
+    let text = match lookup {
         ManagerLookup::Managed(manager) => manager.describe(),
         ManagerLookup::Unmanaged => UNMANAGED_TEXT.to_string(),
         ManagerLookup::Owned {
@@ -309,8 +375,9 @@ async fn describe_manager_within(client: &kube::Client, obj: &Value, limit: Dura
         ),
         ManagerLookup::Owned {
             owner, resolved, ..
-        } => describe_resolution(&owner, resolved.as_ref()),
-    }
+        } => describe_resolution(owner, resolved.as_ref()),
+    };
+    ManagedBy::new(text, lookup.manager(), namespace)
 }
 
 /// Who manages an object, walking its controller owner chain if needed.
@@ -876,9 +943,10 @@ mod tests {
             started.elapsed()
         );
         assert_eq!(
-            text,
+            text.text,
             "owned by ReplicaSet/web-7b5 (manager lookup timed out)"
         );
+        assert_eq!(text.flux, None);
     }
 
     #[tokio::test]
@@ -891,6 +959,72 @@ mod tests {
             json!({}),
         );
         let text = describe_manager_within(&client, &obj, Duration::from_millis(300)).await;
-        assert_eq!(text, "Flux Kustomization flux-system/apps");
+        assert_eq!(text.text, "Flux Kustomization flux-system/apps");
+        assert_eq!(
+            text.flux,
+            Some(ResourceKey::new("Kustomization", "flux-system", "apps"))
+        );
+    }
+
+    #[test]
+    fn managed_by_names_the_flux_object_directly_or_through_the_chain() {
+        let ks = Manager::Flux {
+            kind: "Kustomization".into(),
+            namespace: "flux-system".into(),
+            name: "apps".into(),
+        };
+        let owner = OwnerRef {
+            api_version: "apps/v1".into(),
+            kind: "ReplicaSet".into(),
+            name: "web-7b5".into(),
+            uid: "u1".into(),
+        };
+        let via_chain = managed_by_of(
+            &ManagerLookup::Owned {
+                owner: owner.clone(),
+                resolved: Some(Resolved::Manager(ks.clone())),
+                timed_out: false,
+            },
+            "apps",
+        );
+        assert_eq!(
+            via_chain.text,
+            "Flux Kustomization flux-system/apps (via ReplicaSet/web-7b5)"
+        );
+        assert_eq!(
+            via_chain.flux,
+            Some(ResourceKey::new("Kustomization", "flux-system", "apps"))
+        );
+
+        // Non-Flux managers and unmanaged objects have nothing to jump to.
+        let helm = Manager::Helm {
+            namespace: "apps".into(),
+            release: "web".into(),
+        };
+        assert_eq!(
+            managed_by_of(&ManagerLookup::Managed(helm), "apps").flux,
+            None
+        );
+        assert_eq!(managed_by_of(&ManagerLookup::Unmanaged, "apps").flux, None);
+        let top_owner = ManagerLookup::Owned {
+            owner,
+            resolved: Some(Resolved::Owner {
+                kind: "Deployment".into(),
+                name: "web".into(),
+            }),
+            timed_out: false,
+        };
+        assert_eq!(managed_by_of(&top_owner, "apps").flux, None);
+
+        // A Flux label without a namespace means the object's own.
+        let unlabelled_ns = Manager::Flux {
+            kind: "HelmRelease".into(),
+            namespace: String::new(),
+            name: "podinfo".into(),
+        };
+        assert_eq!(
+            unlabelled_ns.flux_key("apps"),
+            Some(ResourceKey::new("HelmRelease", "apps", "podinfo"))
+        );
     }
 }

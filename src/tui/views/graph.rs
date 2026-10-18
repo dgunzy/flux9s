@@ -5,6 +5,7 @@
 
 use crate::trace::{NodeType, RelationshipType, ResourceGraph};
 use crate::tui::theme::Theme;
+use crate::watcher::ResourceKey;
 use ratatui::{
     Frame,
     layout::{Margin, Rect},
@@ -22,6 +23,7 @@ pub fn render_resource_graph(
     graph_loading: bool,
     scroll_offset: &mut usize,  // Line-based scroll offset (like YAML view)
     focus_index: Option<usize>, // Index of the keyboard-focused node, if any
+    highlight: Option<&ResourceKey>, // Object to mark inside its group (#266)
     theme: &Theme,
 ) {
     let outer_block = crate::tui::views::helpers::create_themed_block("Resource Graph", theme);
@@ -105,7 +107,15 @@ pub fn render_resource_graph(
     );
 
     // Render graph using improved layout with line-based scrolling
-    render_graph_nodes_and_edges(f, inner_area, &graph, *scroll_offset, focus_index, theme);
+    render_graph_nodes_and_edges(
+        f,
+        inner_area,
+        &graph,
+        *scroll_offset,
+        focus_index,
+        highlight,
+        theme,
+    );
     viewport.render_scrollbar(f, area, theme);
 }
 
@@ -207,6 +217,7 @@ fn render_graph_nodes_and_edges(
     graph: &ResourceGraph,
     scroll_offset: usize,       // Line-based scroll offset
     focus_index: Option<usize>, // Index of the keyboard-focused node, if any
+    highlight: Option<&ResourceKey>,
     theme: &Theme,
 ) {
     let scroll_offset_u16 = scroll_offset as u16;
@@ -234,7 +245,17 @@ fn render_graph_nodes_and_edges(
             // Only render if node's Y position is within visible range
             if y >= scroll_offset_u16 && y < scroll_offset_u16 + visible_height as u16 {
                 let is_focused = focus_index == Some(idx);
-                render_node_text(f, area, x, y, node, scroll_offset_u16, is_focused, theme);
+                render_node_text(
+                    f,
+                    area,
+                    x,
+                    y,
+                    node,
+                    scroll_offset_u16,
+                    is_focused,
+                    highlight,
+                    theme,
+                );
             }
         }
     }
@@ -391,8 +412,11 @@ fn render_node_text(
     node: &crate::trace::GraphNode,
     scroll_offset: u16, // Line-based scroll offset
     is_focused: bool,   // Whether this node has keyboard focus
+    highlight: Option<&ResourceKey>,
     theme: &Theme,
 ) {
+    // The object `g` was pressed on, marked inside its group (#266).
+    let highlight_style = theme.graph_highlight_style();
     // Adjust Y position for scroll offset (like YAML view)
     // scroll_offset is already u16 (converted at call site)
     let adjusted_y = y.saturating_sub(scroll_offset);
@@ -571,6 +595,11 @@ fn render_node_text(
                 .filter_map(crate::kube::workloads::WorkloadRef::parse_graph_line)
                 .map(|w| (w.kind, w.name, w.namespace, w.indicator, w.status))
                 .collect();
+            let is_highlighted = |kind: &str, namespace: &str, name: &str| {
+                highlight.is_some_and(|h| {
+                    h.resource_type == kind && h.namespace == namespace && h.name == name
+                })
+            };
 
             // Check if all workloads share the same namespace
             let show_namespace = if workloads.len() > 1 {
@@ -591,9 +620,13 @@ fn render_node_text(
                 // Line 2: Name (bold) - Web UI shows just name, not namespace/name
                 content.push(Line::from(vec![Span::styled(
                     name.clone(),
-                    Style::default()
-                        .fg(theme.text_primary)
-                        .add_modifier(Modifier::BOLD),
+                    if is_highlighted(kind, namespace, name) {
+                        highlight_style
+                    } else {
+                        Style::default()
+                            .fg(theme.text_primary)
+                            .add_modifier(Modifier::BOLD)
+                    },
                 )]));
 
                 // Line 3: Status with colored dot
@@ -626,6 +659,10 @@ fn render_node_text(
         // node summarises them as per-kind counts (Enter shows the detail).
         if let Some(ref desc) = node.description {
             let max_width = (node_area.width.saturating_sub(2)) as usize;
+            // The highlighted object's kind line, when it is listed here.
+            let highlighted_kind = highlight
+                .filter(|h| node.group_lists(h))
+                .map(|h| h.resource_type.as_str());
             for (kind, count) in crate::kube::inventory::kind_counts_from_description(desc) {
                 let resource_item = format!("{}: {}", kind, count);
                 let item_display: String = if resource_item.len() > max_width {
@@ -635,7 +672,11 @@ fn render_node_text(
                 };
                 content.push(Line::from(vec![Span::styled(
                     item_display,
-                    Style::default().fg(theme.text_secondary),
+                    if highlighted_kind == Some(kind.as_str()) {
+                        highlight_style
+                    } else {
+                        Style::default().fg(theme.text_secondary)
+                    },
                 )]));
             }
         }
@@ -676,9 +717,7 @@ fn render_node_text(
     // The focused node gets a bright, bold double border in the accent color
     // (distinct from the status/text colors every other border uses) plus a "▸"
     // title marker, so the selection is unmistakable at a glance.
-    let focus_style = Style::default()
-        .fg(theme.footer_key)
-        .add_modifier(Modifier::BOLD);
+    let focus_style = theme.graph_focus_style();
 
     let mut block = Block::default()
         .borders(Borders::ALL)
@@ -913,7 +952,9 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
         terminal
-            .draw(|f| render_graph_nodes_and_edges(f, f.area(), &graph, 0, None, &Theme::default()))
+            .draw(|f| {
+                render_graph_nodes_and_edges(f, f.area(), &graph, 0, None, None, &Theme::default())
+            })
             .unwrap();
         let out: String = terminal
             .backend()

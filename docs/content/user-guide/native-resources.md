@@ -40,6 +40,8 @@ When two API groups serve the same name, use `plural.group`
   - **Pods:** `l` streams logs, `Ctrl+d` deletes the pod so its controller
     replaces it
   - **Anything patchable:** `e` edits ([below](#editing-non-flux-objects))
+  - **Anything Flux manages:** `t` traces it, `g` opens its manager's graph,
+    `m` opens the manager ([below](#to-the-flux-manager))
 - **Getting back:** `Esc` walks back through the lists you opened, and
   `:flux` returns to the Flux list from anywhere.
 
@@ -71,6 +73,23 @@ themselves; first match wins:
 
 Describe (`d`) and the workload detail show the full answer, e.g.
 `Flux HelmRelease cert-manager/cert-manager (via ReplicaSet/cert-manager-857cf84654)`.
+
+## From an object to its Flux manager {#to-the-flux-manager}
+
+When Flux manages an object — directly, or through its owner chain (a Pod
+whose Deployment a Kustomization applied) — three keys lead from it to that
+Flux object. They work in kind lists, native YAML / describe / trace views,
+and the workload detail, and show in the footer once the manager is known
+(owner chains resolve in the background):
+
+| Key | Action |
+| --- | --- |
+| `t` | [Trace](../views/#trace-t) it: owners, the Flux object, its source and revision |
+| `g` | The Flux object's [graph](../views/#graph-g), focused on the object (or the owner it applied) — marked by name in a workload group, by its kind's line in a resource group |
+| `m` | Open the Flux object — its detail, or its describe when it's outside the namespaces you watch |
+
+Objects that Argo CD, Helm, or nothing manages don't offer them;
+`:trace <kind>/<name>` still traces those, and says where the chain stops.
 
 ## Editing non-Flux objects {#editing-non-flux-objects}
 

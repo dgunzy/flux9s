@@ -27,8 +27,9 @@ use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::kube::object_status::{ObjectHealth, compute_object_status};
-use crate::kube::ownership::{OwnerResolver, Ownership, managed_by_text, ownership};
+use crate::kube::ownership::{OwnerResolver, Ownership, Resolved, managed_by_text, ownership};
 use crate::models::kinds::{BuiltinColumn, Column, KindSpec};
+use crate::watcher::ResourceKey;
 
 /// Let a burst of watch events settle before rebuilding rows.
 const DEBOUNCE: Duration = Duration::from_millis(200);
@@ -71,6 +72,21 @@ pub struct KindRow {
     /// Who manages it, per its own metadata — owner chains are resolved
     /// separately and applied at snapshot time.
     pub ownership: Ownership,
+    /// Where the owner chain led, once resolved (set at snapshot time).
+    pub resolved: Option<Resolved>,
+}
+
+impl KindRow {
+    /// The Flux object managing this row, directly or through its owner
+    /// chain — what `t`, `g`, and `m` act on (#266).
+    pub fn flux_manager(&self) -> Option<ResourceKey> {
+        let manager = match &self.ownership {
+            Ownership::Managed(manager) => Some(manager),
+            Ownership::Owned(_) => self.resolved.as_ref().and_then(Resolved::manager),
+            Ownership::Unmanaged => None,
+        }?;
+        manager.flux_key(&self.namespace)
+    }
 }
 
 /// A full list snapshot. `columns` can differ from the request's spec when
@@ -288,6 +304,7 @@ pub fn kind_row(
         cells,
         created,
         ownership: owned,
+        resolved: None,
     })
 }
 
@@ -456,6 +473,7 @@ impl KindStore {
                 if let Ownership::Owned(owner) = &row.ownership
                     && let Some(resolved) = owners.get(&owner.uid)
                 {
+                    row.resolved = Some(resolved.clone());
                     let text = sanitize_cell(&managed_by_text(&row.ownership, Some(resolved)));
                     for &i in &managed_cells {
                         if let Some(cell) = row.cells.get_mut(i) {
@@ -878,6 +896,7 @@ mod tests {
                     cells: vec![],
                     created: None,
                     ownership: Ownership::Unmanaged,
+                    resolved: None,
                 },
             );
         }
@@ -945,6 +964,7 @@ mod tests {
             before.rows[0].cells[1], "ReplicaSet",
             "direct owner meanwhile"
         );
+        assert_eq!(before.rows[0].flux_manager(), None, "not known yet");
 
         owners.seed(
             "rs-1",
@@ -956,6 +976,11 @@ mod tests {
         );
         let after = store.snapshot(&s.columns, now, &owners);
         assert_eq!(after.rows[0].cells[1], "Flux ks");
+        assert_eq!(
+            after.rows[0].flux_manager(),
+            Some(ResourceKey::new("Kustomization", "flux-system", "apps")),
+            "t / g / m act on the manager the chain reached (#266)"
+        );
         assert!(store.pending_owners(&owners).is_empty());
     }
 

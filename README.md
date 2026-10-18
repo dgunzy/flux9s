@@ -141,7 +141,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `f` - Toggle favorite
 - `g` - View resource graph (Kustomization, HelmRelease, etc.)
 - `h` - View reconciliation history
-- `t` - Trace ownership chain
+- `t` - Trace ownership chain — for Flux resources, and (with `:native`) any object Flux manages; `g` / `m` from such an object open its Flux manager's graph / the manager itself
 - `W` - Reconcile with source (Kustomization, HelmRelease)
 - `d` - Describe resource
 - `Ctrl+d` - Delete resource (with confirmation)
@@ -158,6 +158,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `:ns all` - View all namespaces
 - `:favorites` or `:fav` - View favorite resources
 - `:events` or `:ev` - Live Kubernetes events feed (current namespace scope)
+- `:trace <kind>/<name> [-n <namespace>]` - Trace what manages an object; watching all namespaces, it finds the object without `-n`
 - `:logs [pod]` - Stream a Flux controller pod's logs (submenu without argument)
 - `:skin {skin-name}` - set skin directly
 - `:skin` - open interactive theme selection menu with live preview (17 built-in themes + custom)

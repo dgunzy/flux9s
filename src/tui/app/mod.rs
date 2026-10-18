@@ -16,6 +16,7 @@ mod core;
 mod events;
 mod keys;
 mod kind_browser;
+mod managers;
 mod navigation;
 mod rendering;
 mod submenus;

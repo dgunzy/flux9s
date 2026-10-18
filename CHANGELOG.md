@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Trace and graph any Kubernetes object up to the Flux object that manages it
+  (#266). With native resources on, `t` traces an object Flux manages (its
+  owners, the Kustomization / HelmRelease / ResourceSet / FluxInstance, its
+  source), `g` opens that Flux object's graph focused on the object (or the
+  owner it applied — marked by name in a workload group, by its kind's line
+  in a resource group), and `m` opens the Flux object. They
+  work in kind lists, native YAML / describe / trace views, and the workload
+  detail, and show only once a Flux manager is known
+- Traces that end at Argo CD, Helm, another manager, or nothing say so
+- `:trace <kind>/<name> -n <namespace>`; watching all namespaces, `:trace`
+  without `-n` searches them (one match is traced, several are listed)
+
 ### Changed
+- Trace follows controller owner references only — the same chain the
+  MANAGED-BY column follows — and stops with a note when an owner can't be
+  read. A kind named like a Flux kind in another API group (a Crossplane
+  `Bucket`) is no longer treated as Flux
+- **Library API (breaking):** `TraceResult` has a new `outcome` field and
+  `TraceNode` a new `api_version` field, so struct literals must set them.
+  `kube::ownership::describe_manager` / `immediate_manager` return
+  `ManagedBy` (text plus the managing Flux object) instead of `String`, and
+  `DescribeData::managed_by` / `WorkloadData::managed_by` hold it.
+  `WorkloadData` has a new `api_version` field and `KindRow` a new `resolved`
+  field. New: `trace::trace_target` (trace any `ObjectRef`),
+  `trace::locate_in_graph`, `kube::objects::find_by_name`
 - Replaced the deprecated `serde_yaml` (its `unsafe-libyaml` parser is unmaintained,
   RUSTSEC-2024-0449) with `serde-saphyr`, a YAML implementation in safe Rust (#296)
 - YAML views keep the API server's field order (as `kubectl get -o yaml` does) instead of
@@ -20,7 +45,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RUSTSEC-2026-0346 to 0349 and `kube` 4.2
 - Kubernetes API types target 1.36 (`k8s-openapi` `v1_36`, was `v1_33`)
 
+### Removed
+- **Library API (breaking):** `tui::trace::format_trace_result`, unused by
+  flux9s (the trace view renders the result directly)
+
 ### Fixed
+- `:trace <kind>/<name>` while watching all namespaces looked in `default`
+  instead of where the object is (#266)
+- Trace now reaches cluster-scoped objects and owners of any kind (it
+  resolved owners by kind name only), and shows the owner chain it walked
+- The trace view couldn't scroll a long trace to its end (the content moved
+  only a row or two), cut off text that wrapped, and could crash on a long
+  multi-byte status message. Blocks now size to their wrapped text and the
+  view scrolls through the shared viewport
+- A trace of an object whose Flux manager can't be read (RBAC, or deleted
+  with the object left behind) said "Not managed by Flux"; it now says the
+  manager couldn't be read
 - YAML views showed list items without the space after the dash (`-item` instead of `- item`)
 - Docs site build on Linux CI picked a Dart Sass binary that can't run on glibc
 

@@ -126,6 +126,20 @@ impl Theme {
             .add_modifier(Modifier::BOLD)
     }
 
+    /// The keyboard-focused graph node (border and name): the accent color
+    /// the footer keys use, bold.
+    pub fn graph_focus_style(&self) -> Style {
+        Style::default()
+            .fg(self.footer_key)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    /// An object marked inside a graph group — the one `g` was pressed on
+    /// (#266): the focus style, underlined.
+    pub fn graph_highlight_style(&self) -> Style {
+        self.graph_focus_style().add_modifier(Modifier::UNDERLINED)
+    }
+
     pub fn status_ready_style(&self) -> Style {
         Style::default().fg(self.status_ready)
     }

@@ -1,7 +1,9 @@
 //! `:` commands: the data-driven [`COMMAND_TABLE`] and its handlers.
 
 use super::core::App;
-use super::state::{HealthFilter, View};
+use super::state::{HealthFilter, TraceRequest, TraceResponse, View};
+use crate::kube::objects::ObjectRef;
+use crate::models::FluxResourceKind;
 use crate::tui::commands;
 use crate::watcher::ResourceKey;
 
@@ -33,7 +35,10 @@ pub(super) const COMMAND_TABLE: &[CommandSpec] = &[
     CommandSpec {
         matches: commands::is_trace_command,
         run: App::cmd_trace,
-        help: &[(":trace <kind>/<n>", "Trace ownership chain")],
+        help: &[(
+            ":trace <kind>/<n> [-n ns]",
+            "Trace an object to its manager",
+        )],
     },
     CommandSpec {
         matches: commands::is_context_command,
@@ -131,22 +136,42 @@ pub(crate) fn command_help() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// The kind name `:trace <kind>/…` refers to, resolved through the kind
-/// registry like `:<kind>` — Flux aliases (`ks`, `hr`), Flux-adjacent kinds,
-/// and (with `nativeResources`) any discovered kind by plural or short name.
-/// An exact kind name passes through unchanged. `None` when the token is a
+/// The kind `:trace <kind>/…` refers to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TraceKind {
+    pub kind: String,
+    /// Set for native kinds (resolved by `apiVersion`); `None` for Flux kinds
+    /// and built-in kind names, resolved by name when the trace runs.
+    pub api_version: Option<String>,
+    pub namespaced: bool,
+}
+
+/// Resolve `:trace <kind>/…` through the kind registry like `:<kind>` —
+/// Flux aliases (`ks`, `hr`), Flux-adjacent kinds, and (with
+/// `nativeResources`) any discovered kind by plural or short name. An exact
+/// kind name passes through unchanged. `None` when the token is a
 /// Kubernetes short name that needs discovery, which is off.
-pub(super) fn trace_kind(token: &str, native_resources: bool) -> Option<String> {
+pub(super) fn trace_kind_ref(token: &str, native_resources: bool) -> Option<TraceKind> {
     if let Some(spec) = crate::models::kinds::resolve(token) {
-        return Some(spec.names.kind);
+        let flux = FluxResourceKind::parse_optional(&spec.names.kind).is_some();
+        return Some(TraceKind {
+            api_version: (!flux).then(|| spec.gvk.api_version()),
+            namespaced: spec.is_namespaced(),
+            kind: spec.names.kind,
+        });
     }
+    let by_name = |kind: &str| TraceKind {
+        kind: kind.to_string(),
+        api_version: None,
+        namespaced: true,
+    };
     if !native_resources && crate::models::kinds::looks_like_kubernetes_kind(token) {
         // An exact built-in kind name ("Deployment") still works without
         // discovery; aliases ("deploy") need it.
         let exact = token.chars().next().is_some_and(char::is_uppercase);
-        return exact.then(|| token.to_string());
+        return exact.then(|| by_name(token));
     }
-    Some(token.to_string())
+    Some(by_name(token))
 }
 
 impl App {
@@ -453,52 +478,95 @@ impl App {
         }
     }
 
-    /// `:trace [type/name]` — trace the ownership chain of the given (or selected)
-    /// resource.
+    /// `:trace [<kind>/<name> [-n <namespace>]]` — trace an object up to
+    /// what manages it (#266), or what the current view shows. Without `-n`
+    /// it looks in the current namespace; watching all namespaces, it
+    /// searches them: one match is traced, several ask for `-n`.
     pub(super) fn cmd_trace(&mut self, cmd: &str) {
-        let Some(trace_arg) = crate::tui::commands::extract_command_arg(cmd, "trace") else {
-            // No argument: trace the currently selected resource.
-            if let Some(key) = &self.selection_state.selected_resource_key {
-                if let Some(rk) = ResourceKey::parse(key) {
-                    self.async_state.trace.request(rk);
-                } else {
-                    tracing::warn!("Failed to parse resource key for trace command: {}", key);
-                    self.ui_state.status_message =
-                        Some(("Invalid resource key format".to_string(), true));
-                }
-            } else {
-                self.set_status_message(("No resource selected".to_string(), true));
+        let args = match commands::parse_trace_args(cmd) {
+            Ok(args) => args,
+            Err(message) => {
+                self.set_status_message((message, true));
+                return;
             }
+        };
+        let Some((kind_token, name)) = args.target else {
+            self.trace_current_view();
             return;
         };
-
-        // Parse "<kind>/<name>" (e.g. "ks/apps", "deploy/web").
-        let Some((kind_token, name)) = trace_arg
-            .split_once('/')
-            .filter(|(kind, name)| !kind.is_empty() && !name.is_empty() && !name.contains('/'))
-        else {
-            self.set_status_message((
-                "Usage: :trace <kind>/<name> or :trace (for selected)".to_string(),
-                true,
-            ));
-            return;
-        };
-        let Some(resource_type) = trace_kind(kind_token, self.config.native_resources) else {
+        let Some(kind) = trace_kind_ref(&kind_token, self.config.native_resources) else {
             self.set_status_message((
                 format!(":trace {kind_token}/… needs kind lookup — :native turns it on"),
                 true,
             ));
             return;
         };
-        let namespace = self
-            .namespace()
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
-        self.async_state.trace.request(ResourceKey::new(
-            resource_type,
-            namespace,
-            name.to_string(),
-        ));
+        let namespace = if !kind.namespaced {
+            Some(String::new())
+        } else {
+            args.namespace.or_else(|| self.namespace().clone())
+        };
+        let target = |namespace: String| match &kind.api_version {
+            Some(api_version) => ObjectRef::native(api_version, &kind.kind, namespace, &name),
+            None => ResourceKey::new(&kind.kind, namespace, &name).into(),
+        };
+        if let Some(namespace) = namespace {
+            self.request_trace_of(target(namespace));
+            return;
+        }
+
+        // All namespaces and no `-n`: find it. Flux kinds are all watched,
+        // so the watched state answers; anything else asks the cluster.
+        if kind.api_version.is_none() && FluxResourceKind::parse_optional(&kind.kind).is_some() {
+            let mut namespaces: Vec<String> = self
+                .state
+                .all()
+                .into_iter()
+                .filter(|r| r.resource_type == kind.kind && r.name == name)
+                .map(|r| r.namespace)
+                .collect();
+            namespaces.sort();
+            match namespaces.as_slice() {
+                [] => self.set_status_message((
+                    format!("No {} named {name} in the watched namespaces", kind.kind),
+                    true,
+                )),
+                [namespace] => self.request_trace_of(target(namespace.clone())),
+                _ => {
+                    let target = format!("{}/{name}", kind.kind);
+                    self.set_trace_response(Ok(TraceResponse::Ambiguous { target, namespaces }));
+                }
+            }
+            return;
+        }
+        // The object found becomes the subject when the trace answers.
+        self.async_state.trace.request(TraceRequest::Search {
+            kind: kind.kind.clone(),
+            api_version: kind.api_version.clone(),
+            name,
+        });
+    }
+
+    /// `:trace` with no target: what `t` would trace here — the native
+    /// object on screen (whatever manages it), else the selected Flux
+    /// resource.
+    fn trace_current_view(&mut self) {
+        if let Some(native) = self.native_subject() {
+            self.request_trace_of(native);
+        } else if let Some(resource) = self.get_current_resource() {
+            self.request_trace_of(
+                ResourceKey::new(resource.resource_type, resource.namespace, resource.name).into(),
+            );
+        } else if let Some(rk) = self
+            .selection_state
+            .selected_resource_key
+            .as_deref()
+            .and_then(ResourceKey::parse)
+        {
+            self.request_trace_of(rk.into());
+        } else {
+            self.set_status_message(("No resource selected".to_string(), true));
+        }
     }
 
     /// `:ctx [name]` — switch kube context, or open the context submenu / list

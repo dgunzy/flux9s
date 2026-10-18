@@ -346,7 +346,7 @@ fn build_workload_lines(
     if let Some(managed_by) = &workload.managed_by {
         lines.push(Line::from(vec![
             label("Managed By"),
-            Span::raw(managed_by.clone()),
+            Span::raw(managed_by.text.clone()),
         ]));
     }
     if let Some(ready) = workload.ready {
@@ -573,6 +573,7 @@ mod tests {
             events_error: Some("forbidden".to_string()),
             pod_selector: None,
             managed_by: None,
+            api_version: Some("apps/v1".to_string()),
         }
     }
 

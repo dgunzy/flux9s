@@ -791,7 +791,7 @@ impl App {
             View::ResourceGraph => self.focused_graph_node_target(),
             // A native object (#262) isn't a watched Flux resource: operations,
             // trace, graph, and history don't apply to it.
-            View::ResourceYAML | View::ResourceDescribe
+            View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace
                 if self.selection_state.native_object.is_some() =>
             {
                 None
@@ -921,6 +921,18 @@ impl App {
         }
     }
 
+    /// The name filter as it applies to the Flux list. While a kind list is
+    /// open (on screen, or under a view opened from it — `g` / `m`, #266)
+    /// the shared filter belongs to that list, so the Flux list and header
+    /// ignore it.
+    pub(crate) fn flux_filter(&self) -> &str {
+        if self.async_state.kind_list.key().is_some() {
+            ""
+        } else {
+            &self.view_state.filter
+        }
+    }
+
     pub(crate) fn get_filtered_resources(&self) -> Vec<crate::watcher::ResourceInfo> {
         let mut resources = if let Some(ref resource_type) = self.view_state.selected_resource_type
         {
@@ -940,8 +952,9 @@ impl App {
             });
         }
 
-        if !self.view_state.filter.is_empty() {
-            if let Some(label_filter) = self.view_state.filter.strip_prefix("label:") {
+        let filter = self.flux_filter();
+        if !filter.is_empty() {
+            if let Some(label_filter) = filter.strip_prefix("label:") {
                 if label_filter.is_empty() {
                     resources.retain(|r| !r.labels.is_empty());
                 } else if let Some((key, value)) = label_filter.split_once('=') {
@@ -953,11 +966,9 @@ impl App {
                 } else {
                     resources.retain(|r| r.labels.keys().any(|k| k.starts_with(label_filter)));
                 }
-            } else if let Some(ann_filter) = self
-                .view_state
-                .filter
+            } else if let Some(ann_filter) = filter
                 .strip_prefix("ann:")
-                .or_else(|| self.view_state.filter.strip_prefix("annotations:"))
+                .or_else(|| filter.strip_prefix("annotations:"))
             {
                 if ann_filter.is_empty() {
                     resources.retain(|r| !r.annotations.is_empty());
@@ -971,7 +982,7 @@ impl App {
                     resources.retain(|r| r.annotations.keys().any(|k| k.starts_with(ann_filter)));
                 }
             } else {
-                resources.retain(|r| r.name.contains(&self.view_state.filter));
+                resources.retain(|r| r.name.contains(filter));
             }
         }
 

@@ -61,7 +61,7 @@ impl App {
     /// Clamps at the ends rather than wrapping so the direction stays intuitive.
     /// Auto-scrolling to keep the focused node visible is handled by the renderer.
     pub(super) fn move_graph_focus(&mut self, forward: bool) {
-        let Some(graph) = self.async_state.graph.result() else {
+        let Some(graph) = self.graph() else {
             return;
         };
         let order = graph.focus_order();
@@ -89,7 +89,7 @@ impl App {
     /// `None`.
     pub(crate) fn focused_graph_node_target(&self) -> Option<ResourceKey> {
         use crate::trace::NodeType;
-        let node = self.async_state.graph.result().and_then(|graph| {
+        let node = self.graph().and_then(|graph| {
             self.view_state
                 .graph_focus_index
                 .and_then(|idx| graph.nodes.get(idx))
@@ -112,9 +112,7 @@ impl App {
     /// URLs are not directly navigable and just show a hint instead.
     pub(super) fn navigate_to_focused_graph_node(&mut self) {
         let focused_node = self
-            .async_state
-            .graph
-            .result()
+            .graph()
             .and_then(|graph| {
                 self.view_state
                     .graph_focus_index
@@ -562,7 +560,8 @@ impl App {
 
     /// The native (non-watched) object the current view points at, if any:
     /// the selected inventory row, an event's unwatched involved object, or
-    /// the native object already on screen when toggling YAML ↔ describe.
+    /// the native object already on screen when toggling YAML ↔ describe
+    /// (or leaving its trace, #266).
     pub(super) fn native_view_target(&self) -> Option<ObjectRef> {
         match self.view_state.current_view {
             View::InventoryList => self
@@ -599,7 +598,7 @@ impl App {
                     event.involved_name.clone(),
                 ))
             }
-            View::ResourceYAML | View::ResourceDescribe => {
+            View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace => {
                 self.selection_state.native_object.clone()
             }
             _ => None,
@@ -735,12 +734,14 @@ impl App {
     pub(super) fn trace_selected(&mut self) {
         // Trace command - works from list, favorites, and detail view
         if let Some(resource) = self.get_current_resource() {
-            self.async_state.trace.request(ResourceKey::new(
-                resource.resource_type.clone(),
-                resource.namespace.clone(),
-                resource.name.clone(),
-            ));
-            self.view_state.trace_scroll_offset = 0;
+            self.request_trace_of(
+                ResourceKey::new(
+                    resource.resource_type.clone(),
+                    resource.namespace.clone(),
+                    resource.name.clone(),
+                )
+                .into(),
+            );
         }
     }
 
@@ -1042,11 +1043,15 @@ impl App {
             );
 
             self.selection_state.selected_resource_key = Some(key.clone());
-            self.async_state.graph.request(ResourceKey {
-                resource_type: resource.resource_type.clone(),
-                namespace: resource.namespace.clone(),
-                name: resource.name.clone(),
-            });
+            self.async_state.graph.request(
+                ResourceKey {
+                    resource_type: resource.resource_type.clone(),
+                    namespace: resource.namespace.clone(),
+                    name: resource.name.clone(),
+                }
+                .into(),
+            );
+            self.view_state.graph_highlight = None;
             self.view_state.graph_scroll_offset = 0; // Reset scroll
             self.view_state.graph_focus_index = None; // Reset focus (set when graph loads)
             self.navigate_to(View::ResourceGraph);

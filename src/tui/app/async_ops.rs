@@ -193,9 +193,35 @@ impl App {
     /// Store the graph result and start keyboard focus on the resource being
     /// viewed (the object node) so the graph is immediately navigable with
     /// j/k and Enter.
-    pub fn set_graph_result(&mut self, result: crate::trace::ResourceGraph) {
-        self.view_state.graph_focus_index = result.object_node_index();
+    /// A graph opened with `g` on a native object (#266) focuses the node
+    /// listing that object (or its owner) instead, and marks it there.
+    pub fn set_graph_result(&mut self, result: impl Into<super::state::GraphResult>) {
+        let result = result.into();
+        self.view_state.graph_focus_index = result
+            .highlight
+            .as_ref()
+            .and_then(|key| result.graph.node_containing(key))
+            .or_else(|| result.graph.object_node_index());
+        self.view_state.graph_highlight = result.highlight.clone();
         self.async_state.graph.set_result(result);
+    }
+
+    /// The graph on screen, if built.
+    pub(crate) fn graph(&self) -> Option<&crate::trace::ResourceGraph> {
+        self.async_state.graph.result().map(|r| &r.graph)
+    }
+
+    /// Store a YAML result. A native object whose manager needs its owner
+    /// chain walked gets that resolved in the background, so `t` / `g` /
+    /// `m` (#266) can offer its Flux manager.
+    pub fn set_yaml_result(&mut self, yaml: serde_json::Value) {
+        self.view_state.yaml_manager = None;
+        if self.selection_state.native_object.is_some()
+            && crate::kube::ownership::immediate_manager(&yaml).is_none()
+        {
+            self.async_state.describe_manager.request(yaml.clone());
+        }
+        self.async_state.yaml.set_result(yaml);
     }
 
     /// Store a describe result. When Managed By needs an owner chain walked,
@@ -211,10 +237,25 @@ impl App {
         self.async_state.describe.set_result(describe);
     }
 
-    /// Fill the describe view's Managed By — only if it is still showing the
-    /// object that was resolved (a late answer for an earlier describe is
-    /// dropped).
+    /// Fill the describe (or YAML) view's Managed By — only if it is still
+    /// showing the object that was resolved (a late answer for an earlier
+    /// object is dropped).
     pub fn set_manager_resolution(&mut self, resolution: super::state::ManagerResolution) {
+        let uid_of = |object: &serde_json::Value| {
+            object
+                .pointer("/metadata/uid")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        };
+        if self
+            .async_state
+            .yaml
+            .result()
+            .and_then(uid_of)
+            .is_some_and(|uid| uid == resolution.uid)
+        {
+            self.view_state.yaml_manager = Some(resolution.clone());
+        }
         if let Some(describe) = self.async_state.describe.result_mut()
             && describe
                 .object
@@ -222,7 +263,7 @@ impl App {
                 .and_then(serde_json::Value::as_str)
                 == Some(resolution.uid.as_str())
         {
-            describe.managed_by = Some(resolution.text);
+            describe.managed_by = Some(resolution.managed_by);
         }
     }
 
@@ -389,6 +430,7 @@ mod tests {
             events_error: None,
             pod_selector: None,
             managed_by: None,
+            api_version: Some("apps/v1".to_string()),
         });
 
         app.set_object_action_result(Ok(ObjectAction::Patch {
@@ -422,7 +464,10 @@ mod tests {
             object: serde_json::json!({"metadata": {"name": "web-abc", "uid": uid}}),
             events: Vec::new(),
             events_error: None,
-            managed_by: managed_by.map(String::from),
+            managed_by: managed_by.map(|text| crate::kube::ownership::ManagedBy {
+                text: text.to_string(),
+                flux: None,
+            }),
         }
     }
 
@@ -441,11 +486,14 @@ mod tests {
 
         app.set_manager_resolution(ManagerResolution {
             uid: "pod-1".into(),
-            text: "Flux Kustomization flux-system/apps (via ReplicaSet/web-7b5)".into(),
+            managed_by: crate::kube::ownership::ManagedBy {
+                text: "Flux Kustomization flux-system/apps (via ReplicaSet/web-7b5)".into(),
+                flux: None,
+            },
         });
         let describe = app.async_state.describe.result().unwrap();
         assert_eq!(
-            describe.managed_by.as_deref(),
+            describe.managed_by.as_ref().map(|m| m.text.as_str()),
             Some("Flux Kustomization flux-system/apps (via ReplicaSet/web-7b5)")
         );
         assert!(!app.describe_manager_pending());
@@ -458,7 +506,10 @@ mod tests {
         app.set_describe_result(describe_of("pod-2", None));
         app.set_manager_resolution(ManagerResolution {
             uid: "pod-1".into(),
-            text: "stale".into(),
+            managed_by: crate::kube::ownership::ManagedBy {
+                text: "stale".into(),
+                flux: None,
+            },
         });
         assert_eq!(app.async_state.describe.result().unwrap().managed_by, None);
     }

@@ -508,7 +508,8 @@ async fn describe_resolves_managed_by_separately_and_within_bound() {
     flux9s::kube::ownership::clear_api_cache();
     for _ in 0..2 {
         let started = Instant::now();
-        let text = flux9s::kube::ownership::describe_manager(&client, &describe.object).await;
+        let managed_by = flux9s::kube::ownership::describe_manager(&client, &describe.object).await;
+        let text = &managed_by.text;
         assert!(
             started.elapsed() <= flux9s::kube::ownership::MANAGER_TIMEOUT + Duration::from_secs(1),
             "took {:?}",
@@ -516,6 +517,10 @@ async fn describe_resolves_managed_by_separately_and_within_bound() {
         );
         assert!(text.starts_with("Flux"), "{name}: {text}");
         assert!(text.contains("via ReplicaSet/"), "{name}: {text}");
+        assert!(
+            managed_by.flux.is_some(),
+            "{name}: the Flux manager is known, so t / g / m apply"
+        );
     }
 }
 
@@ -532,4 +537,155 @@ async fn trace_reaches_the_flux_instance_of_a_controller_deployment() {
             .unwrap_or_else(|e| panic!("trace failed: {e:#}"));
     let kinds: Vec<&str> = result.chain.iter().map(|n| n.kind.as_str()).collect();
     assert!(kinds.contains(&"FluxInstance"), "chain: {kinds:?}");
+}
+
+/// The running source-controller pod (deterministic: the FluxInstance
+/// installs it).
+async fn source_controller_pod(client: &kube::Client) -> String {
+    use k8s_openapi::api::core::v1::Pod;
+    let pods: kube::Api<Pod> = kube::Api::namespaced(client.clone(), "flux-system");
+    let list = pods
+        .list(&kube::api::ListParams::default().labels("app=source-controller"))
+        .await
+        .unwrap_or_else(|e| panic!("listing source-controller pods: {e}"));
+    list.items
+        .into_iter()
+        .find_map(|pod| pod.metadata.name)
+        .unwrap_or_else(|| panic!("no source-controller pod (run ./scripts/dev-clusters.sh ci)"))
+}
+
+/// #266: a native object traces by apiVersion up its owner chain to the
+/// Flux object managing it — Pod → ReplicaSet → Deployment → FluxInstance.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn trace_walks_a_pod_up_its_owner_chain_to_flux() {
+    use flux9s::kube::objects::ObjectRef;
+    let client = client_for(&simple_context()).await;
+    let pod = source_controller_pod(&client).await;
+    let result = flux9s::trace::trace_target(
+        &client,
+        &ObjectRef::native("v1", "Pod", "flux-system", &pod),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("trace failed: {e:#}"));
+    let kinds: Vec<&str> = result.path().iter().map(|n| n.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        ["Pod", "ReplicaSet", "Deployment", "FluxInstance"],
+        "path: {kinds:?}"
+    );
+    assert_eq!(result.outcome, flux9s::trace::TraceOutcome::Flux);
+    assert_eq!(
+        result
+            .flux_manager()
+            .map(|n| (n.kind.as_str(), n.name.as_str())),
+        Some(("FluxInstance", "flux"))
+    );
+}
+
+/// #266: cluster-scoped objects trace too (they used to be fetched as
+/// namespaced), and a Helm-installed chain ends at Helm.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn trace_reaches_cluster_scoped_objects_and_stops_at_helm() {
+    use flux9s::kube::objects::ObjectRef;
+    use flux9s::trace::TraceOutcome;
+    let client = client_for(&simple_context()).await;
+
+    let role = flux9s::trace::trace_target(
+        &client,
+        &ObjectRef::native(
+            "rbac.authorization.k8s.io/v1",
+            "ClusterRole",
+            "",
+            "flux-edit-flux-system",
+        ),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("trace failed: {e:#}"));
+    assert_eq!(role.outcome, TraceOutcome::Flux);
+    assert_eq!(role.object.namespace, "", "cluster-scoped: no namespace");
+    assert_eq!(
+        role.flux_manager().map(|n| n.kind.as_str()),
+        Some("FluxInstance")
+    );
+
+    // dev-clusters.sh installs the Flux Operator with Helm.
+    let operator = flux9s::trace::trace_target(
+        &client,
+        &ObjectRef::native("apps/v1", "Deployment", "flux-system", "flux-operator"),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("trace failed: {e:#}"));
+    assert!(
+        matches!(
+            &operator.outcome,
+            TraceOutcome::Other(flux9s::kube::ownership::Manager::Helm { release, .. })
+                if release == "flux-operator"
+        ),
+        "{:?}",
+        operator.outcome
+    );
+    assert!(operator.flux_manager().is_none());
+}
+
+/// #266: `:trace` without `-n` while watching all namespaces finds the
+/// object wherever it lives.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn find_by_name_searches_every_namespace() {
+    let client = client_for(&simple_context()).await;
+    let found = flux9s::kube::objects::find_by_name(
+        &client,
+        "Deployment",
+        Some("apps/v1"),
+        "source-controller",
+    )
+    .await
+    .unwrap_or_else(|e| panic!("search failed: {e:#}"));
+    let namespaces: Vec<&str> = found.iter().map(|o| o.namespace.as_str()).collect();
+    assert_eq!(namespaces, ["flux-system"]);
+    // Built-in kinds by name work without discovery.
+    let by_name = flux9s::kube::objects::find_by_name(&client, "Deployment", None, "flux-operator")
+        .await
+        .unwrap_or_else(|e| panic!("search failed: {e:#}"));
+    assert_eq!(by_name.len(), 1);
+    assert!(
+        flux9s::kube::objects::find_by_name(&client, "Deployment", Some("apps/v1"), "no-such")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// #266: `g` on a pod opens its manager's graph focused on the Deployment
+/// the manager applied, listed in the workload group.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn graph_locates_a_pod_through_its_deployment() {
+    use flux9s::kube::objects::ObjectRef;
+    let client = client_for(&simple_context()).await;
+    let graph = flux9s::trace::build_resource_graph(&client, "FluxInstance", "flux-system", "flux")
+        .await
+        .unwrap_or_else(|e| panic!("graph failed: {e:#}"));
+    let pod = source_controller_pod(&client).await;
+    let found = flux9s::trace::locate_in_graph(
+        &client,
+        &graph,
+        &ObjectRef::native("v1", "Pod", "flux-system", &pod),
+    )
+    .await;
+    assert_eq!(
+        found,
+        Some(flux9s::watcher::ResourceKey::new(
+            "Deployment",
+            "flux-system",
+            "source-controller"
+        ))
+    );
+    let index = graph.node_containing(found.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        graph.nodes[index].node_type,
+        flux9s::trace::NodeType::WorkloadGroup
+    );
 }

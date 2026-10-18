@@ -70,22 +70,28 @@ impl App {
 
     /// Kind-list rows after the `/` filter (name or namespace substring).
     pub(crate) fn filtered_kind_rows(&self) -> Vec<&KindRow> {
+        self.kind_rows_matching().collect()
+    }
+
+    /// The selected kind-list row — without collecting the list, for checks
+    /// that run on every footer render (#266).
+    pub(crate) fn selected_kind_row(&self) -> Option<&KindRow> {
+        self.kind_rows_matching()
+            .nth(self.view_state.selected_index)
+    }
+
+    fn kind_rows_matching(&self) -> impl Iterator<Item = &KindRow> {
         let filter = self.view_state.filter.to_lowercase();
         self.async_state
             .kind_list
             .result()
-            .map(|snapshot| {
-                snapshot
-                    .rows
-                    .iter()
-                    .filter(|row| {
-                        filter.is_empty()
-                            || row.name.to_lowercase().contains(&filter)
-                            || row.namespace.to_lowercase().contains(&filter)
-                    })
-                    .collect()
+            .into_iter()
+            .flat_map(|snapshot| snapshot.rows.iter())
+            .filter(move |row| {
+                filter.is_empty()
+                    || row.name.to_lowercase().contains(&filter)
+                    || row.namespace.to_lowercase().contains(&filter)
             })
-            .unwrap_or_default()
     }
 
     /// Store a live snapshot, keeping the cursor on the same object. Rows

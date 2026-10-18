@@ -153,6 +153,56 @@ pub(crate) async fn object_api(
     }
 }
 
+/// Every object of `kind` named `name`, across all namespaces — for
+/// `:trace <kind>/<name>` while watching all namespaces (#266). Native kinds
+/// resolve by `api_version`; without one, built-in kinds by name. A
+/// cluster-scoped kind has exactly one candidate, returned unchecked.
+pub async fn find_by_name(
+    client: &kube::Client,
+    kind: &str,
+    api_version: Option<&str>,
+    name: &str,
+) -> anyhow::Result<Vec<ObjectRef>> {
+    let (resource, scope) = match api_version {
+        Some(api_version) => discover(client, api_version, kind).await?,
+        None => {
+            let (group, version, plural) = crate::kube::get_gvk_for_resource_type(kind)?;
+            let api_version = if group.is_empty() {
+                version.clone()
+            } else {
+                format!("{group}/{version}")
+            };
+            let resource = ApiResource {
+                group,
+                version,
+                api_version,
+                kind: kind.to_string(),
+                plural,
+            };
+            (resource, Scope::Namespaced)
+        }
+    };
+    let found = |namespace: String| match api_version {
+        Some(api_version) => ObjectRef::native(api_version, kind, namespace, name),
+        None => ResourceKey::new(kind, namespace, name).into(),
+    };
+    if matches!(scope, Scope::Cluster) {
+        return Ok(vec![found(String::new())]);
+    }
+    let params = kube::api::ListParams::default().fields(&format!("metadata.name={name}"));
+    let list = Api::<DynamicObject>::all_with(client.clone(), &resource)
+        .list_metadata(&params)
+        .await
+        .with_context(|| format!("Failed to look up {kind}/{name} in all namespaces"))?;
+    let mut namespaces: Vec<String> = list
+        .items
+        .into_iter()
+        .filter_map(|object| object.metadata.namespace)
+        .collect();
+    namespaces.sort();
+    Ok(namespaces.into_iter().map(found).collect())
+}
+
 /// Fetch any object as JSON. Flux resources (no `api_version`) go through the
 /// Flux fetch path; native objects through discovery. Secret values are
 /// redacted before they leave this function.
