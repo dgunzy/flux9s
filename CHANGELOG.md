@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-18
+
+# Version 1.3.1 Changelog
+
+**Added**
+- Trace resources support (#300)
+
+**Changed**
+- Updated kube dependency from 4.0.0 to 4.2.0 (#298)
+- Documentation overhaul with new videos and images (#294)
+
+**Fixed**
+- CI configuration (#297)
+- Documentation build issues (#295)
+
 ### Added
 - Trace and graph any Kubernetes object up to the Flux object that manages it
   (#266). With native resources on, `t` traces an object Flux manages (its
