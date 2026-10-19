@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-19
+
+# Version 1.4.0 Changelog
+
+## Added
+- Custom resource filtering support (#303)
+
 ## [1.3.1] - 2026-10-18
 
 # Version 1.3.1 Changelog
