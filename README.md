@@ -157,6 +157,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `:ns <namespace>` - Switch namespace
 - `:ns all` - View all namespaces
 - `:favorites` or `:fav` - View favorite resources
+- `:ks,hr` - Several Flux kinds in one list; name a set you use often in your config (`views: {apps: {kinds: [ks, hr]}}`) and open it with `:apps`
 - `:events` or `:ev` - Live Kubernetes events feed (current namespace scope)
 - `:trace <kind>/<name> [-n <namespace>]` - Trace what manages an object; watching all namespaces, it finds the object without `-n`
 - `:logs [pod]` - Stream a Flux controller pod's logs (submenu without argument)

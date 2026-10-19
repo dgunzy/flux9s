@@ -3,7 +3,7 @@
 //! Defines the structure of configuration files using serde for serialization.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Root configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -66,10 +66,18 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub favorites: Vec<String>,
 
-    /// Default resource type filter applied at startup (None = show all types)
-    /// Accepts display names (e.g., "Kustomization") or aliases (e.g., "ks") — stored as display name
+    /// Flux list filter applied at startup (None = show all kinds): a kind
+    /// (`Kustomization`, or an alias like `ks`), several (`ks,hr`, #302), or
+    /// a view name from `views`. Kinds are stored as display names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_resource_filter: Option<String>,
+
+    /// Named Flux list views (#302): `:<name>` shows the kinds listed, e.g.
+    /// `views: {apps: {kinds: [ks, hr]}}` for `:apps`. A struct per view so
+    /// it can grow (namespace, health, Kubernetes kinds) without breaking
+    /// configs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub views: BTreeMap<String, ViewConfig>,
 
     /// Timeout (in seconds) for the initial connectivity/health check to the
     /// Kubernetes API server at startup. Overridable at runtime with the
@@ -125,6 +133,12 @@ impl Config {
             )]),
             favorites: vec!["Kustomization:flux-system:my-app".to_string()],
             default_resource_filter: Some("Kustomization".to_string()),
+            views: BTreeMap::from([(
+                "apps".to_string(),
+                ViewConfig {
+                    kinds: vec!["ks".to_string(), "hr".to_string()],
+                },
+            )]),
             connect_timeout_seconds: default_connect_timeout_seconds(),
             editor: Some("vim".to_string()),
         }
@@ -164,6 +178,16 @@ impl Config {
         tracing::debug!("Using default skin: {}", self.ui.skin);
         self.ui.skin.clone()
     }
+}
+
+/// A named Flux list view (#302).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewConfig {
+    /// Flux kinds the view shows, by name, plural, or alias (`ks`,
+    /// `helmreleases`, `Kustomization`).
+    #[serde(default)]
+    pub kinds: Vec<String>,
 }
 
 /// UI configuration
@@ -241,6 +265,7 @@ impl Default for Config {
             cluster: HashMap::new(),
             favorites: Vec::new(), // Empty by default
             default_resource_filter: None,
+            views: BTreeMap::new(),
             connect_timeout_seconds: default_connect_timeout_seconds(),
             editor: None,
         }

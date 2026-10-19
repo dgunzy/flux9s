@@ -23,6 +23,22 @@ flux9s --debug
 flux9s --version
 ```
 
+## Start on a view: `-c` {#start-command}
+
+`-c` (`--command`) runs a `:` command once flux9s has connected, the way
+`k9s -c` does — anything you'd type after `:`:
+
+```bash
+flux9s -c ks,hr          # Kustomizations and HelmReleases
+flux9s -c apps           # a view from your config
+flux9s -c pulse          # the health dashboard
+flux9s -c "ns apps"      # a namespace
+flux9s -c deploy         # a Kubernetes kind (with native resources on)
+```
+
+To start the same way every time, set
+[`defaultResourceFilter`](/configuration/#default-resource-filter).
+
 ## Configuration
 
 ```bash

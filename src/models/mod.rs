@@ -22,6 +22,9 @@ pub mod flux_resource_kind;
 /// Kind registry: every `:<kind>` resolves to a data-driven KindSpec (#267)
 pub mod kinds;
 
+/// Which Flux kinds the Flux list shows: all, one, several, or a named view (#302)
+pub mod kind_filter;
+
 // Resource field extraction
 pub mod resource_fields;
 

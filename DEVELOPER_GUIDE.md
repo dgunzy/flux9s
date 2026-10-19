@@ -701,6 +701,26 @@ releases. Async failures use `back_from(view)` and edit results
 `leave_edit()`, which only navigate if that view is still on screen.
 `set_view` is a raw setter for tests and initial state.
 
+## Kind Filters and Views (#302)
+
+The Flux list shows a `models::kind_filter::KindFilter`: all kinds, one
+(`:ks` — that kind's own columns), several (`:ks,hr` — the unified
+columns), or a named view (`views.<name>.kinds` in the config).
+`KindFilter::parse` resolves tokens through the kind registry and refuses
+Kubernetes kinds (mixing them needs per-row actions; later work).
+
+- `:` dispatch order (`execute_command`): flux9s commands, then views
+  (`App::view_named`, case-insensitive), then comma lists, then kinds.
+- `tui::app::view_problems` is the one name/kind check, used at startup,
+  by `flux9s config validate`, and after `config set views.*`.
+  `App::warn_views_shadowing_discovered_kinds` adds the collisions only
+  known after discovery. A new `:` command is covered automatically
+  (`command_mode::is_builtin_command` reads `COMMAND_TABLE`).
+- `-c` / `--command` (`App::run_startup_command`) runs after
+  `set_connected`, so a Kubernetes kind waits for discovery like a typed
+  one. `ViewConfig` is a struct so views can grow (namespace, health,
+  Kubernetes kinds) without breaking configs.
+
 ## The Kind Registry (`:<kind>`)
 
 Every `:<kind>` command resolves to a `KindSpec` (`src/models/kinds.rs`) —

@@ -38,6 +38,9 @@ pub struct App {
     pub(crate) pending_context_switch: Option<String>,
     /// A `:<kind>` typed before discovery finished, opened when it lands.
     pub(crate) pending_kind_command: Option<String>,
+    /// Views already warned about for hiding a discovered kind (#302), so
+    /// rediscovery (context switch, `:native`) doesn't repeat the warning.
+    pub(crate) view_shadows_warned: std::collections::HashSet<String>,
     pub(crate) controller_pods: ControllerPodState,
     /// Live Kubernetes events feed (populated while the events view is open).
     pub(crate) kube_events: KubeEventStore,
@@ -102,6 +105,7 @@ impl App {
             all_namespaces: Vec::new(),
             pending_context_switch: None,
             pending_kind_command: None,
+            view_shadows_warned: Default::default(),
             controller_pods: ControllerPodState::default(),
             kube_events: KubeEventStore::default(),
             logs: super::logs::LogState::default(),
@@ -146,11 +150,23 @@ impl App {
         } else {
             "🔒"
         };
-        match &self.view_state.selected_resource_type {
-            Some(kind) if self.forbidden_watchers.contains(kind) => Some(format!(
-                "{lock} Restricted — your RBAC can't list {kind} in this scope"
-            )),
-            Some(_) => None, // The selected kind isn't the restricted one.
+        let filter = &self.view_state.kind_filter;
+        match filter.kinds_label() {
+            Some(_) => {
+                // Only the selected kinds that are restricted matter.
+                let restricted: Vec<&str> = filter
+                    .kinds()
+                    .iter()
+                    .filter(|kind| self.forbidden_watchers.contains(*kind))
+                    .map(String::as_str)
+                    .collect();
+                (!restricted.is_empty()).then(|| {
+                    format!(
+                        "{lock} Restricted — your RBAC can't list {} in this scope",
+                        restricted.join(", ")
+                    )
+                })
+            }
             None => {
                 let mut kinds: Vec<&String> = self.forbidden_watchers.iter().collect();
                 kinds.sort();
@@ -600,7 +616,7 @@ impl App {
         self.forbidden_watchers.clear();
         self.view_state.selected_index = 0;
         self.view_state.scroll_offset = 0;
-        self.view_state.selected_resource_type = None;
+        self.view_state.kind_filter = crate::models::kind_filter::KindFilter::all();
         self.async_state.clear_pending();
         // Kind lists and discovered kinds belong to the old cluster.
         crate::models::kinds::catalog().clear();
@@ -933,13 +949,22 @@ impl App {
         }
     }
 
-    pub(crate) fn get_filtered_resources(&self) -> Vec<crate::watcher::ResourceInfo> {
-        let mut resources = if let Some(ref resource_type) = self.view_state.selected_resource_type
-        {
-            self.state.by_type(resource_type)
-        } else {
+    /// The watched resources of the kinds the Flux list shows (#302).
+    pub(crate) fn kind_filtered_resources(&self) -> Vec<crate::watcher::ResourceInfo> {
+        let filter = &self.view_state.kind_filter;
+        if filter.is_all() {
             self.state.all()
-        };
+        } else {
+            filter
+                .kinds()
+                .iter()
+                .flat_map(|kind| self.state.by_type(kind))
+                .collect()
+        }
+    }
+
+    pub(crate) fn get_filtered_resources(&self) -> Vec<crate::watcher::ResourceInfo> {
+        let mut resources = self.kind_filtered_resources();
 
         if let Some(ref namespace) = self.namespace {
             resources.retain(|r| r.namespace == *namespace);
@@ -1079,10 +1104,7 @@ impl std::fmt::Debug for App {
         f.debug_struct("App")
             .field("state", &self.state)
             .field("current_view", &self.view_state.current_view)
-            .field(
-                "selected_resource_type",
-                &self.view_state.selected_resource_type,
-            )
+            .field("kind_filter", &self.view_state.kind_filter)
             .field("filter", &self.view_state.filter)
             .field("filter_mode", &self.view_state.filter_mode)
             .field("health_filter", &self.view_state.health_filter)
@@ -1173,6 +1195,7 @@ mod tests {
             cluster: HashMap::new(),
             favorites: vec![],
             default_resource_filter: None,
+            views: Default::default(),
             connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
             editor: None,
         };

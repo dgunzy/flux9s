@@ -307,6 +307,7 @@ mod tests {
             cluster: HashMap::new(),
             favorites: vec![],
             default_resource_filter: None,
+            views: Default::default(),
             connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
             discover_flux_resources: false,
             native_resources: true,

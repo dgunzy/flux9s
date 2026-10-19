@@ -36,7 +36,7 @@ pub fn render_resource_list(
     resources: &[ResourceInfo],
     selected_index: usize,
     scroll_offset: &mut usize,
-    selected_resource_type: &Option<String>,
+    kind_filter: &crate::models::kind_filter::KindFilter,
     resource_objects: &HashMap<String, serde_json::Value>,
     theme: &Theme,
     no_icons: bool,
@@ -94,7 +94,8 @@ pub fn render_resource_list(
     }
 
     // Determine if we're in unified view or resource-type-specific view
-    let is_unified = selected_resource_type.is_none();
+    // One kind gets its own columns; several or all share the unified ones.
+    let is_unified = kind_filter.single().is_none();
 
     let (rows, header, constraints): (Vec<Row>, Row, Vec<Constraint>) = if is_unified {
         // Unified view: show common fields with status indicator
@@ -204,7 +205,7 @@ pub fn render_resource_list(
         // Resource-type-specific view: show type-specific fields (plus AGE)
         // `is_unified` already established this is `Some`; degrade to the generic
         // column set rather than panicking if that ever stops holding.
-        let resource_type = selected_resource_type.as_deref().unwrap_or_default();
+        let resource_type = kind_filter.single().unwrap_or_default();
         let mut column_names = get_resource_type_columns(resource_type);
         column_names.push("AGE");
         let header_cells: Vec<String> = column_names
@@ -360,10 +361,10 @@ pub fn render_resource_list(
         String::new()
     };
 
-    let title = if let Some(rt) = selected_resource_type {
-        format!("{} ({}){}", rt, total, range_suffix)
-    } else {
-        format!("All Resources ({}){}", total, range_suffix)
+    let title = match (kind_filter.view(), kind_filter.kinds_label()) {
+        (Some(view), Some(kinds)) => format!("{view}: {kinds} ({total}){range_suffix}"),
+        (None, Some(kinds)) => format!("{kinds} ({total}){range_suffix}"),
+        (_, None) => format!("All Resources ({total}){range_suffix}"),
     };
 
     let table = Table::new(rows, constraints)

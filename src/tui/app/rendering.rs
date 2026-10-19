@@ -89,13 +89,12 @@ impl App {
             // +1 if filter is active (filter status line)
             // Plus 2 for borders
             let base_content_lines: u16 = 2; // Context line + Flux9s/Total line
-            let filter_line: u16 = if !self.flux_filter().is_empty()
-                || self.view_state.selected_resource_type.is_some()
-            {
-                1
-            } else {
-                0
-            };
+            let filter_line: u16 =
+                if !self.flux_filter().is_empty() || !self.view_state.kind_filter.is_all() {
+                    1
+                } else {
+                    0
+                };
 
             let resource_type_lines: u16 = {
                 let counts = self.state().count_by_type();
@@ -212,7 +211,7 @@ impl App {
                 &self.context,
                 &self.namespace,
                 self.flux_filter(),
-                &self.view_state.selected_resource_type,
+                &self.view_state.kind_filter,
                 resources.len(),
                 health_percentage,
                 health_filter_status,
@@ -246,12 +245,7 @@ impl App {
     /// This calculates health for resources matching the current name/resource type filters,
     /// but before applying the health filter itself.
     pub(crate) fn calculate_health_percentage(&self) -> f64 {
-        let mut filtered_resources =
-            if let Some(ref resource_type) = self.view_state.selected_resource_type {
-                self.state.by_type(resource_type)
-            } else {
-                self.state.all()
-            };
+        let mut filtered_resources = self.kind_filtered_resources();
 
         // Apply namespace filter if set
         if let Some(namespace) = self.namespace() {
@@ -324,6 +318,7 @@ impl App {
                     area,
                     &self.theme,
                     &self.namespace_hotkeys.clone(),
+                    &self.view_help(),
                     &mut self.ui_state.help_scroll,
                 );
             } else if let Some(ref mut submenu) = self.view_state.submenu_state {
@@ -346,6 +341,7 @@ impl App {
                 area,
                 &self.theme,
                 &self.namespace_hotkeys.clone(),
+                &self.view_help(),
                 &mut self.ui_state.help_scroll,
             );
         } else {
@@ -359,7 +355,7 @@ impl App {
                         &resources,
                         self.view_state.selected_index,
                         &mut self.view_state.scroll_offset,
-                        &self.view_state.selected_resource_type,
+                        &self.view_state.kind_filter,
                         &self.resource_objects,
                         &self.theme,
                         self.config.ui.no_icons,
@@ -463,7 +459,7 @@ impl App {
                         &resources,
                         self.view_state.selected_index,
                         &mut self.view_state.scroll_offset,
-                        &self.view_state.selected_resource_type,
+                        &self.view_state.kind_filter,
                         &self.resource_objects,
                         &self.theme,
                         self.config.ui.no_icons,
@@ -629,6 +625,7 @@ impl App {
                         area,
                         &self.theme,
                         &self.namespace_hotkeys.clone(),
+                        &self.view_help(),
                         &mut self.ui_state.help_scroll,
                     );
                 }

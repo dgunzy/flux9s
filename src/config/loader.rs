@@ -245,6 +245,29 @@ mod tests {
     }
 
     #[test]
+    fn cluster_views_add_to_and_override_root_views_by_name() {
+        use crate::config::ViewConfig;
+        let view = |kinds: &[&str]| ViewConfig {
+            kinds: kinds.iter().map(|k| k.to_string()).collect(),
+        };
+        let root = Config {
+            views: [("apps".to_string(), view(&["ks", "hr"]))].into(),
+            ..Config::default()
+        };
+        let cluster = Config {
+            views: [
+                ("apps".to_string(), view(&["hr"])),
+                ("sources".to_string(), view(&["gitrepo", "oci"])),
+            ]
+            .into(),
+            ..Config::default()
+        };
+        let merged = merge_config(root, cluster);
+        assert_eq!(merged.views["apps"].kinds, ["hr"]);
+        assert_eq!(merged.views["sources"].kinds, ["gitrepo", "oci"]);
+    }
+
+    #[test]
     fn test_load_defaults() {
         let config = ConfigLoader::load_defaults();
         assert!(config.read_only);

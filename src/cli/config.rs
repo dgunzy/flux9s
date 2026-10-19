@@ -101,6 +101,24 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
             // Set the value
             crate::config::set_config_value(&mut config, &key, &value)
                 .with_context(|| format!("Failed to set {} = {}", key, value))?;
+            // A view that hides a name (or can't open) is saved, with a warning.
+            if key.starts_with("views.") {
+                print_view_problems(&config);
+            }
+            // A kind flux9s doesn't know is kept (it may be Flux-adjacent,
+            // known only at runtime) — but say so, it may be a typo.
+            if key == "defaultResourceFilter"
+                && !config.views.keys().any(|v| v.eq_ignore_ascii_case(&value))
+                && let Ok((_, unknown)) =
+                    crate::models::kind_filter::KindFilter::parse_allowing_unknown(&value)
+            {
+                for kind in unknown {
+                    eprintln!(
+                        "warning: '{kind}' isn't a Flux kind flux9s knows — fine if it's a \
+                         Flux-adjacent kind (discoverFluxResources), else a typo"
+                    );
+                }
+            }
 
             // Save config
             if let Some(cluster_name) = cluster {
@@ -132,8 +150,11 @@ pub async fn handle_config_command(cmd: ConfigSubcommand) -> Result<()> {
             // Validate by actually loading and parsing the config
             // This will catch YAML syntax errors, invalid types, etc.
             match ConfigLoader::validate(cluster, context) {
-                Ok(_) => {
+                Ok(()) => {
                     println!("flux9s configuration is valid");
+                    if let Ok(config) = ConfigLoader::load(cluster, context) {
+                        print_view_problems(&config);
+                    }
                 }
                 Err(e) => {
                     eprintln!("flux9s configuration validation failed: {}", e);
@@ -358,6 +379,14 @@ fn scalar_str(value: &serde_json::Value) -> String {
     }
 }
 
+/// Warnings for `views` (#302): names that hide a command or kind, and
+/// kinds that can't be shown. Printed, not fatal — the view still saves.
+fn print_view_problems(config: &Config) {
+    for problem in crate::tui::app::view_problems(&config.views) {
+        eprintln!("warning: {problem}");
+    }
+}
+
 /// The configuration reference appended to `config list`. Every schema field
 /// must be mentioned here — enforced by `reference_docs_cover_every_field`.
 fn reference_text() -> String {
@@ -369,7 +398,8 @@ fn reference_text() -> String {
         "discoverFluxResources - Discover CRDs labeled app.kubernetes.io/part-of=flux as view-only kinds; needs nativeResources (default: false)",
         "nativeResources - Preview: browse native Kubernetes resources and CRDs with :<kind> (try it per session with :native) (default: false)",
         "metricsSource - Pod usage source: auto (kubelet via nodes/proxy, else metrics-server, else none), kubelet, metrics-server, none (default: auto)",
-        "defaultResourceFilter - Resource type filter at startup, e.g. \"Kustomization\" (default: none, shows all)",
+        "defaultResourceFilter - Flux list filter at startup: a kind (\"ks\"), kinds (\"ks,hr\"), or a view name (default: none, shows all)",
+        "views - Named Flux list views: views.<name>.kinds lists Flux kinds, :<name> opens it, e.g. flux9s config set views.apps ks,hr (default: none)",
         "connectTimeoutSeconds - Startup Kubernetes API health-check timeout in seconds (default: 10)",
         "editor - Editor command for resource editing; falls back through $VISUAL, $EDITOR, vi (default: none)",
         "ui.enableMouse - Enable mouse support (default: false)",

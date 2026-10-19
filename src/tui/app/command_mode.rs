@@ -4,6 +4,7 @@ use super::core::App;
 use super::state::{HealthFilter, TraceRequest, TraceResponse, View};
 use crate::kube::objects::ObjectRef;
 use crate::models::FluxResourceKind;
+use crate::models::kind_filter::KindFilter;
 use crate::tui::commands;
 use crate::watcher::ResourceKey;
 
@@ -122,6 +123,16 @@ pub(super) const SPECIAL_COMMAND_HELP: &[(&str, &str)] = &[
     (":q", "Quit application"),
 ];
 
+/// Whether `name` is a flux9s `:` command — the special ones or any entry
+/// of [`COMMAND_TABLE`]. A view named like one could never be opened (#302).
+pub(crate) fn is_builtin_command(name: &str) -> bool {
+    let name = name.to_lowercase();
+    commands::is_help_command(&name)
+        || commands::is_quit_command(&name)
+        || commands::is_readonly_command(&name)
+        || COMMAND_TABLE.iter().any(|spec| (spec.matches)(&name))
+}
+
 /// Every `:` command's help line: the special ones around the table's.
 pub(crate) fn command_help() -> Vec<(&'static str, &'static str)> {
     let (head, tail) = SPECIAL_COMMAND_HELP.split_at(2);
@@ -226,20 +237,24 @@ impl App {
             }
         }
 
+        // User views (#302) come before kinds, so a view can stand in for a
+        // kind name (startup warns when one does); then kind sets (`ks,hr`).
+        if let Some((name, view)) = self.view_named(&cmd_lower) {
+            self.open_view(&name, &view);
+            return None;
+        }
+        if cmd_lower.contains(',') {
+            self.cmd_kind_set(&cmd_lower);
+            return None;
+        }
+
         // Fallback: a kind (#267). Flux and Flux-adjacent kinds filter the
         // Flux list as before; any other served kind opens a kind list.
         match crate::models::kinds::resolve(&cmd_lower) {
             Some(spec) if spec.family == crate::models::kinds::Family::Native => {
                 self.open_kind_list(spec);
             }
-            Some(spec) => {
-                if self.view_state.current_view == View::KindList {
-                    self.go_home_flux();
-                }
-                self.view_state.selected_resource_type = Some(spec.names.kind);
-                self.reset_list_position();
-                self.invalidate_layout_cache(); // Resource type filter affects header display
-            }
+            Some(spec) => self.show_kinds(KindFilter::kind(spec.names.kind)),
             // Discovery still running (just connected): hold the command and
             // open it when the kinds land, instead of calling it unknown.
             None if !cmd.is_empty()
@@ -369,11 +384,9 @@ impl App {
         // A discovered kind can't stay selected once it's gone.
         if self
             .view_state
-            .selected_resource_type
-            .as_ref()
-            .is_some_and(|selected| discovered.contains(selected))
+            .kind_filter
+            .retain(|kind| !discovered.iter().any(|gone| gone == kind))
         {
-            self.view_state.selected_resource_type = None;
             self.reset_list_position();
         }
         self.notify_resource_types_changed();
@@ -749,8 +762,8 @@ impl App {
         ) {
             self.go_home_flux();
         }
-        if self.view_state.selected_resource_type.is_some() {
-            self.view_state.selected_resource_type = None;
+        if !self.view_state.kind_filter.is_all() {
+            self.view_state.kind_filter = KindFilter::all();
             self.invalidate_layout_cache(); // Resource type filter affects header display
         }
         if self.view_state.health_filter != HealthFilter::All {
