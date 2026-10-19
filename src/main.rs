@@ -30,6 +30,12 @@ struct Args {
     #[arg(long)]
     check: bool,
 
+    /// Run a `:` command once connected, k9s-style: a kind (`-c hr`), kinds
+    /// (`-c ks,hr`), a view from your config (`-c apps`), or any command
+    /// (`-c pulse`, `-c "ns apps"`)
+    #[arg(short = 'c', long = "command", value_name = "COMMAND")]
+    start_command: Option<String>,
+
     /// Configuration subcommand
     #[command(subcommand)]
     command: Option<Command>,
@@ -166,6 +172,7 @@ async fn main() -> Result<()> {
         args.kubeconfig.as_deref(),
         config_warning,
         log_file,
+        args.start_command,
     )
     .await?;
 

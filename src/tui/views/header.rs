@@ -21,7 +21,7 @@ pub fn render_header(
     context: &str,
     namespace: &Option<String>,
     filter: &str,
-    selected_resource_type: &Option<String>,
+    kind_filter: &crate::models::kind_filter::KindFilter,
     filtered_count: usize,       // Count of resources after filtering
     health_percentage: f64,      // Health percentage (0-100)
     health_filter: Option<&str>, // Health filter status ("healthy", "unhealthy", "suspended", or None)
@@ -63,8 +63,12 @@ pub fn render_header(
         filter_parts.push(format!("name='{}'", filter));
     }
 
-    if let Some(resource_type) = selected_resource_type {
-        filter_parts.push(format!("type={}", resource_type));
+    match kind_filter.view() {
+        Some(view) => filter_parts.push(format!("view={view}")),
+        None if !kind_filter.is_all() => {
+            filter_parts.push(format!("type={}", kind_filter.kinds().join(",")))
+        }
+        None => {}
     }
 
     if let Some(health_filter) = health_filter {
@@ -75,9 +79,16 @@ pub fn render_header(
     let available_width = left_area.width.saturating_sub(12); // "Resources: " = 11 chars + 1 padding
 
     // When filtering by type, show only that type's count; otherwise show all types
-    let type_summary_parts: Vec<String> = if let Some(resource_type) = selected_resource_type {
+    let type_summary_parts: Vec<String> = if let Some(resource_type) = kind_filter.single() {
         // Show only the filtered resource type with its filtered count
         vec![format!("{}:{}", resource_type, filtered_count)]
+    } else if !kind_filter.is_all() {
+        // Several kinds: each selected kind with its count, in the order given
+        kind_filter
+            .kinds()
+            .iter()
+            .map(|kind| format!("{}:{}", kind, counts.get(kind).copied().unwrap_or(0)))
+            .collect()
     } else {
         // Show all resource types with their counts
         type_counts
@@ -216,7 +227,7 @@ pub fn render_header(
         let filter_display = filter_parts.join(" + ");
         let clear_hint = if !filter.is_empty() {
             "Clear: /"
-        } else if selected_resource_type.is_some() || health_filter.is_some() {
+        } else if !kind_filter.is_all() || health_filter.is_some() {
             "Clear: :all"
         } else {
             ""
@@ -449,6 +460,13 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     fn render(browsing: Option<&str>) -> String {
+        render_with(browsing, &crate::models::kind_filter::KindFilter::all())
+    }
+
+    fn render_with(
+        browsing: Option<&str>,
+        kind_filter: &crate::models::kind_filter::KindFilter,
+    ) -> String {
         let mut terminal = Terminal::new(TestBackend::new(160, 8)).unwrap();
         terminal
             .draw(|f| {
@@ -460,7 +478,7 @@ mod tests {
                     "ctx",
                     &Some("apps".to_string()),
                     "",
-                    &None,
+                    kind_filter,
                     0,
                     100.0,
                     None,
@@ -487,6 +505,19 @@ mod tests {
         assert!(out.contains(":flux to return"));
         assert!(out.contains("Namespace: apps"), "context line unchanged");
         assert!(!out.contains("Total Resources"));
+    }
+
+    #[test]
+    fn a_kind_set_or_view_shows_in_the_filter_line() {
+        use crate::models::kind_filter::KindFilter;
+        let kinds = KindFilter::parse("ks,hr").unwrap();
+        let out = render_with(None, &kinds);
+        assert!(out.contains("type=Kustomization,HelmRelease"), "{out}");
+        assert!(out.contains("Kustomization:0") && out.contains("HelmRelease:0"));
+        assert!(out.contains("Clear: :all"));
+
+        let view = render_with(None, &kinds.named("apps"));
+        assert!(view.contains("view=apps"), "{view}");
     }
 
     #[test]

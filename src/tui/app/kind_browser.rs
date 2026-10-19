@@ -261,6 +261,8 @@ impl App {
     /// Skipped if the user has since moved to a view it would yank them out
     /// of (only list views pick it up).
     pub(crate) fn on_kind_discovery_complete(&mut self) {
+        // Only now are the cluster's kind names known (#302).
+        self.warn_views_shadowing_discovered_kinds();
         let Some(token) = self.pending_kind_command.take() else {
             return;
         };

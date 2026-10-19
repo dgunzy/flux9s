@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Traces that end at Argo CD, Helm, another manager, or nothing say so
 - `:trace <kind>/<name> -n <namespace>`; watching all namespaces, `:trace`
   without `-n` searches them (one match is traced, several are listed)
+- Several Flux kinds in one list: `:ks,hr` (#302)
+- Views: name a set of Flux kinds in the config (`views.apps.kinds: [ks, hr]`,
+  or `flux9s config set views.apps ks,hr`) and open it with `:apps`. Views
+  complete with `Tab` and show in help; flux9s warns when a view hides a
+  command or kind name, at startup, after kind discovery, and in
+  `flux9s config validate`
+- `flux9s -c <command>` runs a `:` command once connected, like `k9s -c`
+  (`-c ks,hr`, `-c apps`, `-c pulse`)
+- `defaultResourceFilter` takes several kinds (`ks,hr`) or a view name
 
 ### Changed
 - Trace follows controller owner references only — the same chain the

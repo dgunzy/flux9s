@@ -255,8 +255,9 @@ pub enum HealthFilter {
 pub struct ViewState {
     /// Current view being displayed
     pub current_view: View,
-    /// Selected resource type filter (None = unified view)
-    pub selected_resource_type: Option<String>,
+    /// Which Flux kinds the Flux list shows: all, one (`:ks`), several
+    /// (`:ks,hr`), or a named view (#302).
+    pub kind_filter: crate::models::kind_filter::KindFilter,
     /// Text filter for resource list
     pub filter: String,
     /// Whether filter mode is active (user is typing)
@@ -327,7 +328,7 @@ impl Default for ViewState {
     fn default() -> Self {
         Self {
             current_view: View::ResourceList,
-            selected_resource_type: None,
+            kind_filter: crate::models::kind_filter::KindFilter::all(),
             filter: String::new(),
             filter_mode: false,
             health_filter: HealthFilter::All,

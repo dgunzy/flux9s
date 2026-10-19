@@ -421,9 +421,36 @@ impl App {
             return;
         }
 
-        // Use centralized command registry to find matches
-        // This prioritizes CRD commands over app commands
-        let matches = crate::tui::commands::find_matching_commands(&cmd_lower);
+        // A kind set (`ks,he`, #302): complete its last kind.
+        if let Some((done, last)) = cmd_lower.rsplit_once(',') {
+            // Nothing typed after the comma yet: no kind to pick.
+            if last.trim().is_empty() {
+                return;
+            }
+            let kind = crate::tui::commands::find_matching_commands(last.trim())
+                .into_iter()
+                .find(|candidate| crate::models::kind_filter::KindFilter::parse(candidate).is_ok());
+            if let Some(kind) = kind {
+                self.ui_state.command_buffer = format!("{done},{kind}");
+            }
+            return;
+        }
+
+        // User views first (#302), then the centralized command registry
+        // (CRD commands before app commands).
+        let mut matches: Vec<String> = self
+            .config
+            .views
+            .keys()
+            .map(|view| view.to_lowercase())
+            .filter(|view| view.starts_with(&cmd_lower))
+            .collect();
+        matches.sort();
+        for command in crate::tui::commands::find_matching_commands(&cmd_lower) {
+            if !matches.contains(&command) {
+                matches.push(command);
+            }
+        }
 
         if matches.is_empty() {
             return;

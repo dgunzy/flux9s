@@ -30,7 +30,8 @@ flux9s config path
 | `readOnly` | bool | `true` | Disable all write operations |
 | `defaultNamespace` | string | `flux-system` | Starting namespace (`all` or `-A` = all namespaces) |
 | `defaultControllerNamespace` | string | `flux-system` | Namespace where Flux controllers run |
-| `defaultResourceFilter` | string | *(none)* | Resource type shown at startup (e.g., `Kustomization`) |
+| `defaultResourceFilter` | string | *(none)* | Flux list filter at startup: a kind (`ks`), several (`ks,hr`), or a [view](#views) name |
+| `views` | map | *(empty)* | Named Flux list views: `views.<name>.kinds` lists Flux kinds, `:<name>` opens it ([details](#views)) |
 | `connectTimeoutSeconds` | integer | `10` | Startup Kubernetes API health-check timeout in seconds |
 | `discoverFluxResources` | boolean | `false` | Opt-in dynamic discovery of Flux-adjacent CRDs (see below); needs `nativeResources: true` |
 | `nativeResources` | boolean | `false` | **Preview.** Browse native Kubernetes resources and CRDs with `:<kind>` ([details](/user-guide/native-resources/#browsing-any-kind)); off keeps flux9s Flux-only — no API discovery or extra watches, including `discoverFluxResources`. Try it per session with `:native` |
@@ -94,7 +95,10 @@ flux9s config set defaultControllerNamespace flux-system
 
 ### Default Resource Filter
 
-Set the resource type that is pre-selected when flux9s starts. Without this, flux9s starts in the unified view showing all resource types.
+Set what the Flux list shows when flux9s starts: one kind, several, or a
+[view](#views). Without this, flux9s starts showing every kind. For a
+one-off start, use [`flux9s -c`](/user-guide/command-line/#start-command)
+instead.
 
 ```bash
 # Always start filtered to Kustomizations
@@ -103,11 +107,17 @@ flux9s config set defaultResourceFilter Kustomization
 # Use a short alias — saved as the canonical display name
 flux9s config set defaultResourceFilter ks
 
+# Kustomizations and HelmReleases together
+flux9s config set defaultResourceFilter ks,hr
+
+# A view from your config (it follows edits to the view)
+flux9s config set defaultResourceFilter apps
+
 # Clear the filter (return to showing all types at startup)
 flux9s config set defaultResourceFilter ""
 ```
 
-Accepted values are any resource type name or alias:
+Accepted kinds are any Flux resource type name or alias:
 
 | Resource Type | Accepted aliases |
 |---|---|
@@ -127,7 +137,41 @@ Accepted values are any resource type name or alias:
 | `FluxReport` | `fr`, `fluxreport`, `fluxreports` |
 | `ResourceSet` | `rset`, `resourceset`, `resourcesets` |
 
-You can also change the filter interactively during a session by typing `:ks`, `:hr`, etc. in the TUI, or `:all` to clear it.
+You can also change the filter interactively during a session by typing `:ks`, `:hr`, `:ks,hr`, etc. in the TUI, or `:all` to clear it.
+
+### Views {#views}
+
+A view names a set of Flux kinds you look at together. `:<name>` opens it,
+`Tab` completes it, and `?` lists your views.
+
+```yaml
+views:
+  apps:
+    kinds: [ks, hr]          # :apps — Kustomizations and HelmReleases
+  sources:
+    kinds: [gitrepo, oci, helmrepository]
+```
+
+Or from the command line:
+
+```bash
+flux9s config set views.apps ks,hr
+flux9s config set views.apps ""      # remove it
+```
+
+- **Kinds** are Flux kinds by name, plural, or alias — the same names as
+  `:ks`. [Flux-adjacent kinds](#discovering-flux-adjacent-resource-kinds)
+  work once flux9s has discovered them; until then (and in
+  `flux9s config`) they're noted as unknown, in case they're a typo.
+  Kubernetes kinds (`deploy`, `po`) can't be mixed in yet; a view that lists
+  one says so when opened.
+- **Names:** flux9s commands come first, then views, then kinds. A view
+  can't be named like a command (`:events`, `:pulse` — it would never open).
+  A view may reuse a kind name (`ks`, `po`) and then stands in for it; the
+  kind's other names still work. flux9s warns about both when it starts,
+  after it discovers the cluster's kinds, and in `flux9s config validate`.
+- **Per cluster:** views in a [cluster config](#cluster-and-context-specific-configuration)
+  add to the root's, and replace a root view of the same name.
 
 ---
 
@@ -397,7 +441,11 @@ Cluster configs are stored under `~/.local/share/flux9s/clusters/<cluster-name>/
 readOnly: false
 defaultNamespace: flux-system
 defaultControllerNamespace: flux-system
-defaultResourceFilter: Kustomization  # Start filtered to Kustomizations
+defaultResourceFilter: apps  # Start on the "apps" view (or a kind, or ks,hr)
+
+views:
+  apps:
+    kinds: [ks, hr]
 
 ui:
   enableMouse: false

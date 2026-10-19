@@ -15,6 +15,7 @@ pub mod theme_loader;
 pub use loader::ConfigLoader;
 pub use schema::Config;
 pub use schema::UiConfig;
+pub use schema::ViewConfig;
 #[cfg(feature = "tui")]
 pub use theme_loader::ThemeLoader;
 
@@ -159,22 +160,57 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
             config.namespace_hotkeys = hotkeys;
         }
         "defaultResourceFilter" => {
-            if value.is_empty() {
-                config.default_resource_filter = None;
+            config.default_resource_filter = if value.is_empty() {
+                None
+            } else if let Some(view) = config.views.keys().find(|v| v.eq_ignore_ascii_case(value)) {
+                // A view name stays a view name (it follows edits to the
+                // view), as configured — views match case-insensitively.
+                Some(view.clone())
             } else {
-                let display_name =
-                    crate::watcher::get_display_name_for_command(value).ok_or_else(|| {
-                        let valid: Vec<_> = crate::watcher::RESOURCE_REGISTRY
-                            .iter()
-                            .map(|e| e.display_name)
-                            .collect();
-                        anyhow::anyhow!(
-                            "Unknown resource type '{}'. Valid types: {}",
-                            value,
-                            valid.join(", ")
-                        )
-                    })?;
-                config.default_resource_filter = Some(display_name.to_string());
+                // One kind or several (`ks,hr`), stored as display names. A
+                // kind only known at runtime (Flux-adjacent) is kept as given.
+                let (filter, _) = crate::models::kind_filter::KindFilter::parse_allowing_unknown(
+                    value,
+                )
+                .map_err(|e| {
+                    let valid: Vec<_> = crate::watcher::RESOURCE_REGISTRY
+                        .iter()
+                        .map(|e| e.display_name)
+                        .collect();
+                    anyhow::anyhow!(
+                        "{e}. Give Flux kinds (e.g. ks,hr) or a view name. Valid kinds: {}",
+                        valid.join(", ")
+                    )
+                })?;
+                Some(filter.kinds().join(","))
+            };
+        }
+        // `views.<name>` (or `views.<name>.kinds`): the view's kinds as a
+        // comma list; empty removes the view.
+        _ if key.starts_with("views.") => {
+            let name = key.trim_start_matches("views.").trim_end_matches(".kinds");
+            if name.is_empty() || name.contains('.') {
+                return Err(anyhow::anyhow!(
+                    "Use views.<name> (e.g. flux9s config set views.apps ks,hr)"
+                ));
+            }
+            if value.is_empty() {
+                config.views.remove(name);
+            } else {
+                // Validate; store the kinds as written (aliases read better).
+                // Unknown kinds may be Flux-adjacent (known at runtime); the
+                // CLI warns about them through `view_problems`.
+                crate::models::kind_filter::KindFilter::parse_allowing_unknown(value)
+                    .map_err(|e| anyhow::anyhow!("views.{name}: {e}"))?;
+                let kinds = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                config
+                    .views
+                    .insert(name.to_string(), schema::ViewConfig { kinds });
             }
         }
         "connectTimeoutSeconds" => {
@@ -216,6 +252,50 @@ mod tests {
             get_config_value(&config, "connectTimeoutSeconds").unwrap(),
             "15"
         );
+    }
+
+    #[test]
+    fn views_and_kind_sets_set_from_the_cli() {
+        let mut config = schema::Config::default();
+        set_config_value(&mut config, "views.apps", "ks, hr").unwrap();
+        assert_eq!(config.views["apps"].kinds, ["ks", "hr"]);
+        assert!(
+            get_config_value(&config, "views.apps")
+                .unwrap()
+                .contains("- ks")
+        );
+        set_config_value(&mut config, "views.apps.kinds", "hr").unwrap();
+        assert_eq!(config.views["apps"].kinds, ["hr"]);
+        let err = set_config_value(&mut config, "views.mixed", "ks,deploy").unwrap_err();
+        assert!(
+            err.to_string().contains("'deploy' is a Kubernetes kind"),
+            "{err}"
+        );
+
+        // defaultResourceFilter: kinds stored as display names, views by name.
+        set_config_value(&mut config, "defaultResourceFilter", "ks,hr").unwrap();
+        assert_eq!(
+            config.default_resource_filter.as_deref(),
+            Some("Kustomization,HelmRelease")
+        );
+        set_config_value(&mut config, "defaultResourceFilter", "Apps").unwrap();
+        assert_eq!(
+            config.default_resource_filter.as_deref(),
+            Some("apps"),
+            "views match case-insensitively, stored as configured"
+        );
+        // A kind flux9s only learns at runtime (Flux-adjacent) is kept.
+        set_config_value(&mut config, "defaultResourceFilter", "ks,RuntimeOnlyKind").unwrap();
+        assert_eq!(
+            config.default_resource_filter.as_deref(),
+            Some("Kustomization,RuntimeOnlyKind")
+        );
+        set_config_value(&mut config, "views.extra", "ks,RuntimeOnlyKind").unwrap();
+        assert!(set_config_value(&mut config, "defaultResourceFilter", "ks,deploy").is_err());
+
+        set_config_value(&mut config, "views.apps", "").unwrap();
+        assert!(!config.views.contains_key("apps"));
+        assert!(set_config_value(&mut config, "views.", "ks").is_err());
     }
 
     #[test]

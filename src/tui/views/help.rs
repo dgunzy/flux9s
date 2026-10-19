@@ -18,6 +18,7 @@ pub fn render_help(
     area: Rect,
     theme: &Theme,
     namespace_hotkeys: &[String],
+    views: &[(String, String)],
     scroll: &mut usize,
 ) {
     // Create inner area with padding for the border
@@ -49,6 +50,12 @@ pub fn render_help(
         ("(menus)", "Type to filter, PgUp/PgDn to page"),
     ]);
     general_items.extend(crate::tui::app::command_mode::command_help());
+    // User-defined views (#302), named like commands: `:apps  ks, hr`.
+    general_items.extend(
+        views
+            .iter()
+            .map(|(name, kinds)| (name.as_str(), kinds.as_str())),
+    );
     // Discovered kinds (#197) get a dynamic entry only when discovery has
     // actually registered something — no noise for normal users.
     let discovered = crate::models::extra_kinds::global().kind_names();

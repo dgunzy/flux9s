@@ -113,6 +113,7 @@ pub async fn run_tui_with_async_init(
     kubeconfig_path: Option<&std::path::Path>,
     config_warning: Option<String>,
     log_file: Option<std::path::PathBuf>,
+    mut startup_command: Option<String>,
 ) -> Result<()> {
     use crate::kube::health::ConnectionError;
     tracing::debug!("Initializing TUI with async Kubernetes setup");
@@ -344,16 +345,48 @@ pub async fn run_tui_with_async_init(
                                 );
                             }
 
+                            // Startup warnings, most important first: the
+                            // config file, the default filter, then views
+                            // (#302). All are logged; the first is shown, so
+                            // one can't overwrite another.
+                            let mut warnings: Vec<String> =
+                                config_warning.iter().cloned().collect();
                             if let Some(ref filter) = config.default_resource_filter {
-                                app.view_state.selected_resource_type = Some(filter.clone());
-                                tracing::debug!("Applied default resource filter: {}", filter);
+                                match app.apply_default_filter(filter) {
+                                    Ok(()) => tracing::debug!(
+                                        "Applied default resource filter: {}",
+                                        filter
+                                    ),
+                                    Err(warning) => warnings.push(warning),
+                                }
                             }
-
-                            if let Some(ref warning) = config_warning {
-                                app.set_status_message((warning.clone(), true));
-                            }
+                            warnings.extend(
+                                crate::tui::app::view_problems(&config.views)
+                                    .into_iter()
+                                    .map(|problem| format!("Config: {problem}")),
+                            );
 
                             app.set_connected();
+
+                            for warning in &warnings {
+                                tracing::warn!("{}", warning);
+                            }
+                            if let Some(first) = warnings.first() {
+                                let more = match warnings.len() {
+                                    1 => String::new(),
+                                    n => format!(" (+{} more in the log)", n - 1),
+                                };
+                                app.set_status_message((format!("{first}{more}"), true));
+                            }
+
+                            // `-c` / `--command`: after discovery starts, so a
+                            // Kubernetes kind waits for it like a typed one.
+                            // `-c q` quits, as a typed `:q` would.
+                            if let Some(command) = startup_command.take()
+                                && app.run_startup_command(&command)
+                            {
+                                break;
+                            }
                             kube_initialized = true;
                         }
                         Err(conn_err) => {

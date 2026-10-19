@@ -5,6 +5,7 @@ use super::events::native_edit_message;
 use super::state::{Confirmation, PendingOperation, TraceRequest, View};
 use crate::config::{Config, UiConfig};
 use crate::kube::objects::ObjectRef;
+use crate::models::kind_filter::KindFilter;
 use crate::tui::Theme;
 use crate::tui::app::state::{HealthFilter, NavEntry};
 use crate::watcher::ResourceKey;
@@ -53,6 +54,7 @@ fn create_test_app(read_only: bool) -> App {
         cluster: HashMap::new(),
         favorites: vec![],
         default_resource_filter: None,
+        views: Default::default(),
         connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
         editor: None,
     };
@@ -304,12 +306,12 @@ fn table_command_suspended_filters_to_suspended_resources() {
 #[test]
 fn table_command_all_clears_filters() {
     let mut app = create_test_app(false);
-    app.view_state.selected_resource_type = Some("Kustomization".to_string());
+    app.view_state.kind_filter = KindFilter::kind("Kustomization");
     app.view_state.health_filter = HealthFilter::Unhealthy;
     app.ui_state.command_buffer = "all".to_string();
 
     assert_eq!(app.execute_command(), None);
-    assert_eq!(app.view_state.selected_resource_type, None);
+    assert!(app.view_state.kind_filter.is_all());
     assert_eq!(app.view_state.health_filter, HealthFilter::All);
 }
 
@@ -670,7 +672,7 @@ fn all_command_returns_from_event_list_and_clears_filters() {
     let mut app = create_test_app(false);
     add_kube_event(&mut app, "uid-1", "Kustomization", "my-kustomization");
     app.view_state.current_view = View::EventList;
-    app.view_state.selected_resource_type = Some("HelmChart".to_string());
+    app.view_state.kind_filter = KindFilter::kind("HelmChart");
     app.view_state.health_filter = HealthFilter::Unhealthy;
 
     app.ui_state.command_buffer = "all".to_string();
@@ -678,7 +680,7 @@ fn all_command_returns_from_event_list_and_clears_filters() {
 
     assert_eq!(result, None);
     assert_eq!(app.view_state.current_view, View::ResourceList);
-    assert_eq!(app.view_state.selected_resource_type, None);
+    assert!(app.view_state.kind_filter.is_all());
     assert_eq!(app.view_state.health_filter, HealthFilter::All);
     assert!(
         app.kube_events.is_empty(),
@@ -1519,10 +1521,7 @@ fn flux_aliases_still_filter_the_flux_list() {
     app.ui_state.command_buffer = "ks".to_string();
     app.execute_command();
     assert_eq!(app.view_state.current_view, View::ResourceList);
-    assert_eq!(
-        app.view_state.selected_resource_type.as_deref(),
-        Some("Kustomization")
-    );
+    assert_eq!(app.view_state.kind_filter.single(), Some("Kustomization"));
 }
 
 #[test]
@@ -2615,7 +2614,7 @@ fn access_notice_is_contextual_and_respects_config() {
     app.watch_forbidden("HelmRelease".to_string());
 
     // Unified list (no selected type) -> summary mentioning the kind.
-    app.view_state.selected_resource_type = None;
+    app.view_state.kind_filter = KindFilter::all();
     let notice = app.access_notice().expect("unified notice");
     assert!(
         notice.contains("HelmRelease"),
@@ -2623,15 +2622,15 @@ fn access_notice_is_contextual_and_respects_config() {
     );
 
     // Selected the restricted kind -> specific notice.
-    app.view_state.selected_resource_type = Some("HelmRelease".to_string());
+    app.view_state.kind_filter = KindFilter::kind("HelmRelease");
     assert!(app.access_notice().unwrap().contains("HelmRelease"));
 
     // Selected a DIFFERENT, non-restricted kind -> no false alarm.
-    app.view_state.selected_resource_type = Some("Kustomization".to_string());
+    app.view_state.kind_filter = KindFilter::kind("Kustomization");
     assert_eq!(app.access_notice(), None);
 
     // Config off -> silent, even when restricted and viewing the kind.
-    app.view_state.selected_resource_type = Some("HelmRelease".to_string());
+    app.view_state.kind_filter = KindFilter::kind("HelmRelease");
     app.config.ui.rbac_warnings = false;
     assert_eq!(app.access_notice(), None);
 }
@@ -2787,7 +2786,7 @@ fn discover_command_toggles_discovery_and_purges_kinds() {
             reconciliation_history: vec![],
         },
     );
-    app.view_state.selected_resource_type = Some("DiscoverToggleTest".to_string());
+    app.view_state.kind_filter = KindFilter::kind("DiscoverToggleTest");
 
     app.ui_state.command_buffer = "discovery".to_string();
     app.execute_command();
@@ -2801,8 +2800,8 @@ fn discover_command_toggles_discovery_and_purges_kinds() {
         app.state.get(&key).is_none(),
         "discovered resources are purged from the list"
     );
-    assert_eq!(
-        app.view_state.selected_resource_type, None,
+    assert!(
+        app.view_state.kind_filter.is_all(),
         "a filter on a gone kind is cleared"
     );
 }
@@ -2821,7 +2820,7 @@ fn discovered_kind_commands_resolve_only_when_registered() {
     // Zero impact: unregistered kind is an unknown command
     app.ui_state.command_buffer = "zephyrtest".to_string();
     app.execute_command();
-    assert!(app.view_state.selected_resource_type.is_none());
+    assert!(app.view_state.kind_filter.is_all());
     assert!(
         app.ui_state
             .status_message
@@ -2839,11 +2838,11 @@ fn discovered_kind_commands_resolve_only_when_registered() {
 
     // Kind, plural, and short name now resolve to the type filter
     for token in ["zephyrtest", "zephyrtests", "zt9"] {
-        app.view_state.selected_resource_type = None;
+        app.view_state.kind_filter = KindFilter::all();
         app.ui_state.command_buffer = token.to_string();
         app.execute_command();
         assert_eq!(
-            app.view_state.selected_resource_type.as_deref(),
+            app.view_state.kind_filter.single(),
             Some("ZephyrTest"),
             "{token} should resolve"
         );
@@ -3189,7 +3188,9 @@ fn help_overlay_scrolls_to_reach_everything() {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 15)).unwrap();
         terminal
-            .draw(|f| crate::tui::views::render_help(f, f.area(), &Theme::default(), &[], scroll))
+            .draw(|f| {
+                crate::tui::views::render_help(f, f.area(), &Theme::default(), &[], &[], scroll)
+            })
             .unwrap();
         terminal
             .backend()
@@ -3943,4 +3944,226 @@ fn native_yaml_resolves_its_manager_in_the_background() {
     assert!(!has_hint(&app, "m"), "a late answer for another object");
     app.set_manager_resolution(resolved("u1"));
     assert!(has_hint(&app, "m"));
+}
+
+// --- #302: kind sets, user views, and -c --------------------------------
+
+fn with_views(app: &mut App, views: &[(&str, &[&str])]) {
+    app.config.views = views
+        .iter()
+        .map(|(name, kinds)| {
+            (
+                name.to_string(),
+                crate::config::ViewConfig {
+                    kinds: kinds.iter().map(|k| k.to_string()).collect(),
+                },
+            )
+        })
+        .collect();
+}
+
+fn add_flux(app: &mut App, kind: &str, name: &str) {
+    let mut resource = app
+        .state
+        .get("Kustomization:flux-system:my-kustomization")
+        .unwrap_or_else(|| panic!("add_resource first"));
+    resource.resource_type = kind.to_string();
+    resource.name = name.to_string();
+    app.state
+        .upsert(resource_key("flux-system", name, kind), resource);
+}
+
+fn run(app: &mut App, cmd: &str) {
+    app.ui_state.command_buffer = cmd.to_string();
+    app.execute_command();
+}
+
+fn listed_kinds(app: &App) -> Vec<String> {
+    let mut kinds: Vec<String> = app
+        .get_filtered_resources()
+        .into_iter()
+        .map(|r| r.resource_type)
+        .collect();
+    kinds.sort();
+    kinds.dedup();
+    kinds
+}
+
+#[test]
+fn a_kind_set_shows_several_flux_kinds_at_once() {
+    let mut app = create_test_app(false);
+    add_resource(&mut app);
+    add_flux(&mut app, "HelmRelease", "podinfo");
+    add_flux(&mut app, "GitRepository", "flux-system");
+
+    run(&mut app, "ks,hr");
+    assert_eq!(
+        app.view_state.kind_filter.kinds(),
+        ["Kustomization", "HelmRelease"]
+    );
+    assert_eq!(listed_kinds(&app), ["HelmRelease", "Kustomization"]);
+
+    // Spaces are fine; Kubernetes and unknown kinds are refused, and the
+    // list keeps what it showed.
+    run(&mut app, "hr, gitrepo");
+    assert_eq!(listed_kinds(&app), ["GitRepository", "HelmRelease"]);
+    run(&mut app, "ks,deploy");
+    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+    assert!(
+        is_error && message.contains("'deploy' is a Kubernetes kind"),
+        "{message}"
+    );
+    assert_eq!(listed_kinds(&app), ["GitRepository", "HelmRelease"]);
+
+    run(&mut app, "all");
+    assert!(app.view_state.kind_filter.is_all());
+}
+
+#[test]
+fn a_view_opens_its_kinds_and_wins_over_a_kind_name() {
+    let mut app = create_test_app(false);
+    add_resource(&mut app);
+    add_flux(&mut app, "HelmRelease", "podinfo");
+    with_views(&mut app, &[("Apps", &["ks", "hr"]), ("ks", &["hr"])]);
+
+    run(&mut app, "apps"); // case-insensitive
+    assert_eq!(app.view_state.kind_filter.view(), Some("Apps"));
+    assert_eq!(listed_kinds(&app), ["HelmRelease", "Kustomization"]);
+
+    // A view named like a kind alias stands in for it…
+    run(&mut app, "ks");
+    assert_eq!(app.view_state.kind_filter.single(), Some("HelmRelease"));
+    // …the kind's other names still work.
+    run(&mut app, "kustomization");
+    assert_eq!(app.view_state.kind_filter.single(), Some("Kustomization"));
+}
+
+#[test]
+fn flux9s_commands_win_over_views_and_broken_views_say_why() {
+    let mut app = create_test_app(false);
+    with_views(
+        &mut app,
+        &[("pulse", &["ks"]), ("mixed", &["ks", "deploy"])],
+    );
+    app.view_state.current_view = View::ResourceList;
+
+    run(&mut app, "pulse");
+    assert_eq!(app.view_state.current_view, View::Pulse, "the command wins");
+
+    app.view_state.current_view = View::ResourceList;
+    run(&mut app, "mixed");
+    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+    assert!(
+        is_error && message.starts_with("View 'mixed': 'deploy'"),
+        "{message}"
+    );
+    assert!(app.view_state.kind_filter.is_all());
+}
+
+#[test]
+fn startup_command_runs_like_a_typed_one() {
+    let mut app = create_test_app(false);
+    with_views(&mut app, &[("apps", &["ks", "hr"])]);
+    app.run_startup_command(":apps");
+    assert_eq!(app.view_state.kind_filter.view(), Some("apps"));
+    assert!(app.ui_state.command_buffer.is_empty() && !app.ui_state.command_mode);
+
+    app.run_startup_command("ks,hr");
+    assert_eq!(app.view_state.kind_filter.kinds().len(), 2);
+    app.run_startup_command("pulse");
+    assert_eq!(app.view_state.current_view, View::Pulse);
+}
+
+#[test]
+fn default_filter_takes_kinds_or_a_view() {
+    let mut app = create_test_app(false);
+    with_views(&mut app, &[("apps", &["ks", "hr"])]);
+    // As `config set` stores it, and as older configs have it.
+    app.apply_default_filter("Kustomization,HelmRelease")
+        .unwrap();
+    assert_eq!(app.view_state.kind_filter.kinds().len(), 2);
+    app.apply_default_filter("Kustomization").unwrap();
+    assert_eq!(app.view_state.kind_filter.single(), Some("Kustomization"));
+    app.apply_default_filter("apps").unwrap();
+    assert_eq!(app.view_state.kind_filter.view(), Some("apps"));
+    // A Flux-adjacent kind isn't known at connect yet: kept, as before #302.
+    app.apply_default_filter("RuntimeOnlyKind").unwrap();
+    assert_eq!(app.view_state.kind_filter.single(), Some("RuntimeOnlyKind"));
+    app.apply_default_filter("apps").unwrap();
+    let err = app.apply_default_filter("deploy").unwrap_err();
+    assert!(err.contains("'deploy' is a Kubernetes kind"), "{err}");
+    assert_eq!(app.view_state.kind_filter.view(), Some("apps"), "unchanged");
+}
+
+#[test]
+fn tab_completes_views_and_the_last_kind_of_a_set() {
+    let mut app = create_test_app(false);
+    with_views(&mut app, &[("apps", &["ks", "hr"])]);
+    app.ui_state.command_buffer = "ap".into();
+    app.autocomplete_command();
+    assert_eq!(app.ui_state.command_buffer, "apps");
+
+    app.ui_state.command_buffer = "ks,helmr".into();
+    app.autocomplete_command();
+    assert_eq!(app.ui_state.command_buffer, "ks,helmrelease");
+
+    // Nothing after the comma: nothing to complete.
+    app.ui_state.command_buffer = "ks,".into();
+    app.autocomplete_command();
+    assert_eq!(app.ui_state.command_buffer, "ks,");
+}
+
+#[test]
+fn startup_command_q_quits() {
+    let mut app = create_test_app(false);
+    assert!(app.run_startup_command("q"));
+    assert!(!app.run_startup_command("pulse"));
+}
+
+#[test]
+fn a_view_hiding_a_discovered_kind_is_warned_about_once() {
+    let mut app = create_test_app(false);
+    // `zt9` is only known once discovery registers the Flux-adjacent kind.
+    with_views(&mut app, &[("zt9", &["ks"])]);
+    app.warn_views_shadowing_discovered_kinds();
+    assert!(app.ui_state.status_message.is_none(), "not a kind yet");
+
+    crate::models::extra_kinds::global().insert(crate::models::extra_kinds::ExtraKind {
+        group: "warn.example.com".into(),
+        version: "v1".into(),
+        kind: "WarnOnceTest".into(),
+        plural: "warnoncetests".into(),
+        short_names: vec!["zt9".into()],
+    });
+    app.warn_views_shadowing_discovered_kinds();
+    let (message, _) = app.ui_state.status_message.take().unwrap();
+    assert!(
+        message.contains("view 'zt9' hides the WarnOnceTest kind"),
+        "{message}"
+    );
+
+    // Rediscovery (context switch, :native) doesn't repeat it.
+    app.warn_views_shadowing_discovered_kinds();
+    assert!(app.ui_state.status_message.is_none());
+    crate::models::extra_kinds::global().remove("WarnOnceTest");
+}
+
+#[test]
+fn help_lists_views_and_restricted_kinds_follow_the_set() {
+    let mut app = create_test_app(false);
+    with_views(&mut app, &[("apps", &["ks", "hr"])]);
+    assert_eq!(
+        app.view_help(),
+        [(":apps".to_string(), "ks, hr".to_string())]
+    );
+
+    app.forbidden_watchers.insert("HelmRelease".to_string());
+    app.view_state.kind_filter = KindFilter::parse("ks,hr").unwrap();
+    assert!(
+        app.access_notice()
+            .unwrap()
+            .contains("can't list HelmRelease")
+    );
+    app.view_state.kind_filter = KindFilter::parse("ks,gitrepo").unwrap();
+    assert_eq!(app.access_notice(), None);
 }

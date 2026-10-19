@@ -71,6 +71,8 @@ Press `:` and type a command. `Tab` autocompletes.
 | `:ctx` / `:ctx <name>` | Pick or switch the Kubernetes context |
 | `:ns` / `:ns <name>` / `:ns all` | Pick or switch the namespace, or watch all namespaces |
 | `:<kind>` | Filter the Flux list to a kind (`:ks`, `:hr`, `:gitrepo`, …); with native resources on, browse [any kind](../native-resources/) (`:deploy`, `:po`) |
+| `:ks,hr` | Several Flux kinds in one list |
+| `:<view>` | A [view](/configuration/#views) from your config (`:apps`) |
 | `:all` | Clear the kind and health filters |
 | `:flux` | Back to the Flux list from anywhere |
 | `:healthy` / `:unhealthy` / `:suspended` | Filter by health |
@@ -110,8 +112,9 @@ mode. The current choice is marked `(current)`.
 ## Filtering and sorting
 
 - **By name:** `/` then type; `Enter` keeps the filter, `Esc` clears it.
-- **By kind:** `:ks`, `:hr`, `:gitrepo`, … (`Tab` lists them all). `:all`
-  clears it.
+- **By kind:** `:ks`, `:hr`, `:gitrepo`, … (`Tab` lists them all), or
+  several at once: `:ks,hr`. [Views](/configuration/#views) name a set you
+  use often (`:apps`). `:all` clears it.
 - **By health:** `:healthy` (ready, not suspended), `:unhealthy` (not ready
   or suspended), `:suspended`. `:all` clears it.
 - **Sorting:** `Shift+N` (name), `Shift+A` (age), `Shift+T` (type), or

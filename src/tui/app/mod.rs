@@ -20,6 +20,8 @@ mod managers;
 mod navigation;
 mod rendering;
 mod submenus;
+mod user_views;
+pub use user_views::view_problems;
 #[cfg(test)]
 mod tests;
 
