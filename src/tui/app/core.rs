@@ -685,6 +685,9 @@ impl App {
         self.view_state.scroll_offset = 0;
 
         let msg = match self.view_state.sort_field {
+            SortField::Default if self.view_state.kind_filter.kinds().len() > 1 => {
+                "Sort: default (kinds in the order given, then namespace/name)".to_string()
+            }
             SortField::Default => "Sort: default (namespace/type/name)".to_string(),
             f => format!(
                 "Sort: {}{}",
@@ -952,14 +955,18 @@ impl App {
     /// The watched resources of the kinds the Flux list shows (#302).
     pub(crate) fn kind_filtered_resources(&self) -> Vec<crate::watcher::ResourceInfo> {
         let filter = &self.view_state.kind_filter;
-        if filter.is_all() {
-            self.state.all()
-        } else {
-            filter
-                .kinds()
-                .iter()
-                .flat_map(|kind| self.state.by_type(kind))
-                .collect()
+        match filter.single() {
+            // The common cases stay index lookups.
+            _ if filter.is_all() => self.state.all(),
+            Some(kind) if crate::models::FluxResourceKind::parse_optional(kind).is_some() => {
+                self.state.by_type(kind)
+            }
+            // Several kinds, or one kept as written (Flux-adjacent, any case).
+            _ => {
+                let mut resources = self.state.all();
+                resources.retain(|r| filter.contains(&r.resource_type));
+                resources
+            }
         }
     }
 
@@ -1026,6 +1033,9 @@ impl App {
 
         let sort_field = self.view_state.sort_field;
         let sort_reverse = self.view_state.sort_reverse;
+        // A kind set orders its kinds as given (`ks,hr`: Kustomizations
+        // first, #306); everything else sorts by kind name.
+        let kind_order = self.view_state.kind_filter.kinds();
         resources.sort_by(|a, b| {
             let a_key = crate::watcher::resource_key(&a.namespace, &a.name, &a.resource_type);
             let b_key = crate::watcher::resource_key(&b.namespace, &b.name, &b.resource_type);
@@ -1037,7 +1047,7 @@ impl App {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
                 _ => {
-                    let ord = compare_by_sort_field(a, b, sort_field);
+                    let ord = compare_by_sort_field(a, b, sort_field, kind_order);
                     if sort_reverse { ord.reverse() } else { ord }
                 }
             }
@@ -1047,19 +1057,43 @@ impl App {
     }
 }
 
-/// Compare two resources by the given sort field (ascending).
+/// Compare two kinds: by their position in `kind_order` (a kind set, in
+/// the order given), then by name — so outside a set it's alphabetical.
+fn compare_kinds(a: &str, b: &str, kind_order: &[String]) -> std::cmp::Ordering {
+    let position = |kind: &str| {
+        // Case-insensitive: a kind kept as written (Flux-adjacent, before
+        // discovery) may differ in case from the resources' kind.
+        kind_order
+            .iter()
+            .position(|k| k.eq_ignore_ascii_case(kind))
+            .unwrap_or(usize::MAX)
+    };
+    position(a).cmp(&position(b)).then_with(|| a.cmp(b))
+}
+
+/// Compare two resources by the given sort field (ascending). Kinds
+/// compare by `kind_order` first ([`compare_kinds`]).
 fn compare_by_sort_field(
     a: &crate::watcher::ResourceInfo,
     b: &crate::watcher::ResourceInfo,
     field: crate::tui::app::state::SortField,
+    kind_order: &[String],
 ) -> std::cmp::Ordering {
     use crate::tui::app::state::SortField;
     use std::cmp::Ordering;
     match field {
+        // In a kind set (`:ks,hr`, #306) the set's order leads — the kinds
+        // you listed, in that order, across namespaces; otherwise
+        // namespace, kind, name.
+        SortField::Default if kind_order.len() > 1 => {
+            compare_kinds(&a.resource_type, &b.resource_type, kind_order)
+                .then_with(|| a.namespace.cmp(&b.namespace))
+                .then_with(|| a.name.cmp(&b.name))
+        }
         SortField::Default => a
             .namespace
             .cmp(&b.namespace)
-            .then_with(|| a.resource_type.cmp(&b.resource_type))
+            .then_with(|| compare_kinds(&a.resource_type, &b.resource_type, kind_order))
             .then_with(|| a.name.cmp(&b.name)),
         SortField::Name => a
             .name
@@ -1075,9 +1109,7 @@ fn compare_by_sort_field(
             }
             .then_with(|| a.name.cmp(&b.name))
         }
-        SortField::Type => a
-            .resource_type
-            .cmp(&b.resource_type)
+        SortField::Type => compare_kinds(&a.resource_type, &b.resource_type, kind_order)
             .then_with(|| a.namespace.cmp(&b.namespace))
             .then_with(|| a.name.cmp(&b.name)),
         SortField::Status => {
@@ -1196,6 +1228,7 @@ mod tests {
             favorites: vec![],
             default_resource_filter: None,
             views: Default::default(),
+            default_sort: None,
             connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
             editor: None,
         };
@@ -1400,11 +1433,11 @@ mod tests {
         let unknown = make_resource("unknown", "ns", "Kustomization", None, None, None);
 
         assert_eq!(
-            compare_by_sort_field(&old, &new, SortField::Age),
+            compare_by_sort_field(&old, &new, SortField::Age, &[]),
             Ordering::Less
         );
         assert_eq!(
-            compare_by_sort_field(&new, &unknown, SortField::Age),
+            compare_by_sort_field(&new, &unknown, SortField::Age, &[]),
             Ordering::Less
         );
     }
@@ -1418,11 +1451,11 @@ mod tests {
         let ready = make_resource("c", "ns", "Kustomization", Some(true), Some(false), None);
 
         assert_eq!(
-            compare_by_sort_field(&failing, &suspended, SortField::Status),
+            compare_by_sort_field(&failing, &suspended, SortField::Status, &[]),
             Ordering::Less
         );
         assert_eq!(
-            compare_by_sort_field(&suspended, &ready, SortField::Status),
+            compare_by_sort_field(&suspended, &ready, SortField::Status, &[]),
             Ordering::Less
         );
     }

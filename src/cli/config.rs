@@ -36,7 +36,9 @@ pub enum ConfigSubcommand {
     Set {
         /// Configuration key (e.g., "readOnly", "ui.skin")
         key: String,
-        /// Configuration value
+        /// Configuration value. May start with `-` (`defaultSort -age`,
+        /// `views.apps.sort -name`) without `--`.
+        #[arg(allow_hyphen_values = true)]
         value: String,
         /// Cluster name for cluster-specific config
         #[arg(long)]
@@ -379,11 +381,19 @@ fn scalar_str(value: &serde_json::Value) -> String {
     }
 }
 
-/// Warnings for `views` (#302): names that hide a command or kind, and
-/// kinds that can't be shown. Printed, not fatal — the view still saves.
+/// Warnings for `views` (#302) — names that hide a command or kind, kinds
+/// that can't be shown, bad sorts — and a bad `defaultSort` (#306).
+/// Printed, not fatal: the config still saves.
 fn print_view_problems(config: &Config) {
     for problem in crate::tui::app::view_problems(&config.views) {
         eprintln!("warning: {problem}");
+    }
+    if let Some(Err(e)) = config
+        .default_sort
+        .as_deref()
+        .map(crate::models::list_sort::ListSort::parse)
+    {
+        eprintln!("warning: defaultSort: {e}");
     }
 }
 
@@ -399,7 +409,8 @@ fn reference_text() -> String {
         "nativeResources - Preview: browse native Kubernetes resources and CRDs with :<kind> (try it per session with :native) (default: false)",
         "metricsSource - Pod usage source: auto (kubelet via nodes/proxy, else metrics-server, else none), kubelet, metrics-server, none (default: auto)",
         "defaultResourceFilter - Flux list filter at startup: a kind (\"ks\"), kinds (\"ks,hr\"), or a view name (default: none, shows all)",
-        "views - Named Flux list views: views.<name>.kinds lists Flux kinds, :<name> opens it, e.g. flux9s config set views.apps ks,hr (default: none)",
+        "defaultSort - Flux list sort at startup: name, age, type, or status; prefix - or add :desc to reverse, e.g. \"-age\" (default: namespace, type, name)",
+        "views - Named Flux list views: views.<name>.kinds lists Flux kinds (views.<name>.namespace / .sort optional), :<name> opens it, e.g. flux9s config set views.apps ks,hr (default: none)",
         "connectTimeoutSeconds - Startup Kubernetes API health-check timeout in seconds (default: 10)",
         "editor - Editor command for resource editing; falls back through $VISUAL, $EDITOR, vi (default: none)",
         "ui.enableMouse - Enable mouse support (default: false)",
@@ -432,6 +443,40 @@ fn reference_text() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reverse sort (`-age`) is a value, not a flag; options after it
+    /// still parse (#306).
+    #[test]
+    fn set_takes_values_starting_with_a_dash() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Cli {
+            #[command(subcommand)]
+            command: ConfigSubcommand,
+        }
+        let parse = |args: &[&str]| match Cli::try_parse_from(args).map(|c| c.command) {
+            Ok(ConfigSubcommand::Set {
+                key,
+                value,
+                cluster,
+                ..
+            }) => (key, value, cluster),
+            other => panic!("{args:?} parsed as {other:?}"),
+        };
+        assert_eq!(
+            parse(&["x", "set", "defaultSort", "-age"]),
+            ("defaultSort".into(), "-age".into(), None)
+        );
+        assert_eq!(
+            parse(&["x", "set", "views.apps.sort", "-name", "--cluster", "prod"]),
+            (
+                "views.apps.sort".into(),
+                "-name".into(),
+                Some("prod".into())
+            )
+        );
+        assert_eq!(parse(&["x", "set", "defaultSort", "-n"]).1, "-n");
+    }
 
     /// Dotted camelCase paths for every config field, from the fully
     /// populated skeleton (a serialized real config hides skipped fields).

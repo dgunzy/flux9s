@@ -72,6 +72,12 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_resource_filter: Option<String>,
 
+    /// Flux list sort at startup (#306): `name`, `age`, `type`, or `status`,
+    /// reversed with `-` (`-age`) or `:desc`. Unset: namespace, type, name.
+    /// A view's own `sort` wins while it's open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_sort: Option<String>,
+
     /// Named Flux list views (#302): `:<name>` shows the kinds listed, e.g.
     /// `views: {apps: {kinds: [ks, hr]}}` for `:apps`. A struct per view so
     /// it can grow (namespace, health, Kubernetes kinds) without breaking
@@ -133,10 +139,13 @@ impl Config {
             )]),
             favorites: vec!["Kustomization:flux-system:my-app".to_string()],
             default_resource_filter: Some("Kustomization".to_string()),
+            default_sort: Some("type".to_string()),
             views: BTreeMap::from([(
                 "apps".to_string(),
                 ViewConfig {
                     kinds: vec!["ks".to_string(), "hr".to_string()],
+                    namespace: Some("apps".to_string()),
+                    sort: Some("type".to_string()),
                 },
             )]),
             connect_timeout_seconds: default_connect_timeout_seconds(),
@@ -188,6 +197,16 @@ pub struct ViewConfig {
     /// `helmreleases`, `Kustomization`).
     #[serde(default)]
     pub kinds: Vec<String>,
+
+    /// Namespace the view switches to when it opens, like `:ns` (`all` for
+    /// every namespace). Unset keeps the current namespace (#306).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+
+    /// Sort applied when the view opens, like `defaultSort` (`type`, `-age`).
+    /// Unset keeps the current sort (#306).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
 }
 
 /// UI configuration
@@ -265,6 +284,7 @@ impl Default for Config {
             cluster: HashMap::new(),
             favorites: Vec::new(), // Empty by default
             default_resource_filter: None,
+            default_sort: None,
             views: BTreeMap::new(),
             connect_timeout_seconds: default_connect_timeout_seconds(),
             editor: None,

@@ -71,8 +71,9 @@ Press `:` and type a command. `Tab` autocompletes.
 | `:ctx` / `:ctx <name>` | Pick or switch the Kubernetes context |
 | `:ns` / `:ns <name>` / `:ns all` | Pick or switch the namespace, or watch all namespaces |
 | `:<kind>` | Filter the Flux list to a kind (`:ks`, `:hr`, `:gitrepo`, …); with native resources on, browse [any kind](../native-resources/) (`:deploy`, `:po`) |
-| `:ks,hr` | Several Flux kinds in one list |
+| `:ks,hr` | Several Flux kinds in one list, in the order given |
 | `:<view>` | A [view](/configuration/#views) from your config (`:apps`) |
+| `:<view> -n <ns>` / `:ks,hr -n <ns>` / `:<kind> -n <ns>` | Open it in a namespace (`all` for every namespace); wins over a view's own namespace |
 | `:all` | Clear the kind and health filters |
 | `:flux` | Back to the Flux list from anywhere |
 | `:healthy` / `:unhealthy` / `:suspended` | Filter by health |
@@ -119,7 +120,9 @@ mode. The current choice is marked `(current)`.
   or suspended), `:suspended`. `:all` clears it.
 - **Sorting:** `Shift+N` (name), `Shift+A` (age), `Shift+T` (type), or
   `Shift+S` (status, problems first). Press again to reverse, a third time to
-  restore the default order. Favorites stay at the top.
+  restore the default order. Favorites stay at the top. In a kind set
+  (`:ks,hr`) kinds sort in the order you gave them. Set a starting sort with
+  [`defaultSort`](/configuration/#default-sort), or per view.
 
 The header's health indicator summarises the list: green `●` at 90% or more,
 yellow `⚠` from 70%, red `✗` below.

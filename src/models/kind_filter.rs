@@ -103,8 +103,10 @@ impl KindFilter {
     }
 
     /// Whether resources of `kind` are shown (always, with no filter).
+    /// Case-insensitive: a kind kept as written (Flux-adjacent, before
+    /// discovery) may differ in case from its resources' kind.
     pub fn contains(&self, kind: &str) -> bool {
-        self.is_all() || self.kinds.iter().any(|k| k == kind)
+        self.is_all() || self.kinds.iter().any(|k| k.eq_ignore_ascii_case(kind))
     }
 
     /// `Kustomization + HelmRelease`; `None` with no filter.
