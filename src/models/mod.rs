@@ -25,6 +25,9 @@ pub mod kinds;
 /// Which Flux kinds the Flux list shows: all, one, several, or a named view (#302)
 pub mod kind_filter;
 
+/// A Flux list sort as written in the config (`type`, `-age`) (#306)
+pub mod list_sort;
+
 // Resource field extraction
 pub mod resource_fields;
 

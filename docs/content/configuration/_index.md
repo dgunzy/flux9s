@@ -31,7 +31,8 @@ flux9s config path
 | `defaultNamespace` | string | `flux-system` | Starting namespace (`all` or `-A` = all namespaces) |
 | `defaultControllerNamespace` | string | `flux-system` | Namespace where Flux controllers run |
 | `defaultResourceFilter` | string | *(none)* | Flux list filter at startup: a kind (`ks`), several (`ks,hr`), or a [view](#views) name |
-| `views` | map | *(empty)* | Named Flux list views: `views.<name>.kinds` lists Flux kinds, `:<name>` opens it ([details](#views)) |
+| `defaultSort` | string | *(none)* | Flux list sort at startup: `name`, `age`, `type`, `status`; `-age` or `age:desc` reverses ([details](#default-sort)) |
+| `views` | map | *(empty)* | Named Flux list views: `views.<name>.kinds` lists Flux kinds, with optional `namespace` and `sort`; `:<name>` opens it ([details](#views)) |
 | `connectTimeoutSeconds` | integer | `10` | Startup Kubernetes API health-check timeout in seconds |
 | `discoverFluxResources` | boolean | `false` | Opt-in dynamic discovery of Flux-adjacent CRDs (see below); needs `nativeResources: true` |
 | `nativeResources` | boolean | `false` | **Preview.** Browse native Kubernetes resources and CRDs with `:<kind>` ([details](/user-guide/native-resources/#browsing-any-kind)); off keeps flux9s Flux-only — no API discovery or extra watches, including `discoverFluxResources`. Try it per session with `:native` |
@@ -139,6 +140,24 @@ Accepted kinds are any Flux resource type name or alias:
 
 You can also change the filter interactively during a session by typing `:ks`, `:hr`, `:ks,hr`, etc. in the TUI, or `:all` to clear it.
 
+### Default Sort {#default-sort}
+
+How the Flux list is sorted when flux9s starts. Without it, the list is
+ordered by namespace, then kind, then name. `Shift+N` / `A` / `T` / `S`
+still change it at any time.
+
+```bash
+flux9s config set defaultSort type      # group by kind
+flux9s config set defaultSort -age      # newest first (also: age:desc)
+flux9s config set defaultSort status    # problems first
+flux9s config set defaultSort default   # the default order (same as unset)
+```
+
+In a kind set or view (`:ks,hr`), the kinds you listed lead, in that order
+— all Kustomizations, then all HelmReleases, across namespaces — and `T`
+groups by kind in the same order. Outside a set, kinds sort alphabetically
+after the namespace.
+
 ### Views {#views}
 
 A view names a set of Flux kinds you look at together. `:<name>` opens it,
@@ -147,7 +166,9 @@ A view names a set of Flux kinds you look at together. `:<name>` opens it,
 ```yaml
 views:
   apps:
-    kinds: [ks, hr]          # :apps — Kustomizations and HelmReleases
+    kinds: [ks, hr]          # :apps — Kustomizations, then HelmReleases
+    sort: type               # optional: grouped by kind
+    namespace: all           # optional: switch to this namespace (all = every namespace)
   sources:
     kinds: [gitrepo, oci, helmrepository]
 ```
@@ -156,8 +177,20 @@ Or from the command line:
 
 ```bash
 flux9s config set views.apps ks,hr
+flux9s config set views.apps.sort type
+flux9s config set views.apps.namespace all
 flux9s config set views.apps ""      # remove it
 ```
+
+- **Sort** takes the same values as [`defaultSort`](#default-sort)
+  (`default` returns to the default order). **Namespace** switches the
+  namespace when the view opens, exactly like `:ns` (`all` = every
+  namespace). Both stay in effect after you leave the view, as `:ns` and
+  `Shift+T` would; leave them out to keep the current ones.
+- **`-n`** opens a view, kind set, or kind in a namespace for this opening —
+  `:apps -n prod`, `:ks,hr -n prod`, `:deploy -n prod` — and wins over the
+  view's own `namespace`. It's checked first: a broken view or a bad kind
+  leaves the namespace as it was.
 
 - **Kinds** are Flux kinds by name, plural, or alias — the same names as
   `:ks`. [Flux-adjacent kinds](#discovering-flux-adjacent-resource-kinds)
@@ -442,10 +475,12 @@ readOnly: false
 defaultNamespace: flux-system
 defaultControllerNamespace: flux-system
 defaultResourceFilter: apps  # Start on the "apps" view (or a kind, or ks,hr)
+defaultSort: type            # Group the list by kind
 
 views:
   apps:
     kinds: [ks, hr]
+    sort: type
 
 ui:
   enableMouse: false

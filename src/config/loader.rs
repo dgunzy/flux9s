@@ -249,6 +249,7 @@ mod tests {
         use crate::config::ViewConfig;
         let view = |kinds: &[&str]| ViewConfig {
             kinds: kinds.iter().map(|k| k.to_string()).collect(),
+            ..Default::default()
         };
         let root = Config {
             views: [("apps".to_string(), view(&["ks", "hr"]))].into(),

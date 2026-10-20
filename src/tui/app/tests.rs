@@ -55,6 +55,7 @@ fn create_test_app(read_only: bool) -> App {
         favorites: vec![],
         default_resource_filter: None,
         views: Default::default(),
+        default_sort: None,
         connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
         editor: None,
     };
@@ -3956,6 +3957,7 @@ fn with_views(app: &mut App, views: &[(&str, &[&str])]) {
                 name.to_string(),
                 crate::config::ViewConfig {
                     kinds: kinds.iter().map(|k| k.to_string()).collect(),
+                    ..Default::default()
                 },
             )
         })
@@ -4166,4 +4168,226 @@ fn help_lists_views_and_restricted_kinds_follow_the_set() {
     );
     app.view_state.kind_filter = KindFilter::parse("ks,gitrepo").unwrap();
     assert_eq!(app.access_notice(), None);
+}
+
+// --- #306: view sort and namespace -------------------------------------
+
+fn listed(app: &App) -> Vec<String> {
+    app.get_filtered_resources()
+        .into_iter()
+        .map(|r| format!("{}/{}", r.resource_type, r.name))
+        .collect()
+}
+
+#[test]
+fn a_kind_set_lists_its_kinds_in_the_order_given() {
+    let mut app = create_test_app(false);
+    add_resource(&mut app); // Kustomization flux-system/my-kustomization
+    add_flux(&mut app, "HelmRelease", "podinfo");
+
+    run(&mut app, "ks,hr");
+    assert_eq!(
+        listed(&app),
+        ["Kustomization/my-kustomization", "HelmRelease/podinfo"],
+        "Kustomizations first, as typed — not alphabetical"
+    );
+    run(&mut app, "hr,ks");
+    assert_eq!(
+        listed(&app),
+        ["HelmRelease/podinfo", "Kustomization/my-kustomization"]
+    );
+    // `T` groups by kind in the set's order too; `TT` reverses it.
+    run(&mut app, "ks,hr");
+    app.toggle_sort(super::state::SortField::Type);
+    assert_eq!(listed(&app)[0], "Kustomization/my-kustomization");
+    app.toggle_sort(super::state::SortField::Type);
+    assert_eq!(listed(&app)[0], "HelmRelease/podinfo");
+
+    // Without a set, kinds sort alphabetically as before.
+    run(&mut app, "all");
+    app.view_state.sort_field = super::state::SortField::Default;
+    app.view_state.sort_reverse = false;
+    assert_eq!(listed(&app)[0], "HelmRelease/podinfo");
+}
+
+#[test]
+fn a_view_applies_its_sort_and_namespace() {
+    let mut app = create_test_app(false);
+    app.namespace = Some("flux-system".into());
+    with_views(&mut app, &[("apps", &["ks", "hr"])]);
+    let view = app.config.views.get_mut("apps").unwrap();
+    view.sort = Some("-age".into());
+    view.namespace = Some("all".into());
+
+    run(&mut app, "apps");
+    assert_eq!(app.view_state.sort_field, super::state::SortField::Age);
+    assert!(app.view_state.sort_reverse);
+    assert_eq!(app.namespace, None, "all: every namespace, like :ns all");
+    assert_eq!(app.view_state.kind_filter.view(), Some("apps"));
+    assert_eq!(
+        app.view_help(),
+        [(
+            ":apps".to_string(),
+            "ks, hr · ns all · sort -age".to_string()
+        )]
+    );
+}
+
+#[test]
+fn a_broken_view_changes_nothing() {
+    let mut app = create_test_app(false);
+    app.namespace = Some("flux-system".into());
+    with_views(&mut app, &[("apps", &["ks"])]);
+    let view = app.config.views.get_mut("apps").unwrap();
+    view.sort = Some("size".into());
+    view.namespace = Some("elsewhere".into());
+
+    run(&mut app, "apps");
+    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+    assert!(
+        is_error && message.contains("sort: Unknown sort 'size'"),
+        "{message}"
+    );
+    assert_eq!(
+        app.namespace.as_deref(),
+        Some("flux-system"),
+        "not switched"
+    );
+    assert!(app.view_state.kind_filter.is_all());
+}
+
+#[test]
+fn n_scopes_a_view_or_kind_set_to_a_namespace() {
+    let mut app = create_test_app(false);
+    app.namespace = Some("flux-system".into());
+    with_views(&mut app, &[("apps", &["ks", "hr"])]);
+
+    run(&mut app, "ks,hr -n apps");
+    assert_eq!(app.namespace.as_deref(), Some("apps"));
+    assert_eq!(app.view_state.kind_filter.kinds().len(), 2);
+
+    run(&mut app, "apps -n all");
+    assert_eq!(app.namespace, None);
+    assert_eq!(app.view_state.kind_filter.view(), Some("apps"));
+
+    run(&mut app, "pulse -n apps");
+    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+    assert!(
+        is_error && message.contains("-n works with views and kinds"),
+        "{message}"
+    );
+    assert_eq!(app.namespace, None, "unchanged");
+}
+
+#[test]
+fn n_wins_over_a_views_own_namespace() {
+    let mut app = create_test_app(false);
+    app.namespace = Some("flux-system".into());
+    with_views(&mut app, &[("apps", &["ks", "hr"])]);
+    app.config.views.get_mut("apps").unwrap().namespace = Some("all".into());
+
+    run(&mut app, "apps -n prod");
+    assert_eq!(
+        app.namespace.as_deref(),
+        Some("prod"),
+        "-n, not the view's 'all'"
+    );
+    run(&mut app, "apps");
+    assert_eq!(app.namespace, None, "without -n, the view's own namespace");
+}
+
+/// `-n` checks what it opens before switching: a bad kind set or a broken
+/// view leaves the namespace (and its watches) alone.
+#[test]
+fn n_with_a_bad_kind_set_or_view_leaves_the_namespace_alone() {
+    let mut app = create_test_app(false);
+    app.namespace = Some("flux-system".into());
+    with_views(&mut app, &[("broken", &["ks"])]);
+    app.config.views.get_mut("broken").unwrap().sort = Some("size".into());
+
+    for cmd in ["ks,deploy -n prod", "ks,bogus -n prod", "broken -n prod"] {
+        run(&mut app, cmd);
+        assert_eq!(app.namespace.as_deref(), Some("flux-system"), "{cmd}");
+        assert!(
+            app.ui_state
+                .status_message
+                .as_ref()
+                .is_some_and(|(_, e)| *e),
+            "{cmd}"
+        );
+    }
+}
+
+#[test]
+fn n_with_a_kubernetes_kind_during_discovery_waits_for_it() {
+    let mut app = create_test_app(false);
+    app.namespace = Some("flux-system".into());
+    app.request_kind_discovery();
+    run(&mut app, "deploy -n prod");
+    assert_eq!(app.pending_kind_command.as_deref(), Some("deploy"));
+    assert_eq!(app.namespace.as_deref(), Some("prod"));
+}
+
+#[test]
+fn a_kind_set_puts_its_kinds_first_across_namespaces() {
+    let mut app = create_test_app(false);
+    add_resource(&mut app); // Kustomization flux-system/my-kustomization
+    let mut hr = app
+        .state
+        .get("Kustomization:flux-system:my-kustomization")
+        .unwrap();
+    hr.resource_type = "HelmRelease".into();
+    hr.name = "podinfo".into();
+    hr.namespace = "apps".into(); // sorts before flux-system
+    app.state
+        .upsert(resource_key("apps", "podinfo", "HelmRelease"), hr);
+    app.namespace = None;
+
+    run(&mut app, "ks,hr");
+    assert_eq!(
+        listed(&app),
+        ["Kustomization/my-kustomization", "HelmRelease/podinfo"],
+        "the kinds you listed lead, whatever the namespace"
+    );
+    run(&mut app, "all");
+    assert_eq!(
+        listed(&app)[0],
+        "HelmRelease/podinfo",
+        "all kinds: namespace first"
+    );
+}
+
+#[test]
+fn a_view_can_return_to_the_default_order() {
+    let mut app = create_test_app(false);
+    app.view_state.sort_field = super::state::SortField::Age;
+    with_views(&mut app, &[("apps", &["ks", "hr"])]);
+    app.config.views.get_mut("apps").unwrap().sort = Some("default".into());
+    run(&mut app, "apps");
+    assert_eq!(app.view_state.sort_field, super::state::SortField::Default);
+}
+
+#[test]
+fn kinds_kept_as_written_match_their_resources_in_any_case() {
+    let filter = KindFilter::parse_allowing_unknown("runtimeonlykind")
+        .unwrap()
+        .0;
+    assert!(filter.contains("RuntimeOnlyKind"));
+}
+
+#[test]
+fn default_sort_applies_and_a_view_sort_wins() {
+    let mut app = create_test_app(false);
+    app.apply_default_sort("status").unwrap();
+    assert_eq!(app.view_state.sort_field, super::state::SortField::Status);
+    assert!(
+        app.apply_default_sort("size")
+            .unwrap_err()
+            .contains("defaultSort")
+    );
+
+    with_views(&mut app, &[("apps", &["ks", "hr"])]);
+    app.config.views.get_mut("apps").unwrap().sort = Some("type".into());
+    app.apply_default_filter("apps").unwrap();
+    assert_eq!(app.view_state.sort_field, super::state::SortField::Type);
 }

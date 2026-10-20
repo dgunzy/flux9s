@@ -185,32 +185,65 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
                 Some(filter.kinds().join(","))
             };
         }
-        // `views.<name>` (or `views.<name>.kinds`): the view's kinds as a
-        // comma list; empty removes the view.
+        "defaultSort" => {
+            config.default_sort = if value.is_empty() {
+                None
+            } else {
+                crate::models::list_sort::ListSort::parse(value)
+                    .map_err(|e| anyhow::anyhow!("defaultSort: {e}"))?;
+                Some(value.trim().to_string())
+            };
+        }
+        // `views.<name>` / `views.<name>.kinds`: the view's kinds as a comma
+        // list (empty removes the view); `views.<name>.namespace` and
+        // `views.<name>.sort` set its options (empty unsets them).
         _ if key.starts_with("views.") => {
-            let name = key.trim_start_matches("views.").trim_end_matches(".kinds");
-            if name.is_empty() || name.contains('.') {
+            let rest = &key["views.".len()..];
+            let (name, field) = rest.split_once('.').unwrap_or((rest, "kinds"));
+            if name.is_empty() || field.contains('.') {
                 return Err(anyhow::anyhow!(
-                    "Use views.<name> (e.g. flux9s config set views.apps ks,hr)"
+                    "Use views.<name>[.kinds|.namespace|.sort] (e.g. flux9s config set views.apps ks,hr)"
                 ));
             }
-            if value.is_empty() {
-                config.views.remove(name);
-            } else {
-                // Validate; store the kinds as written (aliases read better).
-                // Unknown kinds may be Flux-adjacent (known at runtime); the
-                // CLI warns about them through `view_problems`.
-                crate::models::kind_filter::KindFilter::parse_allowing_unknown(value)
-                    .map_err(|e| anyhow::anyhow!("views.{name}: {e}"))?;
-                let kinds = value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty())
-                    .map(str::to_string)
-                    .collect();
-                config
-                    .views
-                    .insert(name.to_string(), schema::ViewConfig { kinds });
+            let set = |value: &str| (!value.is_empty()).then(|| value.trim().to_string());
+            match field {
+                "kinds" if value.is_empty() => {
+                    config.views.remove(name);
+                }
+                "kinds" => {
+                    // Validate; store the kinds as written (aliases read
+                    // better). Unknown kinds may be Flux-adjacent (known at
+                    // runtime); the CLI warns about them via `view_problems`.
+                    crate::models::kind_filter::KindFilter::parse_allowing_unknown(value)
+                        .map_err(|e| anyhow::anyhow!("views.{name}: {e}"))?;
+                    config.views.entry(name.to_string()).or_default().kinds = value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|t| !t.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                }
+                "namespace" | "sort" => {
+                    if field == "sort" && !value.is_empty() {
+                        crate::models::list_sort::ListSort::parse(value)
+                            .map_err(|e| anyhow::anyhow!("views.{name}.sort: {e}"))?;
+                    }
+                    let view = config.views.get_mut(name).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No view '{name}' — set its kinds first: flux9s config set views.{name} ks,hr"
+                        )
+                    })?;
+                    if field == "sort" {
+                        view.sort = set(value);
+                    } else {
+                        view.namespace = set(value);
+                    }
+                }
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown view setting '{field}' — use kinds, namespace, or sort"
+                    ));
+                }
             }
         }
         "connectTimeoutSeconds" => {
@@ -296,6 +329,35 @@ mod tests {
         set_config_value(&mut config, "views.apps", "").unwrap();
         assert!(!config.views.contains_key("apps"));
         assert!(set_config_value(&mut config, "views.", "ks").is_err());
+    }
+
+    #[test]
+    fn view_options_and_default_sort_set_from_the_cli() {
+        let mut config = schema::Config::default();
+        let err = set_config_value(&mut config, "views.apps.sort", "type").unwrap_err();
+        assert!(err.to_string().contains("set its kinds first"), "{err}");
+
+        set_config_value(&mut config, "views.apps", "ks,hr").unwrap();
+        set_config_value(&mut config, "views.apps.namespace", "apps").unwrap();
+        set_config_value(&mut config, "views.apps.sort", "-type").unwrap();
+        let view = &config.views["apps"];
+        assert_eq!(view.namespace.as_deref(), Some("apps"));
+        assert_eq!(view.sort.as_deref(), Some("-type"));
+
+        // Changing the kinds keeps the options.
+        set_config_value(&mut config, "views.apps", "ks").unwrap();
+        assert_eq!(config.views["apps"].sort.as_deref(), Some("-type"));
+        set_config_value(&mut config, "views.apps.sort", "").unwrap();
+        assert_eq!(config.views["apps"].sort, None);
+
+        assert!(set_config_value(&mut config, "views.apps.sort", "size").is_err());
+        assert!(set_config_value(&mut config, "views.apps.colour", "red").is_err());
+
+        set_config_value(&mut config, "defaultSort", "age:desc").unwrap();
+        assert_eq!(config.default_sort.as_deref(), Some("age:desc"));
+        assert!(set_config_value(&mut config, "defaultSort", "size").is_err());
+        set_config_value(&mut config, "defaultSort", "").unwrap();
+        assert_eq!(config.default_sort, None);
     }
 
     #[test]

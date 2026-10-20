@@ -14,6 +14,7 @@ use super::state::View;
 use crate::config::ViewConfig;
 use crate::models::kind_filter::KindFilter;
 use crate::models::kinds::{self, Family};
+use crate::models::list_sort::{ListSort, SortKey};
 use std::collections::BTreeMap;
 
 impl App {
@@ -40,10 +41,119 @@ impl App {
     /// `:<view>`: the view's kinds, titled with its name. Kinds resolve
     /// when the view opens, so Flux-adjacent kinds work once discovered.
     pub(super) fn open_view(&mut self, name: &str, view: &ViewConfig) {
-        match KindFilter::parse(&view.kinds.join(",")) {
-            Ok(filter) => self.show_kinds(filter.named(name)),
-            Err(e) => self.set_status_message((format!("View '{name}': {e}"), true)),
+        if let Err(e) = self.apply_view(name, view, false, None) {
+            self.set_status_message((format!("View '{name}': {e}"), true));
         }
+    }
+
+    /// `<view | kinds | kind> -n <namespace>` (#306). Everything is checked
+    /// before the namespace switches — once — so a broken view or a bad
+    /// kind leaves the namespace and list as they were. `-n` wins over a
+    /// view's own `namespace`.
+    pub(super) fn open_in_namespace(&mut self, head: &str, namespace: &str) {
+        let namespace = super::command_mode::namespace_arg(namespace);
+        if let Some((name, view)) = self.view_named(head) {
+            if let Err(e) = self.apply_view(&name, &view, false, Some(namespace)) {
+                self.set_status_message((format!("View '{name}': {e}"), true));
+            }
+            return;
+        }
+        if head.contains(',') {
+            match KindFilter::parse(head) {
+                Ok(filter) => {
+                    self.switch_namespace(namespace);
+                    self.show_kinds(filter);
+                }
+                Err(e) => self.set_status_message((e, true)),
+            }
+            return;
+        }
+        match kinds::resolve(head) {
+            Some(spec) if spec.family == Family::Native => {
+                self.switch_namespace(namespace);
+                self.open_kind_list(spec);
+            }
+            Some(spec) => {
+                self.switch_namespace(namespace);
+                self.show_kinds(KindFilter::kind(spec.names.kind));
+            }
+            // A Kubernetes kind typed before discovery finished: held until
+            // it lands, like a plain `:deploy`, in the namespace asked for.
+            None if self.config.native_resources
+                && self.async_state.kind_discovery.is_loading() =>
+            {
+                self.switch_namespace(namespace);
+                self.pending_kind_command = Some(head.to_string());
+                self.set_status_message((
+                    format!("Discovering the cluster's kinds — :{head} opens when ready"),
+                    false,
+                ));
+            }
+            None => self.set_status_message((
+                format!("-n works with views and kinds; '{head}' is neither"),
+                true,
+            )),
+        }
+    }
+
+    /// Apply a view (#306): its namespace (switched like `:ns`; `namespace`
+    /// overrides it, for `-n`), its sort, then its kinds. Everything is
+    /// checked before anything changes, so a broken view leaves the list as
+    /// it was. `lenient` keeps kinds not known yet (startup, before
+    /// Flux-adjacent kinds are discovered).
+    fn apply_view(
+        &mut self,
+        name: &str,
+        view: &ViewConfig,
+        lenient: bool,
+        namespace: Option<Option<String>>,
+    ) -> Result<(), String> {
+        let kinds = view.kinds.join(",");
+        let filter = if lenient {
+            KindFilter::parse_allowing_unknown(&kinds).map(|(filter, _)| filter)?
+        } else {
+            KindFilter::parse(&kinds)?
+        };
+        let sort = view
+            .sort
+            .as_deref()
+            .map(ListSort::parse)
+            .transpose()
+            .map_err(|e| format!("sort: {e}"))?;
+        let namespace = namespace.or_else(|| {
+            view.namespace
+                .as_deref()
+                .map(super::command_mode::namespace_arg)
+        });
+        if let Some(namespace) = namespace {
+            self.switch_namespace(namespace);
+        }
+        if let Some(sort) = sort {
+            self.apply_sort(sort);
+        }
+        self.show_kinds(filter.named(name));
+        Ok(())
+    }
+
+    /// Set the Flux list's sort (`defaultSort`, a view's `sort`).
+    pub(super) fn apply_sort(&mut self, sort: ListSort) {
+        use super::state::SortField;
+        self.view_state.sort_field = match sort.key {
+            SortKey::Default => SortField::Default,
+            SortKey::Name => SortField::Name,
+            SortKey::Age => SortField::Age,
+            SortKey::Type => SortField::Type,
+            SortKey::Status => SortField::Status,
+        };
+        self.view_state.sort_reverse = sort.reverse;
+        self.reset_list_position();
+    }
+
+    /// `defaultSort` at startup. `Err` carries the warning to show.
+    pub fn apply_default_sort(&mut self, value: &str) -> Result<(), String> {
+        let sort = ListSort::parse(value).map_err(|e| format!("defaultSort: {e}"))?;
+        self.apply_sort(sort);
+        Ok(())
     }
 
     /// `:ks,hr`: several Flux kinds in one list.
@@ -57,16 +167,17 @@ impl App {
     /// `defaultResourceFilter` at startup: a view name, or one or more
     /// kinds. `Err` carries the warning to show.
     pub fn apply_default_filter(&mut self, value: &str) -> Result<(), String> {
-        let filter = match self.view_named(value) {
-            Some((name, view)) => KindFilter::parse(&view.kinds.join(","))
-                .map(|filter| filter.named(name))
-                .map_err(|e| format!("defaultResourceFilter: view '{value}': {e}"))?,
-            // A kind flux9s learns at runtime (Flux-adjacent) is kept as
-            // written; it matches once its resources arrive.
-            None => KindFilter::parse_allowing_unknown(value)
-                .map(|(filter, _)| filter)
-                .map_err(|e| format!("defaultResourceFilter '{value}': {e}"))?,
-        };
+        // A view brings its namespace and sort along.
+        if let Some((name, view)) = self.view_named(value) {
+            return self
+                .apply_view(&name, &view, true, None)
+                .map_err(|e| format!("defaultResourceFilter: view '{value}': {e}"));
+        }
+        // A kind flux9s learns at runtime (Flux-adjacent) is kept as
+        // written; it matches once its resources arrive.
+        let filter = KindFilter::parse_allowing_unknown(value)
+            .map(|(filter, _)| filter)
+            .map_err(|e| format!("defaultResourceFilter '{value}': {e}"))?;
         self.view_state.kind_filter = filter;
         self.invalidate_layout_cache();
         Ok(())
@@ -89,7 +200,16 @@ impl App {
         self.config
             .views
             .iter()
-            .map(|(name, view)| (format!(":{name}"), view.kinds.join(", ")))
+            .map(|(name, view)| {
+                let mut about = view.kinds.join(", ");
+                if let Some(namespace) = &view.namespace {
+                    about.push_str(&format!(" · ns {namespace}"));
+                }
+                if let Some(sort) = &view.sort {
+                    about.push_str(&format!(" · sort {sort}"));
+                }
+                (format!(":{name}"), about)
+            })
             .collect()
     }
 
@@ -173,6 +293,9 @@ pub fn view_problems(views: &BTreeMap<String, ViewConfig>) -> Vec<String> {
             )),
             _ => {}
         }
+        if let Some(Err(e)) = view.sort.as_deref().map(ListSort::parse) {
+            problems.push(format!("view '{name}': sort: {e}"));
+        }
         match KindFilter::parse_allowing_unknown(&view.kinds.join(",")) {
             Err(e) => problems.push(format!("view '{name}': {e}")),
             // Before discovery (and in the CLI) a Flux-adjacent kind is
@@ -210,6 +333,7 @@ mod tests {
                     name.to_string(),
                     ViewConfig {
                         kinds: kinds.iter().map(|k| k.to_string()).collect(),
+                        ..Default::default()
                     },
                 )
             })
@@ -222,6 +346,17 @@ mod tests {
         assert_eq!(
             problems,
             ["views 'Apps' and 'apps' differ only in case — :apps opens 'Apps'"]
+        );
+    }
+
+    #[test]
+    fn a_bad_view_sort_is_reported() {
+        let mut views = views(&[("apps", &["ks"])]);
+        views.get_mut("apps").unwrap().sort = Some("size".into());
+        let problems = view_problems(&views);
+        assert!(
+            problems[0].starts_with("view 'apps': sort: Unknown sort 'size'"),
+            "{problems:#?}"
         );
     }
 

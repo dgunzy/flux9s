@@ -319,6 +319,36 @@ pub fn is_trace_command(cmd: &str) -> bool {
     cmd_lower == "trace" || cmd_lower.starts_with("trace ")
 }
 
+/// Split `<head> -n <namespace>` (also `--namespace <ns>` /
+/// `--namespace=<ns>`), for views and kind sets (#306). `None` when the
+/// command has no namespace flag; `Err` when it's malformed.
+pub fn split_namespace_flag(cmd: &str) -> Option<Result<(String, String), String>> {
+    let tokens: Vec<&str> = cmd.split_whitespace().collect();
+    let flag = tokens
+        .iter()
+        .position(|t| *t == "-n" || *t == "--namespace" || t.starts_with("--namespace="))?;
+    let namespace = match tokens[flag].strip_prefix("--namespace=") {
+        Some(ns) => (!ns.is_empty()).then(|| (ns.to_string(), flag + 1)),
+        None => tokens.get(flag + 1).map(|ns| (ns.to_string(), flag + 2)),
+    };
+    let Some((namespace, after)) = namespace else {
+        return Some(Err("-n needs a namespace".to_string()));
+    };
+    // The head is everything else; kind sets may be written `ks, hr`.
+    let head: String = tokens[..flag]
+        .iter()
+        .chain(&tokens[after..])
+        .copied()
+        .collect::<Vec<_>>()
+        .join("");
+    if head.is_empty() {
+        return Some(Err(
+            "-n needs a view or kinds (e.g. :ks,hr -n apps)".to_string()
+        ));
+    }
+    Some(Ok((head, namespace)))
+}
+
 /// `:trace` usage, shown for malformed arguments.
 pub const TRACE_USAGE: &str = "Usage: :trace [<kind>/<name> [-n <namespace>]]";
 
@@ -629,6 +659,23 @@ pub fn get_command_submenu(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn namespace_flags_split_off_views_and_kind_sets() {
+        let split = |cmd: &str| split_namespace_flag(cmd);
+        let ok = |head: &str, ns: &str| Some(Ok((head.to_string(), ns.to_string())));
+        assert_eq!(split("apps"), None, "no flag");
+        assert_eq!(split("ks,hr -n apps"), ok("ks,hr", "apps"));
+        assert_eq!(
+            split("-n apps ks, hr"),
+            ok("ks,hr", "apps"),
+            "kind sets may have spaces"
+        );
+        assert_eq!(split("apps --namespace=prod"), ok("apps", "prod"));
+        assert_eq!(split("apps --namespace prod"), ok("apps", "prod"));
+        assert!(matches!(split("apps -n"), Some(Err(_))));
+        assert!(matches!(split("-n prod"), Some(Err(_))));
+    }
 
     #[test]
     fn trace_args_take_kubectl_style_namespaces() {

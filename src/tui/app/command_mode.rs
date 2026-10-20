@@ -123,6 +123,15 @@ pub(super) const SPECIAL_COMMAND_HELP: &[(&str, &str)] = &[
     (":q", "Quit application"),
 ];
 
+/// A namespace as `:ns` reads it — `all` / `-A` mean every namespace. The
+/// one interpretation for `:ns`, a view's `namespace`, and `-n` (#306).
+pub(super) fn namespace_arg(value: &str) -> Option<String> {
+    match value.trim() {
+        "all" | "-A" => None,
+        name => Some(name.to_string()),
+    }
+}
+
 /// Whether `name` is a flux9s `:` command — the special ones or any entry
 /// of [`COMMAND_TABLE`]. A view named like one could never be opened (#302).
 pub(crate) fn is_builtin_command(name: &str) -> bool {
@@ -235,6 +244,16 @@ impl App {
                 handle(self, &cmd);
                 return None;
             }
+        }
+
+        // `<view | kinds | kind> -n <namespace>` (#306): checked first, then
+        // the namespace switches once and it opens there.
+        if let Some(parsed) = commands::split_namespace_flag(&cmd_lower) {
+            match parsed {
+                Ok((head, namespace)) => self.open_in_namespace(&head, &namespace),
+                Err(message) => self.set_status_message((message, true)),
+            }
+            return None;
         }
 
         // User views (#302) come before kinds, so a view can stand in for a
@@ -624,8 +643,7 @@ impl App {
         let ns = commands::extract_command_arg(cmd, "namespace")
             .or_else(|| commands::extract_command_arg(cmd, "ns"));
         match ns.as_deref() {
-            Some("all") | Some("-A") => self.switch_namespace(None),
-            Some(name) => self.switch_namespace(Some(name.to_string())),
+            Some(name) => self.switch_namespace(namespace_arg(name)),
             None => {
                 // No argument: open the searchable picker (same reusable submenu
                 // as :ctx / :skin) instead of listing options in the bars.

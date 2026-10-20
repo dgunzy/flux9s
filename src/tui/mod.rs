@@ -351,6 +351,12 @@ pub async fn run_tui_with_async_init(
                             // one can't overwrite another.
                             let mut warnings: Vec<String> =
                                 config_warning.iter().cloned().collect();
+                            // The sort first: a view's own sort (from the default filter) wins.
+                            if let Some(ref sort) = config.default_sort
+                                && let Err(warning) = app.apply_default_sort(sort)
+                            {
+                                warnings.push(warning);
+                            }
                             if let Some(ref filter) = config.default_resource_filter {
                                 match app.apply_default_filter(filter) {
                                     Ok(()) => tracing::debug!(

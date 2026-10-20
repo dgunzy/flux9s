@@ -718,8 +718,19 @@ Kubernetes kinds (mixing them needs per-row actions; later work).
   (`command_mode::is_builtin_command` reads `COMMAND_TABLE`).
 - `-c` / `--command` (`App::run_startup_command`) runs after
   `set_connected`, so a Kubernetes kind waits for discovery like a typed
-  one. `ViewConfig` is a struct so views can grow (namespace, health,
-  Kubernetes kinds) without breaking configs.
+  one. `ViewConfig` is a struct so views can grow without breaking
+  configs: `namespace` and `sort` (#306) are applied by `App::apply_view`,
+  which validates everything before changing anything. A view's namespace
+  switches the session namespace like `:ns` — watchers are scoped by
+  namespace, so a filter on a narrower watch would show nothing.
+  `namespace_arg` is the one reading of `all` / `-A`.
+- Sorting (`compare_by_sort_field`) orders kinds by the kind set's order
+  (`compare_kinds`, case-insensitive), alphabetical outside a set. In a set
+  of several kinds the default order is kind, namespace, name; otherwise
+  namespace, kind, name. `-n` goes through `App::open_in_namespace`, which
+  validates before its single `switch_namespace` and overrides a view's
+  namespace. `models::list_sort::ListSort`
+  parses `defaultSort` / view `sort` (`type`, `-age`, `age:desc`).
 
 ## The Kind Registry (`:<kind>`)
 

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `defaultSort` config: the Flux list's sort at startup (`type`, `-age`,
+  `status:desc`, …) (#306)
+- Views take an optional `sort` and `namespace` (switched like `:ns` when the
+  view opens), and `:<view> -n <ns>` / `:ks,hr -n <ns>` / `:<kind> -n <ns>`
+  open one in a namespace, checked before anything switches (#306)
+
+### Changed
+- In a kind set or view, the kinds you listed lead, in that order, across
+  namespaces (`:ks,hr` lists every Kustomization, then every HelmRelease);
+  `T` groups by kind in the same order (#306)
+
+### Fixed
+- `flux9s config set` accepts values starting with `-` (`defaultSort -age`,
+  `views.apps.sort -name`) instead of reading them as flags
+
 ## [1.4.0] - 2026-10-19
 
 # Version 1.4.0 Changelog
