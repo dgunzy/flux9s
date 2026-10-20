@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-10-20
+
+# Version 1.4.1
+
+## Added
+- Namespace-scoped view support
+
+## Changed
+- Sort order implementation
+
 ### Added
 - `defaultSort` config: the Flux list's sort at startup (`type`, `-age`,
   `status:desc`, …) (#306)
