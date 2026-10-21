@@ -1,10 +1,11 @@
 ---
 source: tests/snapshot_tests.rs
+assertion_line: 436
 expression: terminal.backend()
 ---
 "┌Kustomization (1)─────────────────────────────────────────────────────────────────────────────────────────────────────┐"
-"│STATUS  NAMESPACE       NAME                           PATH                           REVISION             PR SU RE AG│"
-"│●       flux-system     my-kustomization               -                              main@sha1:abc123     -  Fa Tr 2h│"
+"│STATUS   NAMESPACE    NAME              PATH   REVISION          PRUNE   SUSPENDED   READY   AGE                      │"
+"│●        flux-system  my-kustomization  -      main@sha1:abc123  -       False       True    2h                       │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"

@@ -129,6 +129,14 @@ yellow `⚠` from 70%, red `✗` below.
 
 ![Filtering the list](/images/filter-screenshot.png)
 
+**Columns:** each column is as wide as its widest value across the whole
+list (so columns don't move as you scroll), and MESSAGE takes the rest of
+the row. Text that doesn't fit ends in `…`; on a narrow terminal the widest
+columns shrink first.
+REVISION shows hashes short (`main@sha1:4f1a5b1051b4`) — describe (`d`) has
+the full revision. In a kind set whose kinds all have revisions (`:ks,hr`),
+the list adds a REVISION column so revisions compare across kinds.
+
 ## Searching text views
 
 In YAML (`y`), describe (`d`), trace (`t`), logs, and HelmRelease values, `/`

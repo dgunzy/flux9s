@@ -67,7 +67,7 @@ exclude = [
 [features]
 default = ["tui"]
 # Terminal UI (ratatui + crossterm) — disable for headless library usage
-tui = ["dep:ratatui", "dep:crossterm"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:unicode-width"]
 # Vendor OpenSSL for static linking (needed for musl targets)
 vendored-openssl = ["openssl/vendored"]
 
@@ -111,6 +111,9 @@ ratatui = { version = "0.30", optional = true, default-features = false, feature
     "layout-cache",
 ] }
 crossterm = { version = "0.29", optional = true }
+# Display width of cell text (wide characters), as ratatui measures it —
+# already in the tree through ratatui.
+unicode-width = { version = "0.2", optional = true }
 
 # Error handling
 anyhow = "1.0"
