@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- A kind set or view whose kinds all have revisions (`:ks,hr`) shows a
+  REVISION column, so revisions compare across kinds (#309)
+
+### Changed
+- Flux list columns are sized to their content, measured across the whole
+  list so they don't move as you scroll, and MESSAGE takes the rest of the
+  row — `Applied revision: main@sha1:<hash>` shows in full instead of being
+  cut at 40 / 50 characters (#309). Text that doesn't fit ends in `…`
+  (measured by display width, so wide characters fit too). When the row
+  doesn't fit, the widest columns shrink first and short ones (READY, AGE)
+  stay readable. A column takes at most a third of the width, so one very
+  long URL or name can't push the message out; multi-line messages are
+  flattened to one line
+- REVISION shows commit and digest hashes short (12 characters, like
+  `git log --oneline`); describe and YAML have the full revision
+- Dependency refresh: `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.10 for
+  RUSTSEC-2026-0382 and RUSTSEC-2026-0381, `tokio` 1.54
+
+### Fixed
+- A status message with multi-byte characters could crash the Flux list
+
 ## [1.4.1] - 2026-10-20
 
 # Version 1.4.1

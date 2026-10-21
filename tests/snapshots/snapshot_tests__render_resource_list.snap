@@ -1,12 +1,13 @@
 ---
 source: tests/snapshot_tests.rs
+assertion_line: 353
 expression: terminal.backend()
 ---
 "┌All Resources (3)─────────────────────────────────────────────────────────────────────────────────────────────────────┐"
-"│STATUS  NAMESPACE       NAME                           TYPE                 SUSPENDED  READY  AGE     MESSAGE         │"
-"│✗       default         my-helmrelease                 HelmRelease          True       False  3h      Suspended       │"
-"│●       flux-system     my-gitrepo                     GitRepository        False      True   1h      Fetched revision│"
-"│●       flux-system     my-kustomization               Kustomization        False      True   2h      Applied revision│"
+"│STATUS   NAMESPACE    NAME              TYPE           SUSPENDED   READY   AGE   MESSAGE                              │"
+"│✗        default      my-helmrelease    HelmRelease    True        False   3h    Suspended                            │"
+"│●        flux-system  my-gitrepo        GitRepository  False       True    1h    Fetched revision: main@sha1:def456   │"
+"│●        flux-system  my-kustomization  Kustomization  False       True    2h    Applied revision: main@sha1:abc123   │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"

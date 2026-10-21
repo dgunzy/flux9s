@@ -146,17 +146,6 @@ pub fn render_empty_state(
     f.render_widget(paragraph, area);
 }
 
-/// Truncate a message to a maximum length
-///
-/// If the message exceeds max_len, truncates and adds "...".
-pub fn truncate_message(message: &str, max_len: usize) -> String {
-    if message.len() > max_len {
-        format!("{}...", &message[..max_len.saturating_sub(3)])
-    } else {
-        message.to_string()
-    }
-}
-
 /// Create a block with title and borders using theme
 ///
 /// Reduces boilerplate when creating blocks in views.
