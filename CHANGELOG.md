@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-10-21
+
+# Version 1.4.2 Changelog
+
+**Changed**
+- Improved column logic (#310)
+
 ### Added
 - A kind set or view whose kinds all have revisions (`:ks,hr`) shows a
   REVISION column, so revisions compare across kinds (#309)
