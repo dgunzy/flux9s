@@ -421,19 +421,27 @@ impl FluxResourceKind {
                     }
                 }
                 FluxResourceKind::HelmRelease => {
-                    if let Some(chart) = spec
-                        .get("chart")
-                        .and_then(|c| c.get("spec"))
-                        .and_then(|cs| cs.get("chart"))
-                        .and_then(|ch| ch.as_str())
-                    {
+                    let chart_spec = spec.get("chart").and_then(|c| c.get("spec"));
+                    let chart_field = |key: &str| {
+                        chart_spec
+                            .and_then(|cs| cs.get(key))
+                            .and_then(|v| v.as_str())
+                    };
+                    // An OCIRepository chart template (Flux 2.10+) has a `url`
+                    // and a `ref` in place of `chart` and `version`.
+                    let oci_ref = |key: &str| {
+                        chart_spec
+                            .and_then(|cs| cs.get("ref"))
+                            .and_then(|r| r.get(key))
+                            .and_then(|v| v.as_str())
+                    };
+                    if let Some(chart) = chart_field("chart").or_else(|| chart_field("url")) {
                         fields.insert(CHART.to_string(), chart.to_string());
                     }
-                    if let Some(version) = spec
-                        .get("chart")
-                        .and_then(|c| c.get("spec"))
-                        .and_then(|cs| cs.get("version"))
-                        .and_then(|v| v.as_str())
+                    if let Some(version) = chart_field("version")
+                        .or_else(|| oci_ref("tag"))
+                        .or_else(|| oci_ref("semver"))
+                        .or_else(|| oci_ref("digest"))
                     {
                         fields.insert(VERSION.to_string(), version.to_string());
                     }
@@ -927,6 +935,29 @@ mod tests {
         assert_eq!(fields.get("CHART"), Some(&"cert-manager".to_string()));
         assert_eq!(fields.get("VERSION"), Some(&"v1.13.6".to_string()));
         assert_eq!(fields.get("INTERVAL"), Some(&"15m".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fields_helmrelease_oci_chart_template() {
+        // Flux 2.10: chart.kind OCIRepository has a url and ref, no chart/version.
+        let obj = json!({
+            "spec": {
+                "chart": {
+                    "kind": "OCIRepository",
+                    "spec": {
+                        "url": "oci://ghcr.io/stefanprodan/charts/podinfo",
+                        "ref": { "semver": ">=6.0.0" }
+                    }
+                }
+            }
+        });
+
+        let fields = FluxResourceKind::HelmRelease.extract_fields(&obj);
+        assert_eq!(
+            fields.get("CHART").map(String::as_str),
+            Some("oci://ghcr.io/stefanprodan/charts/podinfo")
+        );
+        assert_eq!(fields.get("VERSION").map(String::as_str), Some(">=6.0.0"));
     }
 
     #[test]

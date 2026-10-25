@@ -82,11 +82,11 @@ fn test_resource_type_api_consistency() {
 
     // Notification controller
     assert_eq!(Alert::api_group(), "notification.toolkit.fluxcd.io");
-    assert_eq!(Alert::api_version(), "v1beta3");
+    assert_eq!(Alert::api_version(), "v1");
     assert_eq!(Provider::api_group(), "notification.toolkit.fluxcd.io");
-    assert_eq!(Provider::api_version(), "v1beta3");
+    assert_eq!(Provider::api_version(), "v1");
     assert_eq!(Receiver::api_group(), "notification.toolkit.fluxcd.io");
-    assert_eq!(Receiver::api_version(), "v1beta3");
+    assert_eq!(Receiver::api_version(), "v1");
 }
 
 #[test]

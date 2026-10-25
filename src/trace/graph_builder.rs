@@ -987,6 +987,14 @@ fn create_graph_node_from_value(
                 .and_then(|ch| ch.as_str())
                 .map(|s| format!("chart: {}", s))
                 .or_else(|| {
+                    // OCIRepository chart template (Flux 2.10+)
+                    spec.get("chart")
+                        .and_then(|c| c.get("spec"))
+                        .and_then(|cs| cs.get("url"))
+                        .and_then(|u| u.as_str())
+                        .map(|s| format!("chart: {}", s))
+                })
+                .or_else(|| {
                     spec.get("chart")
                         .and_then(|c| c.get("spec"))
                         .and_then(|cs| cs.get("version"))

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Flux 2.10 support: CRDs and models regenerated for source / kustomize /
+  notification-controller v1.10.0, helm-controller v1.7.0, the image
+  controllers v1.3.0, and source-watcher v2.3.0 (#198)
+- HelmReleases using an OCIRepository chart template (`chart.kind:
+  OCIRepository`, Flux 2.10) show the chart URL and ref, and trace through
+  the generated OCIRepository (#198)
+
+### Changed
+- Alerts, Providers, and Receivers are watched at
+  `notification.toolkit.fluxcd.io/v1` (Alert and Provider were promoted in
+  Flux 2.10; `v1beta3` is deprecated) and fall back to `v1beta3` / `v1beta2`
+  on older clusters (#198)
+
 ## [1.4.2] - 2026-10-21
 
 # Version 1.4.2 Changelog

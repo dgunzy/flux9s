@@ -313,7 +313,8 @@ async fn resolve_kustomization_source(
 
 /// Resolve source for a HelmRelease
 /// Handles:
-/// 1. HelmRelease.status.helmChart -> HelmChart -> source
+/// 1. HelmRelease.status.helmChart -> HelmChart -> source, or (Flux 2.10+)
+///    the generated OCIRepository
 /// 2. HelmRelease.spec.chartRef -> OCIRepository/ExternalArtifact
 /// 3. HelmRelease.spec.chart.spec.sourceRef -> GitRepository/HelmRepository
 async fn resolve_helmrelease_source(
@@ -325,28 +326,46 @@ async fn resolve_helmrelease_source(
     // Fetch the HelmRelease object
     let hr_value = fetch_object(client, &node.kind, &node.namespace, &node.name).await?;
 
-    // First, check if there's a HelmChart referenced in status
+    // First, check the source object the controller generated, named in status.
+    // Since Flux 2.10 a `chart` template can generate an OCIRepository instead
+    // of a HelmChart, and status then names its kind.
     if let Some(helm_chart_ref) = hr_value
         .get("status")
         .and_then(|s| s.get("helmChart"))
         .and_then(|hc| hc.as_str())
     {
-        // Parse the HelmChart reference (format: namespace/name)
-        let (chart_ns, chart_name) = parse_namespaced_name(helm_chart_ref, default_ns);
-
-        // Fetch the HelmChart and add it to the chain
-        if let Some(chart_node) = fetch_and_trace_flux_resource(
-            client,
-            FluxResourceKind::HelmChart.as_str(),
-            &chart_ns,
-            &chart_name,
-        )
-        .await?
-        {
-            // Add HelmChart to chain
-            chain.push(chart_node.clone());
-            // Resolve the HelmChart's source
-            return resolve_helmchart_source(client, &chart_node, &chart_ns).await;
+        let (generated_kind, chart_ns, chart_name) =
+            parse_generated_chart_source(helm_chart_ref, default_ns);
+        match FluxResourceKind::parse_optional(&generated_kind) {
+            Some(FluxResourceKind::HelmChart) => {
+                if let Some(chart_node) = fetch_and_trace_flux_resource(
+                    client,
+                    FluxResourceKind::HelmChart.as_str(),
+                    &chart_ns,
+                    &chart_name,
+                )
+                .await?
+                {
+                    // Add HelmChart to chain
+                    chain.push(chart_node.clone());
+                    // Resolve the HelmChart's source
+                    return resolve_helmchart_source(client, &chart_node, &chart_ns).await;
+                }
+            }
+            Some(FluxResourceKind::OCIRepository) => {
+                // The generated OCIRepository is the source itself.
+                if let Some(source) = fetch_and_trace_flux_resource(
+                    client,
+                    FluxResourceKind::OCIRepository.as_str(),
+                    &chart_ns,
+                    &chart_name,
+                )
+                .await?
+                {
+                    return Ok(Some(source));
+                }
+            }
+            _ => tracing::warn!("Unsupported status.helmChart kind: {}", generated_kind),
         }
     }
 
@@ -496,6 +515,19 @@ async fn resolve_helmchart_source(
 }
 
 /// Parse a namespaced name reference (format: "namespace/name" or just "name")
+/// `HelmRelease.status.helmChart` as `(kind, namespace, name)`: `<ns>/<name>`
+/// for a generated HelmChart, or `<kind>/<ns>/<name>` (Flux 2.10+, for a
+/// generated OCIRepository).
+fn parse_generated_chart_source(ref_str: &str, default_ns: &str) -> (String, String, String) {
+    match ref_str.splitn(3, '/').collect::<Vec<_>>().as_slice() {
+        [kind, ns, name] => (kind.to_string(), ns.to_string(), name.to_string()),
+        _ => {
+            let (ns, name) = parse_namespaced_name(ref_str, default_ns);
+            (FluxResourceKind::HelmChart.as_str().to_string(), ns, name)
+        }
+    }
+}
+
 fn parse_namespaced_name(ref_str: &str, default_ns: &str) -> (String, String) {
     if let Some((ns, name)) = ref_str.split_once('/') {
         (ns.to_string(), name.to_string())
@@ -704,6 +736,21 @@ fn create_trace_node(obj: &Value) -> Result<TraceNode> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn generated_chart_source_names_its_kind_since_flux_2_10() {
+        let parse = |s| parse_generated_chart_source(s, "default");
+        let owned = |k: &str, ns: &str, n: &str| (k.to_string(), ns.to_string(), n.to_string());
+        assert_eq!(
+            parse("flux-system/apps-podinfo"),
+            owned("HelmChart", "flux-system", "apps-podinfo")
+        );
+        assert_eq!(
+            parse("OCIRepository/apps/podinfo"),
+            owned("OCIRepository", "apps", "podinfo")
+        );
+        assert_eq!(parse("podinfo"), owned("HelmChart", "default", "podinfo"));
+    }
 
     fn labelled(labels: Value) -> Value {
         json!({"metadata": {"name": "x", "namespace": "apps", "labels": labels}})

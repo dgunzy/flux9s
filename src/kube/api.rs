@@ -168,7 +168,7 @@ pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String,
 /// Generate fallback API versions based on the default version
 ///
 /// This generates common fallback versions without hardcoding specific resource types.
-/// For example, if default is "v1", it will try "v1beta2", "v1beta1", "v1alpha1".
+/// For example, if default is "v1", it will try "v1beta3", "v1beta2", "v1beta1", "v1alpha1".
 /// If default is "v2", it will try "v2beta2", "v2beta1", "v1", "v1beta2", etc.
 fn generate_fallback_versions(default_version: &str) -> Vec<String> {
     let mut fallbacks = Vec::new();
@@ -182,7 +182,9 @@ fn generate_fallback_versions(default_version: &str) -> Vec<String> {
 
         // If it's a stable version (v1, v2, etc.), generate beta/alpha fallbacks
         if suffix.is_empty() {
-            // For v1: try v1beta2, v1beta1, v1alpha1
+            // For v1: try v1beta3 (notification, before Flux 2.10), v1beta2,
+            // v1beta1, v1alpha1
+            fallbacks.push(format!("v{}beta3", major));
             fallbacks.push(format!("v{}beta2", major));
             fallbacks.push(format!("v{}beta1", major));
             fallbacks.push(format!("v{}alpha1", major));
@@ -438,6 +440,24 @@ mod tests {
             "v1 should fall back to v1beta2 for older clusters"
         );
         assert!(fallbacks.contains(&"v1beta1".to_string()));
+    }
+
+    #[test]
+    fn test_notification_kinds_fall_back_to_v1beta3_then_v1beta2() {
+        // Alert/Provider moved to v1 in Flux 2.10; older clusters serve v1beta3
+        // (Flux 2.1–2.9) or v1beta2 (before that).
+        for kind in [
+            FluxResourceKind::Alert,
+            FluxResourceKind::Provider,
+            FluxResourceKind::Receiver,
+        ] {
+            let versions: Vec<String> = get_flux_api_resources_with_fallback(kind)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.version)
+                .collect();
+            assert_eq!(versions[..3], ["v1", "v1beta3", "v1beta2"], "{kind:?}");
+        }
     }
 
     #[test]

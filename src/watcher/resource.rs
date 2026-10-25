@@ -197,21 +197,21 @@ impl_watchable!(
 impl_watchable!(
     Alert,
     "notification.toolkit.fluxcd.io",
-    "v1beta3",
+    "v1",
     "alerts",
     "Alert"
 );
 impl_watchable!(
     Provider,
     "notification.toolkit.fluxcd.io",
-    "v1beta3",
+    "v1",
     "providers",
     "Provider"
 );
 impl_watchable!(
     Receiver,
     "notification.toolkit.fluxcd.io",
-    "v1beta3",
+    "v1",
     "receivers",
     "Receiver"
 );

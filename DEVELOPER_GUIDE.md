@@ -401,8 +401,8 @@ flux9s supports all Flux CD resources from the official Flux controllers and Flu
 
 #### Notification Controller (`notification.toolkit.fluxcd.io`)
 
-- **Alert** (v1beta3) - Alert configurations
-- **Provider** (v1beta3) - Notification providers
+- **Alert** (v1, falls back to v1beta3/v1beta2) - Alert configurations
+- **Provider** (v1, falls back to v1beta3/v1beta2) - Notification providers
 - **Receiver** (v1) - Webhook receivers
 
 #### Source Watcher (`source.toolkit.fluxcd.io`)
