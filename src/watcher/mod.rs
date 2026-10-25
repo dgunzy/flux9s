@@ -527,9 +527,11 @@ impl ResourceWatcher {
     /// Watch a resource type that may be served at different API versions across Flux releases.
     ///
     /// Uses DynamicObject to try each version in order, stopping at the first that responds.
-    /// Handles all five resource types that graduated from beta to stable in Flux 2.3.0:
-    ///   - OCIRepository / Bucket / HelmRepository / HelmChart  (v1beta2 → v1)
-    ///   - HelmRelease                                           (v2beta2 → v2)
+    /// Handles the resource types that graduated from beta to stable:
+    ///   - OCIRepository / Bucket / HelmRepository / HelmChart  (v1beta2 → v1, Flux 2.3)
+    ///   - HelmRelease                                           (v2beta2 → v2, Flux 2.3)
+    ///   - Alert / Provider                                      (v1beta3 → v1, Flux 2.10)
+    ///   - Receiver                                              (v1beta3 → v1, Flux 2.1)
     fn watch_with_version_fallback(&mut self, resource_kind: FluxResourceKind) -> Result<()> {
         let api_resources = get_flux_api_resources_with_fallback(resource_kind)?;
         let client = self.client.clone();
@@ -756,9 +758,11 @@ impl ResourceWatcher {
         self.watch::<resource::ImageUpdateAutomation>()?;
 
         // Notification Controller resources
-        self.watch::<resource::Alert>()?;
-        self.watch::<resource::Provider>()?;
-        self.watch::<resource::Receiver>()?;
+        // Alert and Provider graduated from v1beta3 to v1 in Flux 2.10 (Receiver
+        // in 2.1); v1beta3 is still served but deprecated. Fall back for older clusters.
+        self.watch_with_version_fallback(FluxResourceKind::Alert)?;
+        self.watch_with_version_fallback(FluxResourceKind::Provider)?;
+        self.watch_with_version_fallback(FluxResourceKind::Receiver)?;
 
         // Flux Operator resources
         self.watch::<resource::ResourceSet>()?;
