@@ -4,7 +4,7 @@
 # Provider/grafana (standalone)
 # Receiver/github-push → triggers GitRepository/flux-system
 # Receiver/dockerhub   → triggers ImageRepository/podinfo
-apiVersion: notification.toolkit.fluxcd.io/v1beta3
+apiVersion: notification.toolkit.fluxcd.io/v1
 kind: Provider
 metadata:
   name: slack
@@ -17,7 +17,7 @@ spec:
   secretRef:
     name: slack-token
 ---
-apiVersion: notification.toolkit.fluxcd.io/v1beta3
+apiVersion: notification.toolkit.fluxcd.io/v1
 kind: Provider
 metadata:
   name: webhook
@@ -27,7 +27,7 @@ spec:
   type: generic
   address: https://webhook.example.com/flux
 ---
-apiVersion: notification.toolkit.fluxcd.io/v1beta3
+apiVersion: notification.toolkit.fluxcd.io/v1
 kind: Provider
 metadata:
   name: grafana
@@ -39,7 +39,7 @@ spec:
   secretRef:
     name: grafana-token
 ---
-apiVersion: notification.toolkit.fluxcd.io/v1beta3
+apiVersion: notification.toolkit.fluxcd.io/v1
 kind: Alert
 metadata:
   name: on-error
@@ -55,7 +55,7 @@ spec:
     - kind: HelmRelease
       name: "*"
 ---
-apiVersion: notification.toolkit.fluxcd.io/v1beta3
+apiVersion: notification.toolkit.fluxcd.io/v1
 kind: Alert
 metadata:
   name: all-events

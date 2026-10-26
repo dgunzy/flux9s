@@ -787,3 +787,133 @@ async fn sweeps_find_unmanaged_and_orphaned_objects() {
     let names: Vec<_> = of_apps.rows.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(names, ["ownership-left-behind"]);
 }
+
+/// Flux 2.10 serves Alert / Provider at `notification.toolkit.fluxcd.io/v1`:
+/// flux9s's first-choice version is served (no fallback to the deprecated
+/// `v1beta3`), and the generated v1 models read the dev cluster's objects.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+async fn notification_kinds_are_read_at_v1_on_flux_2_10() {
+    use flux9s::models::FluxResourceKind;
+    use flux9s::watcher::{Alert, Provider, Receiver};
+    use kube::Api;
+
+    let client = client_for(&simple_context()).await;
+    for (kind, name) in [
+        (FluxResourceKind::Alert, "on-error"),
+        (FluxResourceKind::Provider, "slack"),
+        (FluxResourceKind::Receiver, "github-push"),
+    ] {
+        let resource = flux9s::kube::get_api_resource_with_fallback(
+            &client,
+            kind.as_str(),
+            "flux-resources",
+            name,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{kind:?}: {e:#}"));
+        assert_eq!(resource.version, "v1", "{kind:?} should be served at v1");
+    }
+
+    let ns = "flux-resources";
+    let alerts = Api::<Alert>::namespaced(client.clone(), ns)
+        .list(&Default::default())
+        .await
+        .expect("v1 Alerts deserialize into the generated model");
+    assert!(alerts.items.len() >= 2, "{} alerts", alerts.items.len());
+    let providers = Api::<Provider>::namespaced(client.clone(), ns)
+        .list(&Default::default())
+        .await
+        .expect("v1 Providers deserialize into the generated model");
+    assert!(
+        providers
+            .items
+            .iter()
+            .any(|p| p.metadata.name.as_deref() == Some("slack"))
+    );
+    Api::<Receiver>::namespaced(client, ns)
+        .list(&Default::default())
+        .await
+        .expect("v1 Receivers deserialize into the generated model");
+}
+
+/// A Flux 2.10 HelmRelease with an OCIRepository chart template
+/// (`podinfo-oci-chart`): its workload traces through the HelmRelease to the
+/// generated OCIRepository (`status.helmChart` = `OCIRepository/<ns>/<name>`),
+/// the list shows the chart URL and ref, and the generated source — labelled
+/// for the HelmRelease but never in its inventory — isn't called an orphan.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+async fn oci_chart_template_traces_to_its_generated_ocirepository() {
+    use flux9s::kube::objects::ObjectRef;
+    use flux9s::kube::sweep::{SweepRequest, SweepScope, sweep};
+    use flux9s::models::FluxResourceKind;
+    use flux9s::watcher::ResourceKey;
+
+    let client = client_for(&simple_context()).await;
+    let ns = "flux-resources";
+    let release = eventually("podinfo-oci-chart installed", 300, || {
+        let client = client.clone();
+        async move {
+            let hr = flux9s::kube::fetch_resource(&client, "HelmRelease", ns, "podinfo-oci-chart")
+                .await
+                .ok()?;
+            hr.pointer("/status/helmChart")
+                .and_then(|v| v.as_str())
+                .is_some_and(|c| c.starts_with("OCIRepository/"))
+                .then_some(hr)
+        }
+    })
+    .await;
+
+    let fields = FluxResourceKind::HelmRelease.extract_fields(&release);
+    assert_eq!(
+        fields.get("VERSION").map(String::as_str),
+        Some(">=6.0.0"),
+        "the OCI ref stands in for the chart version"
+    );
+
+    let trace = eventually("podinfo-oci-chart deployment traced", 120, || {
+        let client = client.clone();
+        async move {
+            flux9s::trace::trace_target(
+                &client,
+                &ObjectRef::native("apps/v1", "Deployment", ns, "podinfo-oci-chart"),
+            )
+            .await
+            .ok()
+        }
+    })
+    .await;
+    assert_eq!(
+        trace
+            .flux_manager()
+            .map(|n| (n.kind.as_str(), n.name.as_str())),
+        Some(("HelmRelease", "podinfo-oci-chart"))
+    );
+    let source = trace.source.as_ref().expect("a source");
+    assert_eq!(
+        (source.kind.as_str(), source.name.as_str()),
+        ("OCIRepository", "flux-resources-podinfo-oci-chart"),
+        "the generated OCIRepository, from status.helmChart"
+    );
+
+    let kinds = flux9s::kube::discovery::discover_kinds(&client)
+        .await
+        .expect("discovery");
+    let left = sweep(
+        &client,
+        SweepRequest {
+            scope: SweepScope::OrphansOf(ResourceKey::new("HelmRelease", ns, "podinfo-oci-chart")),
+            namespace: None,
+            config: Default::default(),
+        },
+        kinds,
+    )
+    .await;
+    assert!(
+        left.rows.is_empty(),
+        "the generated OCIRepository is not an orphan: {:?}",
+        left.rows
+    );
+}
