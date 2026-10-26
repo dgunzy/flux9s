@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-10-26
+
+# Version 1.4.4 Changelog
+
+## Fixed
+- Fixed compatibility with old API versions
+- Code cleanup improvements
+
 ### Added
 - Docs: supported and tested Flux versions (2.2 and later; tested on 2.2,
   2.9, 2.10)
