@@ -75,7 +75,10 @@ themselves; first match wins:
    `default` ServiceAccount, ServiceAccount tokens, default RBAC), else `-`
 
 A Flux-labelled object reads `orphaned (ks)` (or `hr`, `rset`, `instance`)
-when Flux no longer manages it — see
+when Flux no longer manages it. The list is still a watch; to notice an
+owner's inventory changing (which sends no event for the object), it also
+re-reads each Flux owner its rows name — one GET per owner, every 30
+seconds, while the list is open. See
 [unmanaged and orphaned objects](#unmanaged-and-orphaned).
 
 Describe (`d`) and the workload detail show the full answer, e.g.
@@ -107,7 +110,9 @@ the commands. Each row says where the object stands and why:
 
 `Enter`/`d` describes the object (Managed By says `orphaned — …` there too),
 `y` shows its YAML, and `t` / `m` go to the Flux object an orphan names, while
-it exists. The list is a snapshot, not a live watch: `Ctrl-r` rescans.
+it exists. Unlike the rest of flux9s, a sweep is **not a watch**: it lists
+each kind once, metadata only, when you run it — nothing repeats in the
+background. `Ctrl-r` rescans.
 
 **How the verdict is reached.** A sweep lists every discovered kind once,
 metadata only, and keeps top-level objects — anything with an owner

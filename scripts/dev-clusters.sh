@@ -7,7 +7,7 @@
 #
 # Creates three clearly-named clusters:
 #
-#   flux9s-simple   — Flux 2.9.x + source-watcher; day-to-day dev testing (steps, AG, events)
+#   flux9s-simple   — Flux 2.10.x + source-watcher; day-to-day dev testing (steps, AG, events)
 #   flux9s-stress   — Flux 2.7.x; 40+ resources of every kind for page-scroll / large lists
 #   flux9s-legacy   — Flux 2.2.x with OCIRepository/Bucket at v1beta2; tests the
 #                     version-fallback logic (flux9s tries v1 first, then v1beta2)
@@ -42,7 +42,7 @@ STRESS_CLUSTER="flux9s-stress"
 LEGACY_CLUSTER="flux9s-legacy"
 
 FLUX_OPERATOR_CHART="oci://ghcr.io/controlplaneio-fluxcd/charts/flux-operator"
-FLUX_OPERATOR_VERSION="0.55.0"
+FLUX_OPERATOR_VERSION="0.62.0"
 DEPLOY_WAIT_TIMEOUT="${FLUX9S_DEV_DEPLOY_WAIT_TIMEOUT:-5s}"
 CRD_WAIT_RETRIES="${FLUX9S_DEV_CRD_WAIT_RETRIES:-5}"
 CRD_WAIT_SLEEP_SECONDS="${FLUX9S_DEV_CRD_WAIT_SLEEP_SECONDS:-3}"
@@ -320,7 +320,7 @@ run_build() {
 # ── cluster builders ───────────────────────────────────────────────────────────
 
 build_simple_cluster() {
-    header "Building  $SIMPLE_CLUSTER  (Flux 2.9.x + source-watcher — current repo CRD baseline)"
+    header "Building  $SIMPLE_CLUSTER  (Flux 2.10.x + source-watcher — current repo CRD baseline)"
 
     kind create cluster --name "$SIMPLE_CLUSTER" --wait 60s
     local ctx="kind-${SIMPLE_CLUSTER}"
@@ -451,7 +451,7 @@ main() {
     echo "  Available clusters:"
     kind get clusters 2>/dev/null | sed 's/^/    • kind-/'
     echo
-    echo "  Day-to-day dev (Flux 2.9.x, current repo CRDs):"
+    echo "  Day-to-day dev (Flux 2.10.x, current repo CRDs):"
     echo "    kubectl config use-context kind-${SIMPLE_CLUSTER} && cargo run"
     echo
     echo "  Page-scroll stress testing (Flux 2.7.x):"
