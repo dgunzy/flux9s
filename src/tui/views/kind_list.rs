@@ -229,6 +229,8 @@ mod tests {
             created: None,
             ownership: crate::kube::ownership::Ownership::Unmanaged,
             resolved: None,
+            flux_probe: None,
+            orphan: None,
         }
     }
 

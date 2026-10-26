@@ -25,6 +25,8 @@ pub mod metrics;
 pub mod object_status;
 pub mod objects;
 pub mod ownership;
+pub mod standing;
+pub mod sweep;
 pub mod workloads;
 
 pub use api::{get_api_resource_with_fallback, get_gvk_for_resource_type};

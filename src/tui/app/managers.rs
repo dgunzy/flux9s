@@ -19,7 +19,7 @@ impl App {
     /// must decide whether it shows one.
     pub(crate) fn native_subject(&self) -> Option<ObjectRef> {
         match self.view_state.current_view {
-            View::KindList => self.native_view_target(),
+            View::KindList | View::OwnershipList => self.native_view_target(),
             View::WorkloadDetail => self.async_state.workload.result().map(|w| ObjectRef {
                 kind: w.kind.clone(),
                 namespace: w.namespace.clone(),
@@ -53,6 +53,7 @@ impl App {
         let native = self.selection_state.native_object.is_some();
         match self.view_state.current_view {
             View::KindList => self.selected_kind_row()?.flux_manager(),
+            View::OwnershipList => self.selected_sweep_row()?.flux_manager(),
             View::WorkloadDetail => self
                 .async_state
                 .workload

@@ -56,6 +56,7 @@ impl App {
             View::WorkloadList => self.view_state.workload_rows.len(),
             View::InventoryList => self.view_state.inventory_rows.len(),
             View::KindList => self.filtered_kind_rows().len(),
+            View::OwnershipList => self.filtered_sweep_rows().len(),
             _ => self.get_filtered_resources().len(),
         }
     }

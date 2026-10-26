@@ -27,7 +27,10 @@ use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::kube::object_status::{ObjectHealth, compute_object_status};
-use crate::kube::ownership::{OwnerResolver, Ownership, Resolved, managed_by_text, ownership};
+use crate::kube::ownership::{
+    Manager, OwnerResolver, Ownership, Resolved, managed_by_text, ownership,
+};
+use crate::kube::standing::{self, FluxOwners, OrphanReason};
 use crate::models::kinds::{BuiltinColumn, Column, KindSpec};
 use crate::watcher::ResourceKey;
 
@@ -74,12 +77,72 @@ pub struct KindRow {
     pub ownership: Ownership,
     /// Where the owner chain led, once resolved (set at snapshot time).
     pub resolved: Option<Resolved>,
+    /// For rows Flux labels: what the orphan check needs (#274).
+    pub flux_probe: Option<FluxProbe>,
+    /// Why Flux no longer manages it, once its owner was read (set at
+    /// snapshot time).
+    pub orphan: Option<OrphanReason>,
+}
+
+/// What the orphan check needs from a Flux-labelled object — its owner and
+/// a few metadata fields, never the whole object (see the module docs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FluxProbe {
+    pub manager: Manager,
+    pub owner: ResourceKey,
+    pub group: String,
+    pub kind: String,
+    /// `metadata` with only identity, creation time, and the opt-out marks.
+    pub meta: Value,
+}
+
+impl FluxProbe {
+    fn of(obj: &Value) -> Option<Self> {
+        let (manager, owner) = standing::flux_owner(obj)?;
+        let namespace = obj
+            .pointer("/metadata/namespace")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let pick = |field: &str, keys: &[&str]| -> Value {
+            let source = obj.pointer(&format!("/metadata/{field}"));
+            keys.iter()
+                .filter_map(|key| Some((key.to_string(), source?.get(*key)?.clone())))
+                .collect::<serde_json::Map<_, _>>()
+                .into()
+        };
+        let prune = "kustomize.toolkit.fluxcd.io/prune";
+        Some(Self {
+            manager,
+            owner,
+            group: standing::group_of(obj.get("apiVersion")?.as_str()?).to_string(),
+            kind: obj.get("kind")?.as_str()?.to_string(),
+            meta: serde_json::json!({"metadata": {
+                "name": obj.pointer("/metadata/name"),
+                "namespace": namespace,
+                "creationTimestamp": obj.pointer("/metadata/creationTimestamp"),
+                "annotations": pick("annotations", &["helm.sh/hook", prune]),
+                "labels": pick("labels", &[prune]),
+            }}),
+        })
+    }
+}
+
+/// MANAGED-BY text for an orphan: what it was managed by (`orphaned (ks)`).
+fn orphan_label(manager: &Manager) -> String {
+    let short = manager.short_label();
+    format!(
+        "orphaned ({})",
+        short.strip_prefix("Flux ").unwrap_or(&short)
+    )
 }
 
 impl KindRow {
     /// The Flux object managing this row, directly or through its owner
     /// chain — what `t`, `g`, and `m` act on (#266).
     pub fn flux_manager(&self) -> Option<ResourceKey> {
+        if self.orphan == Some(OrphanReason::OwnerGone) {
+            return None; // nothing to jump to
+        }
         let manager = match &self.ownership {
             Ownership::Managed(manager) => Some(manager),
             Ownership::Owned(_) => self.resolved.as_ref().and_then(Resolved::manager),
@@ -279,6 +342,21 @@ pub fn kind_row(
         .and_then(|c| c.parse::<chrono::DateTime<chrono::Utc>>().ok());
     let status = compute_object_status(obj);
     let owned = ownership(obj);
+    let group = standing::group_of(
+        obj.get("apiVersion")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
+    let kind = obj.get("kind").and_then(Value::as_str).unwrap_or_default();
+    // Unclaimed objects may still be Kubernetes' own or Helm's storage (#274).
+    let managed_text = match &owned {
+        Ownership::Unmanaged => standing::system_reason(obj, group, kind)
+            .map(|_| "system".to_string())
+            .or_else(|| standing::helm_storage_release(obj, group, kind).map(|m| m.short_label()))
+            .unwrap_or_else(|| managed_by_text(&owned, None)),
+        _ => managed_by_text(&owned, None),
+    };
+    let flux_probe = FluxProbe::of(obj);
     let cells = columns
         .iter()
         .map(|column| match column {
@@ -291,9 +369,7 @@ pub fn kind_row(
             Column::Builtin(BuiltinColumn::Age) => {
                 created.map(|t| format_age(now - t)).unwrap_or_default()
             }
-            Column::Builtin(BuiltinColumn::ManagedBy) => {
-                sanitize_cell(&managed_by_text(&owned, None))
-            }
+            Column::Builtin(BuiltinColumn::ManagedBy) => sanitize_cell(&managed_text),
             Column::JsonPath { path, .. } => sanitize_cell(&eval_path(obj, path)),
         })
         .collect();
@@ -305,6 +381,8 @@ pub fn kind_row(
         created,
         ownership: owned,
         resolved: None,
+        flux_probe,
+        orphan: None,
     })
 }
 
@@ -439,13 +517,15 @@ impl KindStore {
         }
     }
 
-    /// Up to [`MAX_ROWS`] rows, with AGE cells recomputed for `now` and
-    /// MANAGED-BY cells filled from resolved owner chains.
+    /// Up to [`MAX_ROWS`] rows, with AGE cells recomputed for `now`,
+    /// MANAGED-BY cells filled from resolved owner chains, and Flux-labelled
+    /// rows checked against their owners' inventories (#274).
     fn snapshot(
         &self,
         columns: &[Column],
         now: chrono::DateTime<chrono::Utc>,
         owners: &OwnerResolver,
+        flux_owners: &FluxOwners,
     ) -> KindListSnapshot {
         let cells_of = |wanted: BuiltinColumn| -> Vec<usize> {
             columns
@@ -481,6 +561,19 @@ impl KindStore {
                         }
                     }
                 }
+                if let Some(probe) = &row.flux_probe {
+                    row.orphan = flux_owners.get(&probe.owner).and_then(|owner| {
+                        standing::orphan_reason(&probe.meta, &probe.group, &probe.kind, owner, now)
+                    });
+                    if row.orphan.is_some() {
+                        let text = orphan_label(&probe.manager);
+                        for &i in &managed_cells {
+                            if let Some(cell) = row.cells.get_mut(i) {
+                                cell.clone_from(&text);
+                            }
+                        }
+                    }
+                }
                 row
             })
             .collect();
@@ -493,6 +586,14 @@ impl KindStore {
 }
 
 impl KindStore {
+    /// The Flux owners the listed rows' labels name.
+    fn flux_owner_keys(&self) -> std::collections::HashSet<ResourceKey> {
+        self.rows
+            .values()
+            .filter_map(|row| row.flux_probe.as_ref().map(|p| p.owner.clone()))
+            .collect()
+    }
+
     /// Distinct owners still to resolve, with the namespace to look in.
     /// UIDs of the direct owners of the rows currently listed.
     fn owner_uids(&self) -> std::collections::HashSet<String> {
@@ -577,14 +678,33 @@ async fn watch_kind_with(
     let mut events = start();
     let mut store = KindStore::default();
     let mut owners = OwnerResolver::default();
+    let mut flux_owners = FluxOwners::default();
+    // Owners are re-read on a timer too: an object turns orphaned when its
+    // owner's inventory changes, with no event for the object itself.
+    let mut owner_tick = tokio::time::interval(standing::OWNER_TTL);
+    owner_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_error: Option<String> = None;
     let mut first_list_wait = first_list_timeout;
 
     loop {
         let first = if store.listed {
-            match events.next().await {
-                Some(event) => event,
-                None => break,
+            tokio::select! {
+                event = events.next() => match event {
+                    Some(event) => event,
+                    None => break,
+                },
+                _ = owner_tick.tick() => {
+                    let keys = store.flux_owner_keys();
+                    flux_owners.retain(&keys);
+                    if flux_owners.refresh(&client, &keys).await
+                        && tx
+                            .send(Ok(store.snapshot(&columns, chrono::Utc::now(), &owners, &flux_owners)))
+                            .is_err()
+                    {
+                        return; // List closed
+                    }
+                    continue;
+                }
             }
         } else {
             // Until the first listing lands, a stall is visible and retried
@@ -639,7 +759,12 @@ async fn watch_kind_with(
         if store.listed && changed {
             last_error = None;
             if tx
-                .send(Ok(store.snapshot(&columns, chrono::Utc::now(), &owners)))
+                .send(Ok(store.snapshot(
+                    &columns,
+                    chrono::Utc::now(),
+                    &owners,
+                    &flux_owners,
+                )))
                 .is_err()
             {
                 return; // List closed
@@ -663,11 +788,31 @@ async fn watch_kind_with(
                     }
                 }
                 if tx
-                    .send(Ok(store.snapshot(&columns, chrono::Utc::now(), &owners)))
+                    .send(Ok(store.snapshot(
+                        &columns,
+                        chrono::Utc::now(),
+                        &owners,
+                        &flux_owners,
+                    )))
                     .is_err()
                 {
                     return;
                 }
+            }
+            // Then the Flux owners the rows name (one read per owner).
+            let keys = store.flux_owner_keys();
+            flux_owners.retain(&keys);
+            if flux_owners.refresh(&client, &keys).await
+                && tx
+                    .send(Ok(store.snapshot(
+                        &columns,
+                        chrono::Utc::now(),
+                        &owners,
+                        &flux_owners,
+                    )))
+                    .is_err()
+            {
+                return;
             }
         }
     }
@@ -822,7 +967,12 @@ mod tests {
             watcher::Event::Apply(dynamic("a", "api", 0))
         ));
         let now: chrono::DateTime<chrono::Utc> = "2026-09-29T12:00:00Z".parse().unwrap();
-        let snapshot = store.snapshot(&s.columns, now, &OwnerResolver::default());
+        let snapshot = store.snapshot(
+            &s.columns,
+            now,
+            &OwnerResolver::default(),
+            &FluxOwners::default(),
+        );
         let names: Vec<_> = snapshot.rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["api", "web"], "sorted by namespace/name");
         assert_eq!(snapshot.rows[0].health, ObjectHealth::InProgress);
@@ -897,11 +1047,18 @@ mod tests {
                     created: None,
                     ownership: Ownership::Unmanaged,
                     resolved: None,
+                    flux_probe: None,
+                    orphan: None,
                 },
             );
         }
         store.apply(&s, &s.columns, watcher::Event::InitDone);
-        let snapshot = store.snapshot(&s.columns, chrono::Utc::now(), &OwnerResolver::default());
+        let snapshot = store.snapshot(
+            &s.columns,
+            chrono::Utc::now(),
+            &OwnerResolver::default(),
+            &FluxOwners::default(),
+        );
         assert_eq!(snapshot.rows.len(), MAX_ROWS);
         assert_eq!(snapshot.total, MAX_ROWS + 3);
         assert!(snapshot.truncated());
@@ -959,7 +1116,7 @@ mod tests {
 
         let mut owners = OwnerResolver::default();
         assert_eq!(store.pending_owners(&owners).len(), 1);
-        let before = store.snapshot(&s.columns, now, &owners);
+        let before = store.snapshot(&s.columns, now, &owners, &FluxOwners::default());
         assert_eq!(
             before.rows[0].cells[1], "ReplicaSet",
             "direct owner meanwhile"
@@ -974,7 +1131,7 @@ mod tests {
                 name: "apps".into(),
             }),
         );
-        let after = store.snapshot(&s.columns, now, &owners);
+        let after = store.snapshot(&s.columns, now, &owners, &FluxOwners::default());
         assert_eq!(after.rows[0].cells[1], "Flux ks");
         assert_eq!(
             after.rows[0].flux_manager(),
@@ -982,6 +1139,85 @@ mod tests {
             "t / g / m act on the manager the chain reached (#266)"
         );
         assert!(store.pending_owners(&owners).is_empty());
+    }
+
+    #[test]
+    fn flux_labelled_rows_turn_orphaned_once_their_owner_is_read() {
+        use crate::kube::standing::{OwnerSnapshot, OwnerState};
+        let s = spec();
+        let mut store = KindStore::default();
+        let labelled = |name: &str| -> DynamicObject {
+            serde_json::from_value(json!({"metadata": {
+                "name": name, "namespace": "apps", "creationTimestamp": "2026-09-01T00:00:00Z",
+                "labels": {"kustomize.toolkit.fluxcd.io/name": "apps", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}
+            }}))
+            .unwrap()
+        };
+        store.apply(&s, &s.columns, watcher::Event::Apply(labelled("kept")));
+        store.apply(&s, &s.columns, watcher::Event::Apply(labelled("listed")));
+        store.listed = true;
+        let owner = ResourceKey::new("Kustomization", "flux-system", "apps");
+        assert_eq!(store.flux_owner_keys(), [owner.clone()].into());
+
+        let now = chrono::Utc::now();
+        let unread = store.snapshot(
+            &s.columns,
+            now,
+            &OwnerResolver::default(),
+            &FluxOwners::default(),
+        );
+        assert!(
+            unread
+                .rows
+                .iter()
+                .all(|r| r.orphan.is_none() && r.cells[1] == "Flux ks")
+        );
+
+        let mut owners = FluxOwners::default();
+        owners.seed(
+            owner,
+            OwnerState::Present(OwnerSnapshot {
+                inventory: Some(["apps_listed_apps_Deployment".to_string()].into()),
+                settled: true,
+                prune: Some(false),
+                generated: None,
+            }),
+        );
+        let read = store.snapshot(&s.columns, now, &OwnerResolver::default(), &owners);
+        let kept = &read.rows[0];
+        assert_eq!(kept.name, "kept");
+        assert_eq!(kept.cells[1], "orphaned (ks)");
+        assert!(
+            kept.flux_manager().is_some(),
+            "the owner exists: m goes to it"
+        );
+        assert_eq!(read.rows[1].cells[1], "Flux ks", "listed in the inventory");
+    }
+
+    #[test]
+    fn kubernetes_builtins_and_helm_storage_say_so() {
+        let now = chrono::Utc::now();
+        let columns = [Column::Builtin(BuiltinColumn::ManagedBy)];
+        let row = |obj: Value| kind_row(&columns, &obj, now).unwrap().cells[0].clone();
+        assert_eq!(
+            row(
+                json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "kube-root-ca.crt", "namespace": "apps"}})
+            ),
+            "system"
+        );
+        assert_eq!(
+            row(
+                json!({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "sh.helm.release.v1.web.v1", "namespace": "apps",
+                "labels": {"owner": "helm", "name": "web"}}})
+            ),
+            "Helm"
+        );
+        assert_eq!(
+            row(
+                json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "notes", "namespace": "apps"}})
+            ),
+            "-"
+        );
     }
 
     #[test]

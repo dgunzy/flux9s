@@ -18,6 +18,7 @@ mod keys;
 mod kind_browser;
 mod managers;
 mod navigation;
+mod ownership;
 mod rendering;
 mod submenus;
 mod user_views;

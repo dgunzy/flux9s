@@ -491,6 +491,24 @@ pub async fn run_tui_with_async_init(
                         app.async_state.inventory_status.set_handle(handle);
                     }
 
+                    if let Some((request, tx)) = app.async_state.sweep.dispatch()
+                        && app.config.native_resources
+                    {
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            // Opened before discovery finished: discover first
+                            // (sweeps only run with nativeResources on).
+                            let mut kinds = crate::models::kinds::catalog().all();
+                            if kinds.is_empty() {
+                                kinds = crate::kube::discovery::discover_kinds(&client)
+                                    .await
+                                    .unwrap_or_default();
+                            }
+                            let result = crate::kube::sweep::sweep(&client, request, kinds).await;
+                            let _ = tx.send(Ok(result));
+                        });
+                    }
+
                     if let Some(((), tx)) = app.async_state.kind_discovery.dispatch() {
                         let client = client.clone();
                         tokio::spawn(async move {
@@ -696,6 +714,16 @@ pub async fn run_tui_with_async_init(
                 match result {
                     Ok(statuses) => app.async_state.inventory_status.set_result(statuses),
                     Err(e) => tracing::warn!("Inventory status lookup failed: {}", e),
+                }
+            }
+
+            if let Some(result) = app.async_state.sweep.try_recv() {
+                match result {
+                    Ok(found) => app.on_sweep_result(found),
+                    Err(e) => {
+                        app.async_state.sweep.set_error();
+                        tracing::warn!("Sweep failed: {e:#}");
+                    }
                 }
             }
 

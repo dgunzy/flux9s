@@ -618,6 +618,7 @@ impl App {
         self.view_state.scroll_offset = 0;
         self.view_state.kind_filter = crate::models::kind_filter::KindFilter::all();
         self.async_state.clear_pending();
+        self.clear_sweep();
         // Kind lists and discovered kinds belong to the old cluster.
         crate::models::kinds::catalog().clear();
         crate::kube::ownership::clear_api_cache();
@@ -831,6 +832,7 @@ impl App {
             | View::WorkloadList
             | View::InventoryList
             | View::KindList
+            | View::OwnershipList
             | View::WorkloadDetail
             | View::Pulse
             | View::ResourceEdit
@@ -1228,6 +1230,7 @@ mod tests {
             favorites: vec![],
             default_resource_filter: None,
             views: Default::default(),
+            ownership: Default::default(),
             default_sort: None,
             connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
             editor: None,

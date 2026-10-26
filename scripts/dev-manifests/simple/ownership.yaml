@@ -1,0 +1,41 @@
+# Ownership fixtures for :unmanaged / :orphaned (#274). Applied with kubectl
+# like the rest of this directory — not by Flux — so each object stands for
+# one case. tests/live_tests.rs checks how flux9s classifies them.
+---
+# Unmanaged: no Flux, Argo CD, or Helm marks and no owner; created by kubectl.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ownership-hand-made
+  namespace: flux-resources
+data:
+  note: created by hand
+---
+# Orphaned, owner gone: the labels name a Kustomization that doesn't exist
+# (as when one is deleted with prune: false or deletionPolicy: Orphan).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ownership-owner-gone
+  namespace: flux-resources
+  labels:
+    kustomize.toolkit.fluxcd.io/name: deleted-app
+    kustomize.toolkit.fluxcd.io/namespace: flux-resources
+data:
+  note: its Kustomization was deleted
+---
+# Orphaned, left out of the inventory: the labels name the `apps`
+# Kustomization, which doesn't list it — as when an object is removed from
+# source while pruning is disabled for it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ownership-left-behind
+  namespace: flux-resources
+  labels:
+    kustomize.toolkit.fluxcd.io/name: apps
+    kustomize.toolkit.fluxcd.io/namespace: flux-resources
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+data:
+  note: removed from source with pruning disabled

@@ -335,7 +335,7 @@ async fn resolve_helmrelease_source(
         .and_then(|hc| hc.as_str())
     {
         let (generated_kind, chart_ns, chart_name) =
-            parse_generated_chart_source(helm_chart_ref, default_ns);
+            crate::kube::standing::generated_chart_source(helm_chart_ref, default_ns);
         match FluxResourceKind::parse_optional(&generated_kind) {
             Some(FluxResourceKind::HelmChart) => {
                 if let Some(chart_node) = fetch_and_trace_flux_resource(
@@ -515,19 +515,6 @@ async fn resolve_helmchart_source(
 }
 
 /// Parse a namespaced name reference (format: "namespace/name" or just "name")
-/// `HelmRelease.status.helmChart` as `(kind, namespace, name)`: `<ns>/<name>`
-/// for a generated HelmChart, or `<kind>/<ns>/<name>` (Flux 2.10+, for a
-/// generated OCIRepository).
-fn parse_generated_chart_source(ref_str: &str, default_ns: &str) -> (String, String, String) {
-    match ref_str.splitn(3, '/').collect::<Vec<_>>().as_slice() {
-        [kind, ns, name] => (kind.to_string(), ns.to_string(), name.to_string()),
-        _ => {
-            let (ns, name) = parse_namespaced_name(ref_str, default_ns);
-            (FluxResourceKind::HelmChart.as_str().to_string(), ns, name)
-        }
-    }
-}
-
 fn parse_namespaced_name(ref_str: &str, default_ns: &str) -> (String, String) {
     if let Some((ns, name)) = ref_str.split_once('/') {
         (ns.to_string(), name.to_string())
@@ -736,21 +723,6 @@ fn create_trace_node(obj: &Value) -> Result<TraceNode> {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn generated_chart_source_names_its_kind_since_flux_2_10() {
-        let parse = |s| parse_generated_chart_source(s, "default");
-        let owned = |k: &str, ns: &str, n: &str| (k.to_string(), ns.to_string(), n.to_string());
-        assert_eq!(
-            parse("flux-system/apps-podinfo"),
-            owned("HelmChart", "flux-system", "apps-podinfo")
-        );
-        assert_eq!(
-            parse("OCIRepository/apps/podinfo"),
-            owned("OCIRepository", "apps", "podinfo")
-        );
-        assert_eq!(parse("podinfo"), owned("HelmChart", "default", "podinfo"));
-    }
 
     fn labelled(labels: Value) -> Value {
         json!({"metadata": {"name": "x", "namespace": "apps", "labels": labels}})

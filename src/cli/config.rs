@@ -410,6 +410,8 @@ fn reference_text() -> String {
         "metricsSource - Pod usage source: auto (kubelet via nodes/proxy, else metrics-server, else none), kubelet, metrics-server, none (default: auto)",
         "defaultResourceFilter - Flux list filter at startup: a kind (\"ks\"), kinds (\"ks,hr\"), or a view name (default: none, shows all)",
         "defaultSort - Flux list sort at startup: name, age, type, or status; prefix - or add :desc to reverse, e.g. \"-age\" (default: namespace, type, name)",
+        "ownership.ignore - Objects :unmanaged / :orphaned never report: rules of group, kind, namespace, name (globs; every field given must match), edited in the config file (default: none)",
+        "ownership.ignoreNamespaces - Namespaces the :unmanaged / :orphaned sweeps skip (globs), e.g. flux9s config set ownership.ignoreNamespaces kube-system,velero; \"none\" sweeps every namespace (default: kube-system, kube-public, kube-node-lease)",
         "views - Named Flux list views: views.<name>.kinds lists Flux kinds (views.<name>.namespace / .sort optional), :<name> opens it, e.g. flux9s config set views.apps ks,hr (default: none)",
         "connectTimeoutSeconds - Startup Kubernetes API health-check timeout in seconds (default: 10)",
         "editor - Editor command for resource editing; falls back through $VISUAL, $EDITOR, vi (default: none)",

@@ -143,6 +143,8 @@ pub(crate) enum ActionId {
     Reconcile,
     ReconcileWithSource,
     NativeTrace,
+    Orphans,
+    Rescan,
     NativeGraph,
     JumpToManager,
     Trace,
@@ -641,11 +643,47 @@ pub(crate) const ACTIONS: &[Action] = &[
         )),
         sets_status: false,
     },
+    // What a Kustomization / HelmRelease / ResourceSet / FluxInstance left
+    // behind (#274).
+    Action {
+        id: ActionId::Orphans,
+        keys: &[key('O')],
+        // Sweeps list every kind: only with the native preview on.
+        when: |app| on_flux_resource(app) && app.config.native_resources,
+        spec: ActionSpec::Builtin(|app, _| {
+            app.orphans_of_selected();
+            None
+        }),
+        footer: Some(("O", "Orphans")),
+        help: Some((
+            HelpColumn::Resource,
+            "<O>",
+            "Objects this Flux object left behind",
+        )),
+        sets_status: false,
+    },
+    // Sweeps aren't live: run the current one again.
+    Action {
+        id: ActionId::Rescan,
+        keys: &[ctrl('r')],
+        when: |app| in_view(app, &[View::OwnershipList]),
+        spec: ActionSpec::Builtin(|app, _| {
+            app.rescan_sweep();
+            None
+        }),
+        footer: Some(("Ctrl-r", "Rescan")),
+        help: Some((
+            HelpColumn::Navigation,
+            "<Ctrl-r>",
+            "Rescan (unmanaged / orphaned)",
+        )),
+        sets_status: false,
+    },
     // Inventory objects aren't watched: Enter describes them.
     Action {
         id: ActionId::InventoryDescribe,
         keys: &[code(KeyCode::Enter), key('d')],
-        when: |app| in_view(app, &[View::InventoryList]),
+        when: |app| in_view(app, &[View::InventoryList, View::OwnershipList]),
         spec: ActionSpec::Builtin(|app, _| {
             app.open_describe_view();
             None
@@ -966,6 +1004,7 @@ pub(crate) const FLUX_LAYOUT: &[FooterItem] = &[
     Act(A::History),
     Act(A::Values),
     Act(A::Trace),
+    Act(A::Orphans),
     Act(A::ReconcileWithSource),
     Act(A::Delete),
     Act(A::Help),
@@ -1077,6 +1116,23 @@ const KIND_LIST_LAYOUT: &[FooterItem] = &[
     TAIL[2],
 ];
 
+/// The unmanaged / orphaned sweep (#274): open a row, or go to the Flux
+/// object an orphan names.
+const OWNERSHIP_LAYOUT: &[FooterItem] = &[
+    Act(A::Move),
+    Act(A::Page),
+    Act(A::InventoryDescribe),
+    Act(A::Yaml),
+    Act(A::Edit),
+    Act(A::NativeTrace),
+    Act(A::JumpToManager),
+    Relabel(A::FilterOrSearch, "Filter"),
+    Act(A::Rescan),
+    TAIL[0],
+    TAIL[1],
+    TAIL[2],
+];
+
 const HELM_VALUES_LAYOUT: &[FooterItem] = &[
     Relabel(A::Move, "Scroll"),
     Act(A::Page),
@@ -1112,6 +1168,7 @@ pub(crate) fn view_layout(view: View) -> &'static [FooterItem] {
         View::Pulse => PULSE_LAYOUT,
         View::HelmValues => HELM_VALUES_LAYOUT,
         View::KindList => KIND_LIST_LAYOUT,
+        View::OwnershipList => OWNERSHIP_LAYOUT,
         View::ResourceList
         | View::ResourceDetail
         | View::ResourceDescribe

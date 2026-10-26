@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Unmanaged and orphaned objects (#274, native resources on): `:unmanaged`
+  lists what Flux doesn't manage in a namespace (`all` adds what Argo CD,
+  Helm, or another tool manages; `-n` / `-A`), `:orphaned` lists what Flux
+  left behind — objects whose Kustomization / HelmRelease / ResourceSet /
+  FluxInstance is gone or no longer lists them in its inventory — and `O` on
+  one of those Flux objects lists what it left behind. Rows say why
+  (`created by kubectl`, `not in the inventory of …`); `Enter` / `y` open
+  them, `m` / `t` go to their Flux object, `Ctrl-r` rescans. Sweeps read
+  metadata only, skip owned objects, and call nothing orphaned unless the
+  owner was read and settled
+- Kind lists' MANAGED-BY shows `orphaned (ks)` for left-behind objects and
+  `system` for Kubernetes' own, and describe's Managed By says why an object
+  is orphaned (#274)
+- `ownership.ignore` / `ownership.ignoreNamespaces` config to hide expected
+  objects and namespaces from the sweeps (#274)
 - Flux 2.10 support: CRDs and models regenerated for source / kustomize /
   notification-controller v1.10.0, helm-controller v1.7.0, the image
   controllers v1.3.0, and source-watcher v2.3.0 (#198)

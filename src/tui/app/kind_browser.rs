@@ -268,7 +268,7 @@ impl App {
         };
         let on_a_list = matches!(
             self.view_state.current_view,
-            View::ResourceList | View::KindList | View::ResourceFavorites
+            View::ResourceList | View::KindList | View::OwnershipList | View::ResourceFavorites
         );
         match crate::models::kinds::resolve(&token) {
             Some(spec) if on_a_list && spec.family == crate::models::kinds::Family::Native => {

@@ -308,6 +308,7 @@ mod tests {
             favorites: vec![],
             default_resource_filter: None,
             views: Default::default(),
+            ownership: Default::default(),
             default_sort: None,
             connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
             discover_flux_resources: false,

@@ -569,6 +569,9 @@ impl App {
                 .inventory_rows
                 .get(self.view_state.selected_index)
                 .map(ObjectRef::from),
+            View::OwnershipList => self.selected_sweep_row().map(|row| {
+                ObjectRef::native(&row.api_version, &row.kind, &row.namespace, &row.name)
+            }),
             View::KindList => {
                 let spec = &self.async_state.kind_list.key()?.spec;
                 let rows = self.filtered_kind_rows();

@@ -424,6 +424,24 @@ impl App {
                     );
                     self.view_state.scroll_offset = scroll_offset;
                 }
+                View::OwnershipList => {
+                    // Rows borrow `self`; the scroll offset is written back after.
+                    let mut scroll_offset = self.view_state.scroll_offset;
+                    let rows = self.filtered_sweep_rows();
+                    views::render_ownership_list(
+                        f,
+                        area,
+                        self.view_state.sweep_request.as_ref(),
+                        self.async_state.sweep.result(),
+                        &rows,
+                        self.async_state.sweep.is_loading(),
+                        &self.view_state.filter,
+                        self.view_state.selected_index,
+                        &mut scroll_offset,
+                        &self.theme,
+                    );
+                    self.view_state.scroll_offset = scroll_offset;
+                }
                 View::HelmValues => {
                     views::render_helm_values(
                         f,
