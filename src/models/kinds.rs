@@ -389,6 +389,11 @@ impl KindCatalog {
             .cloned()
     }
 
+    /// Every discovered kind (unmanaged / orphaned sweeps, #274).
+    pub fn all(&self) -> Vec<KindSpec> {
+        self.kinds.read().expect("kind catalog poisoned").clone()
+    }
+
     /// Command tokens of every discovered kind (plural + short names — the
     /// forms people type).
     fn tokens(&self) -> Vec<String> {

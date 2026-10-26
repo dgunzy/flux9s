@@ -85,6 +85,10 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub views: BTreeMap<String, ViewConfig>,
 
+    /// What the `:unmanaged` / `:orphaned` sweeps leave out (#274).
+    #[serde(default, skip_serializing_if = "is_default_ownership")]
+    pub ownership: crate::kube::standing::OwnershipConfig,
+
     /// Timeout (in seconds) for the initial connectivity/health check to the
     /// Kubernetes API server at startup. Overridable at runtime with the
     /// `FLUX9S_CONNECT_TIMEOUT` environment variable.
@@ -148,6 +152,15 @@ impl Config {
                     sort: Some("type".to_string()),
                 },
             )]),
+            ownership: crate::kube::standing::OwnershipConfig {
+                ignore: vec![crate::kube::standing::IgnoreRule {
+                    group: Some("velero.io".to_string()),
+                    kind: Some("Backup".to_string()),
+                    namespace: None,
+                    name: Some("capi-*".to_string()),
+                }],
+                ignore_namespaces: Some(vec!["kube-system".to_string()]),
+            },
             connect_timeout_seconds: default_connect_timeout_seconds(),
             editor: Some("vim".to_string()),
         }
@@ -265,6 +278,10 @@ fn default_skin() -> String {
 }
 
 /// Default connection/health-check timeout in seconds.
+fn is_default_ownership(ownership: &crate::kube::standing::OwnershipConfig) -> bool {
+    *ownership == crate::kube::standing::OwnershipConfig::default()
+}
+
 fn default_connect_timeout_seconds() -> u64 {
     crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS
 }
@@ -286,6 +303,7 @@ impl Default for Config {
             default_resource_filter: None,
             default_sort: None,
             views: BTreeMap::new(),
+            ownership: Default::default(),
             connect_timeout_seconds: default_connect_timeout_seconds(),
             editor: None,
         }

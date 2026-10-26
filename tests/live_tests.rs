@@ -689,3 +689,101 @@ async fn graph_locates_a_pod_through_its_deployment() {
         flux9s::trace::NodeType::WorkloadGroup
     );
 }
+
+/// The ownership fixtures (`scripts/dev-manifests/simple/ownership.yaml`)
+/// classify as #274 describes: a kubectl-made ConfigMap is unmanaged, one
+/// naming a deleted Kustomization is orphaned, and one its Kustomization
+/// doesn't list is left behind — while Flux-managed objects and Kubernetes'
+/// own never show.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn sweeps_find_unmanaged_and_orphaned_objects() {
+    use flux9s::kube::standing::{OrphanReason, Standing};
+    use flux9s::kube::sweep::{SweepRequest, SweepScope, sweep};
+    use flux9s::watcher::ResourceKey;
+
+    let client = client_for(&simple_context()).await;
+    let kinds = flux9s::kube::discovery::discover_kinds(&client)
+        .await
+        .expect("discovery");
+    let request = |scope| SweepRequest {
+        scope,
+        namespace: Some("flux-resources".to_string()),
+        config: Default::default(),
+    };
+
+    // "Not in inventory" waits out the grace period for new objects.
+    let unmanaged = eventually("ownership fixtures classified", 240, || {
+        let (client, kinds) = (client.clone(), kinds.clone());
+        async move {
+            let result = sweep(
+                &client,
+                request(SweepScope::Unmanaged {
+                    include_other: false,
+                }),
+                kinds,
+            )
+            .await;
+            let left = result
+                .rows
+                .iter()
+                .find(|r| r.name == "ownership-left-behind")?;
+            matches!(left.standing, Standing::Orphaned(..)).then_some(result)
+        }
+    })
+    .await;
+    let standing = |name: &str| {
+        unmanaged
+            .rows
+            .iter()
+            .find(|r| r.name == name)
+            .map(|r| r.standing.clone())
+    };
+    assert_eq!(
+        standing("ownership-hand-made"),
+        Some(Standing::Unmanaged {
+            created_by: Some("kubectl".to_string())
+        })
+    );
+    assert!(matches!(
+        standing("ownership-owner-gone"),
+        Some(Standing::Orphaned(_, OrphanReason::OwnerGone))
+    ));
+    assert!(matches!(
+        standing("ownership-left-behind"),
+        Some(Standing::Orphaned(
+            _,
+            OrphanReason::NotInInventory {
+                prune_disabled: true
+            }
+        ))
+    ));
+    for hidden in ["kube-root-ca.crt", "default", "podinfo"] {
+        assert!(
+            unmanaged.rows.iter().all(|r| r.name != hidden),
+            "{hidden} is Kubernetes' own or Flux-managed: {:?}",
+            unmanaged.rows.iter().find(|r| r.name == hidden)
+        );
+    }
+    assert!(
+        unmanaged
+            .rows
+            .iter()
+            .all(|r| !r.name.starts_with("sh.helm.release")),
+        "Helm storage belongs to its release"
+    );
+
+    // What `apps` left behind: only the object it no longer lists.
+    let of_apps = sweep(
+        &client,
+        request(SweepScope::OrphansOf(ResourceKey::new(
+            "Kustomization",
+            "flux-resources",
+            "apps",
+        ))),
+        kinds.clone(),
+    )
+    .await;
+    let names: Vec<_> = of_apps.rows.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["ownership-left-behind"]);
+}

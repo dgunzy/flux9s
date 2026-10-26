@@ -20,7 +20,10 @@ use std::collections::BTreeMap;
 impl App {
     /// Show `filter` in the Flux list — `:ks`, `:ks,hr`, or a view.
     pub(super) fn show_kinds(&mut self, filter: KindFilter) {
-        if self.view_state.current_view == View::KindList {
+        if matches!(
+            self.view_state.current_view,
+            View::KindList | View::OwnershipList
+        ) {
             self.go_home_flux();
         }
         self.view_state.kind_filter = filter;

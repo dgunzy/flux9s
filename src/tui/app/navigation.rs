@@ -216,6 +216,18 @@ impl App {
             View::WorkloadList | View::InventoryList => {
                 self.async_state.inventory_status.clear();
             }
+            // Kept while its rows are open in describe / YAML / trace.
+            View::OwnershipList => {
+                if !to.is_nested_view() {
+                    self.async_state.sweep.clear();
+                    self.view_state.filter_mode = false;
+                    let (filter, selected, scroll) =
+                        self.view_state.sweep_return.take().unwrap_or_default();
+                    self.view_state.filter = filter;
+                    self.view_state.selected_index = selected;
+                    self.view_state.scroll_offset = scroll;
+                }
+            }
             View::WorkloadDetail => {
                 self.async_state.workload.clear();
                 self.async_state.workload_metrics.clear();

@@ -42,6 +42,7 @@ A thin bar on a view's right border shows that it scrolls and where you are.
 | `t` | Trace what manages it |
 | `h` | Reconciliation history |
 | `v` | HelmRelease effective values |
+| `O` | What a Kustomization / HelmRelease / ResourceSet / FluxInstance [left behind](../native-resources/#unmanaged-and-orphaned) (native resources on) |
 | `f` | Toggle favorite |
 | `Shift+N` / `A` / `T` / `S` | Sort by name / age / type / status |
 
@@ -81,6 +82,7 @@ Press `:` and type a command. `Tab` autocompletes.
 | `:events` (`:ev`) | Live Kubernetes events feed |
 | `:pulse` (`:dashboard`) | Cluster health dashboard |
 | `:logs` / `:logs <pod>` | Stream a Flux controller's logs |
+| `:unmanaged [all]` / `:orphaned [<kind>/<name>]` (`-n <ns>`, `-A`) | What Flux doesn't manage, or left behind ([more](../native-resources/#unmanaged-and-orphaned); native resources on) |
 | `:trace` / `:trace <kind>/<name> [-n <ns>]` | Trace what manages an object; watching all namespaces, finds it without `-n` |
 | `:skin` / `:skin <name>` | Pick or switch the theme |
 | `:native` | Toggle [native resources](../native-resources/) for this session |

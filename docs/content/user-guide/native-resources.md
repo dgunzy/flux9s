@@ -68,11 +68,61 @@ themselves; first match wins:
    (`Pod → ReplicaSet → Deployment`) to whatever manages the top, so a
    Flux-managed Deployment's pods read `Flux ks`. With nothing at the top,
    the top owner's kind is shown (e.g. `DaemonSet`).
-4. **Helm** — release annotations, on objects nothing owns
-5. Any other `app.kubernetes.io/managed-by`, else `-`
+4. **Helm** — release annotations, on objects nothing owns, and Helm's
+   release storage Secrets (`owner=helm`)
+5. Any other `app.kubernetes.io/managed-by`
+6. `system` for what Kubernetes creates itself (`kube-root-ca.crt`, the
+   `default` ServiceAccount, ServiceAccount tokens, default RBAC), else `-`
+
+A Flux-labelled object reads `orphaned (ks)` (or `hr`, `rset`, `instance`)
+when Flux no longer manages it — see
+[unmanaged and orphaned objects](#unmanaged-and-orphaned).
 
 Describe (`d`) and the workload detail show the full answer, e.g.
 `Flux HelmRelease cert-manager/cert-manager (via ReplicaSet/cert-manager-857cf84654)`.
+
+## Unmanaged and orphaned objects {#unmanaged-and-orphaned}
+
+What Flux doesn't manage, and what it left behind:
+
+| Command / key | Shows |
+| --- | --- |
+| `:unmanaged` | Objects in the namespace nothing manages, and orphaned ones |
+| `:unmanaged all` | …plus those another tool manages (Argo CD, Helm, `app.kubernetes.io/managed-by`) |
+| `:orphaned` | Only orphaned objects |
+| `O` on a Kustomization, HelmRelease, ResourceSet, or FluxInstance | What that Flux object left behind, in every namespace (also `:orphaned ks/apps`) |
+
+Add `-n <namespace>` or `-A` (all namespaces, plus cluster-scoped kinds) to
+the commands. Each row says where the object stands and why:
+
+- **Orphaned** — its Flux labels name a Kustomization / HelmRelease /
+  ResourceSet / FluxInstance that **no longer exists**, or that **no longer
+  lists it in its inventory** (`status.inventory`) — typically removed from
+  source while `prune: false` or `kustomize.toolkit.fluxcd.io/prune: disabled`
+  kept it. Flux won't touch it again.
+- **Unmanaged** — no Flux, Argo CD, or Helm marks and no owner. DETAIL says
+  who created it, from its `managedFields` (`created by kubectl`,
+  `created by Terraform`, …).
+- **Other** (with `all`) — the tool that does manage it.
+
+`Enter`/`d` describes the object (Managed By says `orphaned — …` there too),
+`y` shows its YAML, and `t` / `m` go to the Flux object an orphan names, while
+it exists. The list is a snapshot, not a live watch: `Ctrl-r` rescans.
+
+**How the verdict is reached.** A sweep lists every discovered kind once,
+metadata only, and keeps top-level objects — anything with an owner
+reference is its owner's concern (a Deployment's pods, an operator's
+Secrets). Each Flux owner the objects name is read once. flux9s only calls
+an object orphaned when it's sure: when the owner can't be read (RBAC,
+timeout, another cluster), is still reconciling, or keeps no inventory, the
+object stays Flux-managed. Objects younger than two minutes, Helm hooks, and
+the HelmChart / OCIRepository a HelmRelease generates are never orphans.
+
+**Never reported:** Kubernetes' own objects (as in MANAGED-BY's `system`),
+Helm's release storage, churn kinds (Events, Leases, Endpoints,
+EndpointSlices, ControllerRevisions), Nodes, and the `kube-system`,
+`kube-public`, and `kube-node-lease` namespaces. Hide anything else that's
+expected with [`ownership.ignore`](/configuration/#ownership).
 
 ## From an object to its Flux manager {#to-the-flux-manager}
 

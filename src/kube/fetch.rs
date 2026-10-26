@@ -111,7 +111,16 @@ pub async fn fetch_object_describe_data(
             (Vec::new(), Some(format!("{}", e)))
         }
     };
-    let managed_by = crate::kube::ownership::immediate_manager(&object);
+    let mut managed_by = crate::kube::ownership::immediate_manager(&object);
+    // A Flux-labelled object may have been left behind (#274).
+    if let Some(shown) = managed_by.as_mut()
+        && let Some((manager, reason)) = crate::kube::standing::check_orphan(client, &object).await
+    {
+        shown.text = format!("orphaned — {}", reason.describe(&manager));
+        if reason == crate::kube::standing::OrphanReason::OwnerGone {
+            shown.flux = None; // nothing to go to
+        }
+    }
     Ok(DescribeData {
         object,
         events,

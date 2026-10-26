@@ -52,6 +52,14 @@ pub const APP_COMMANDS: &[Command] = &[
         takes_args: true,
     },
     Command {
+        name: "unmanaged",
+        takes_args: true,
+    },
+    Command {
+        name: "orphaned",
+        takes_args: true,
+    },
+    Command {
         name: "healthy",
         takes_args: false,
     },
@@ -395,6 +403,72 @@ pub fn parse_trace_args(cmd: &str) -> Result<TraceArgs, String> {
     Ok(TraceArgs { target, namespace })
 }
 
+/// `:unmanaged [all] [-n <ns> | -A]` (#274).
+pub fn is_unmanaged_command(cmd: &str) -> bool {
+    cmd.split_whitespace()
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("unmanaged"))
+}
+
+/// `:orphaned [<kind>/<name>] [-n <ns> | -A]` (#274).
+pub fn is_orphaned_command(cmd: &str) -> bool {
+    cmd.split_whitespace().next().is_some_and(|word| {
+        word.eq_ignore_ascii_case("orphaned") || word.eq_ignore_ascii_case("orphans")
+    })
+}
+
+/// `:unmanaged` / `:orphaned` usage, shown for malformed arguments.
+pub const SWEEP_USAGE: &str =
+    "Usage: :unmanaged [all] [-n <ns> | -A] · :orphaned [<kind>/<name>] [-n <ns> | -A]";
+
+/// Parsed `:unmanaged` / `:orphaned` arguments.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SweepArgs {
+    /// `all`: include objects other tools manage.
+    pub include_other: bool,
+    /// `<kind>/<name>`: one Flux object's orphans.
+    pub target: Option<(String, String)>,
+    /// `-n <ns>` → `Some(Some(ns))`; `-A` / `-n all` → `Some(None)`.
+    pub namespace: Option<Option<String>>,
+}
+
+/// Parse `:unmanaged` / `:orphaned` arguments. `Err` carries the message.
+pub fn parse_sweep_args(cmd: &str) -> Result<SweepArgs, String> {
+    let mut tokens = cmd.split_whitespace().skip(1);
+    let mut args = SweepArgs::default();
+    let set_namespace = |args: &mut SweepArgs, value: &str| {
+        if value.is_empty() || args.namespace.is_some() {
+            return Err(SWEEP_USAGE.to_string());
+        }
+        args.namespace = Some((value != "all").then(|| value.to_string()));
+        Ok(())
+    };
+    while let Some(token) = tokens.next() {
+        match token {
+            "-A" | "--all-namespaces" => set_namespace(&mut args, "all")?,
+            "-n" | "--namespace" => {
+                set_namespace(&mut args, tokens.next().ok_or("-n needs a namespace")?)?;
+            }
+            _ if token.starts_with("--namespace=") => {
+                set_namespace(&mut args, &token["--namespace=".len()..])?;
+            }
+            "all" if !args.include_other => args.include_other = true,
+            _ => {
+                let target = token.split_once('/').filter(|(kind, name)| {
+                    !kind.is_empty() && !name.is_empty() && !name.contains('/')
+                });
+                match target {
+                    Some((kind, name)) if args.target.is_none() => {
+                        args.target = Some((kind.to_string(), name.to_string()));
+                    }
+                    _ => return Err(SWEEP_USAGE.to_string()),
+                }
+            }
+        }
+    }
+    Ok(args)
+}
+
 /// Check if command is context command (handles both "ctx" and "context")
 pub fn is_context_command(cmd: &str) -> bool {
     let cmd_lower = cmd.to_lowercase();
@@ -659,6 +733,28 @@ pub fn get_command_submenu(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sweep_args_take_all_a_target_and_a_namespace() {
+        let parse = |cmd| parse_sweep_args(cmd).unwrap();
+        assert_eq!(parse("unmanaged"), SweepArgs::default());
+        let all = parse("unmanaged all -A");
+        assert!(all.include_other);
+        assert_eq!(all.namespace, Some(None));
+        assert_eq!(
+            parse("orphaned -n apps").namespace,
+            Some(Some("apps".into()))
+        );
+        assert_eq!(parse("orphaned --namespace=all").namespace, Some(None));
+        let target = parse("orphaned ks/apps -n flux-system");
+        assert_eq!(target.target, Some(("ks".into(), "apps".into())));
+        assert!(parse_sweep_args("orphaned a/b c/d").is_err());
+        assert!(parse_sweep_args("unmanaged -n").is_err());
+        assert!(parse_sweep_args("unmanaged -n a -n b").is_err());
+        assert!(parse_sweep_args("unmanaged bogus").is_err());
+        assert!(is_unmanaged_command("unmanaged all") && !is_unmanaged_command("unhealthy"));
+        assert!(is_orphaned_command("orphaned") && is_orphaned_command("orphans ks/x"));
+    }
 
     #[test]
     fn namespace_flags_split_off_views_and_kind_sets() {

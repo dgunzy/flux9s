@@ -33,6 +33,8 @@ flux9s config path
 | `defaultResourceFilter` | string | *(none)* | Flux list filter at startup: a kind (`ks`), several (`ks,hr`), or a [view](#views) name |
 | `defaultSort` | string | *(none)* | Flux list sort at startup: `name`, `age`, `type`, `status`; `-age` or `age:desc` reverses ([details](#default-sort)) |
 | `views` | map | *(empty)* | Named Flux list views: `views.<name>.kinds` lists Flux kinds, with optional `namespace` and `sort`; `:<name>` opens it ([details](#views)) |
+| `ownership.ignore` | list | *(empty)* | Objects `:unmanaged` / `:orphaned` never report: `group` / `kind` / `namespace` / `name` glob rules ([details](#ownership)) |
+| `ownership.ignoreNamespaces` | string[] | `kube-system`, `kube-public`, `kube-node-lease` | Namespaces those sweeps skip; `[]` sweeps every namespace ([details](#ownership)) |
 | `connectTimeoutSeconds` | integer | `10` | Startup Kubernetes API health-check timeout in seconds |
 | `discoverFluxResources` | boolean | `false` | Opt-in dynamic discovery of Flux-adjacent CRDs (see below); needs `nativeResources: true` |
 | `nativeResources` | boolean | `false` | **Preview.** Browse native Kubernetes resources and CRDs with `:<kind>` ([details](/user-guide/native-resources/#browsing-any-kind)); off keeps flux9s Flux-only — no API discovery or extra watches, including `discoverFluxResources`. Try it per session with `:native` |
@@ -205,6 +207,37 @@ flux9s config set views.apps ""      # remove it
   after it discovers the cluster's kinds, and in `flux9s config validate`.
 - **Per cluster:** views in a [cluster config](#cluster-and-context-specific-configuration)
   add to the root's, and replace a root view of the same name.
+
+---
+
+### Unmanaged and Orphaned Objects {#ownership}
+
+[`:unmanaged` and `:orphaned`](/user-guide/native-resources/#unmanaged-and-orphaned)
+leave out Kubernetes' own objects already. Hide the rest of what's expected:
+
+```yaml
+ownership:
+  ignore:
+    # Every field given must match; * and ? are globs; kind ignores case.
+    - group: velero.io       # "" is the core API group
+      kind: Backup
+      name: "capi-*"
+    - kind: Secret
+      namespace: monitoring
+      name: "alertmanager-*"
+  # Namespaces never swept (default: kube-system, kube-public, kube-node-lease)
+  ignoreNamespaces: [kube-system, kube-public, kube-node-lease, velero]
+```
+
+```bash
+flux9s config set ownership.ignoreNamespaces kube-system,velero
+flux9s config set ownership.ignoreNamespaces none   # sweep every namespace
+flux9s config set ownership.ignoreNamespaces ""     # back to the default
+```
+
+`ownership.ignore` is a list of rules, so it's edited in the config file
+(`flux9s config path`). A `:orphaned <kind>/<name>` (or `O`) sweep still
+applies `ignore` rules but looks in every namespace.
 
 ---
 

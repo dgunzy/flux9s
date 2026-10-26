@@ -55,6 +55,7 @@ fn create_test_app(read_only: bool) -> App {
         favorites: vec![],
         default_resource_filter: None,
         views: Default::default(),
+        ownership: Default::default(),
         default_sort: None,
         connect_timeout_seconds: crate::kube::health::DEFAULT_CONNECT_TIMEOUT_SECS,
         editor: None,
@@ -1403,6 +1404,8 @@ fn with_rows(app: &mut App, rows: &[(&str, &str)]) {
                     created: None,
                     ownership: crate::kube::ownership::Ownership::Unmanaged,
                     resolved: None,
+                    flux_probe: None,
+                    orphan: None,
                 })
                 .collect(),
             total: rows.len(),
@@ -1602,6 +1605,8 @@ fn live_updates_keep_the_cursor_on_the_same_object() {
         created: None,
         ownership: crate::kube::ownership::Ownership::Unmanaged,
         resolved: None,
+        flux_probe: None,
+        orphan: None,
     };
     app.on_kind_list_snapshot(crate::kube::kind_list::KindListSnapshot {
         columns: vec![],
@@ -3512,6 +3517,8 @@ fn deploy_list(app: &mut App, rows: &[(&str, crate::kube::ownership::Ownership)]
                 created: None,
                 ownership: ownership.clone(),
                 resolved: None,
+                flux_probe: None,
+                orphan: None,
             })
             .collect(),
         total: rows.len(),
@@ -4390,4 +4397,292 @@ fn default_sort_applies_and_a_view_sort_wins() {
     app.config.views.get_mut("apps").unwrap().sort = Some("type".into());
     app.apply_default_filter("apps").unwrap();
     assert_eq!(app.view_state.sort_field, super::state::SortField::Type);
+}
+
+// --- Unmanaged / orphaned sweeps (#274) -------------------------------------
+
+fn sweep_request(app: &App) -> crate::kube::sweep::SweepRequest {
+    app.async_state
+        .sweep
+        .pending()
+        .cloned()
+        .expect("a sweep was requested")
+}
+
+#[test]
+fn sweeps_need_the_native_preview() {
+    let mut app = create_test_app(false);
+    app.config.native_resources = false;
+    app.view_state.current_view = View::ResourceList;
+    run(&mut app, "unmanaged");
+    assert_eq!(app.view_state.current_view, View::ResourceList);
+    assert!(app.async_state.sweep.pending().is_none());
+    assert!(
+        app.ui_state
+            .status_message
+            .as_ref()
+            .is_some_and(|(msg, err)| *err && msg.contains(":native"))
+    );
+}
+
+#[test]
+fn unmanaged_sweeps_the_current_namespace_or_the_one_given() {
+    use crate::kube::sweep::SweepScope;
+    let mut app = create_test_app(false);
+    app.config.native_resources = true;
+    app.namespace = Some("apps".into());
+
+    run(&mut app, "unmanaged");
+    assert_eq!(app.view_state.current_view, View::OwnershipList);
+    let request = sweep_request(&app);
+    assert_eq!(
+        request.scope,
+        SweepScope::Unmanaged {
+            include_other: false
+        }
+    );
+    assert_eq!(request.namespace.as_deref(), Some("apps"));
+
+    run(&mut app, "unmanaged all -A");
+    let request = sweep_request(&app);
+    assert_eq!(
+        request.scope,
+        SweepScope::Unmanaged {
+            include_other: true
+        }
+    );
+    assert_eq!(request.namespace, None, "-A sweeps every namespace");
+
+    run(&mut app, "orphaned -n team-a");
+    let request = sweep_request(&app);
+    assert_eq!(request.scope, SweepScope::Orphaned);
+    assert_eq!(request.namespace.as_deref(), Some("team-a"));
+}
+
+#[test]
+fn orphaned_of_one_flux_object_resolves_kind_and_namespace() {
+    use crate::kube::sweep::SweepScope;
+    let mut app = create_test_app(false);
+    app.config.native_resources = true;
+    add_resource(&mut app); // Kustomization flux-system/my-kustomization
+
+    run(&mut app, "orphaned ks/my-kustomization");
+    assert_eq!(
+        sweep_request(&app).scope,
+        SweepScope::OrphansOf(ResourceKey::new(
+            "Kustomization",
+            "flux-system",
+            "my-kustomization"
+        )),
+        "the one watched object of that name"
+    );
+
+    run(&mut app, "orphaned hr/web -n apps");
+    assert_eq!(
+        sweep_request(&app).scope,
+        SweepScope::OrphansOf(ResourceKey::new("HelmRelease", "apps", "web"))
+    );
+
+    app.async_state.sweep.clear();
+    run(&mut app, "orphaned gitrepo/flux-system");
+    assert!(app.async_state.sweep.pending().is_none());
+    assert!(
+        app.ui_state
+            .status_message
+            .as_ref()
+            .is_some_and(|(msg, err)| *err && msg.contains("can't leave orphans"))
+    );
+}
+
+#[test]
+fn o_drills_into_a_flux_objects_orphans_and_back_returns() {
+    use crate::kube::sweep::SweepScope;
+    let mut app = create_test_app(false);
+    app.config.native_resources = true;
+    add_resource(&mut app);
+    app.view_state.current_view = View::ResourceList;
+
+    app.view_state.filter = "my-k".to_string();
+    app.handle_key(make_key(KeyCode::Char('O')));
+    assert_eq!(app.view_state.current_view, View::OwnershipList);
+    assert!(
+        app.view_state.filter.is_empty(),
+        "the sweep starts unfiltered"
+    );
+    assert!(matches!(
+        sweep_request(&app).scope,
+        SweepScope::OrphansOf(ref key) if key.name == "my-kustomization"
+    ));
+
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::ResourceList);
+    assert_eq!(app.view_state.filter, "my-k", "the list's filter is back");
+}
+
+fn app_with_sweep_rows() -> App {
+    use crate::kube::ownership::Manager;
+    use crate::kube::standing::{OrphanReason, Standing};
+    use crate::kube::sweep::{SweepResult, SweepRow, SweepScope};
+    let mut app = create_test_app(false);
+    app.config.native_resources = true;
+    app.namespace = Some("apps".into());
+    run(&mut app, "orphaned");
+    let ks = |name: &str| Manager::Flux {
+        kind: "Kustomization".into(),
+        namespace: "flux-system".into(),
+        name: name.into(),
+    };
+    let row = |name: &str, standing| SweepRow {
+        api_version: "v1".into(),
+        kind: "ConfigMap".into(),
+        namespace: "apps".into(),
+        name: name.into(),
+        standing,
+        created: None,
+    };
+    app.async_state.sweep.dispatch();
+    app.on_sweep_result(SweepResult {
+        rows: vec![
+            row(
+                "gone",
+                Standing::Orphaned(ks("old"), OrphanReason::OwnerGone),
+            ),
+            row(
+                "kept",
+                Standing::Orphaned(
+                    ks("apps"),
+                    OrphanReason::NotInInventory {
+                        prune_disabled: true,
+                    },
+                ),
+            ),
+        ],
+        kinds_scanned: 2,
+        ..SweepResult::default()
+    });
+    assert_eq!(
+        app.view_state.sweep_request.as_ref().unwrap().scope,
+        SweepScope::Orphaned
+    );
+    app
+}
+
+#[test]
+fn sweep_rows_open_as_native_objects_and_jump_to_a_live_owner() {
+    let mut app = app_with_sweep_rows();
+    // The owner of the first row is gone: nothing to go to.
+    assert_eq!(app.target_flux_manager(), None);
+    let target = app.native_view_target().unwrap();
+    assert_eq!(
+        (target.kind.as_str(), target.name.as_str()),
+        ("ConfigMap", "gone")
+    );
+
+    app.handle_key(make_key(KeyCode::Char('j')));
+    assert_eq!(
+        app.target_flux_manager(),
+        Some(ResourceKey::new("Kustomization", "flux-system", "apps"))
+    );
+
+    // Enter describes it; Back returns to the same sweep, not a new one.
+    app.handle_key(make_key(KeyCode::Enter));
+    assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::OwnershipList);
+    assert_eq!(
+        app.filtered_sweep_rows().len(),
+        2,
+        "kept while describing a row"
+    );
+}
+
+#[test]
+fn rescan_reruns_the_sweep_and_keeps_the_cursor() {
+    let mut app = app_with_sweep_rows();
+    app.handle_key(make_key(KeyCode::Char('j')));
+    app.handle_key(make_ctrl_key(KeyCode::Char('r')));
+    let rows = app.async_state.sweep.pending().cloned();
+    assert!(rows.is_some(), "Ctrl-r queues the same sweep");
+    app.async_state.sweep.dispatch();
+    let again = app_with_sweep_rows()
+        .async_state
+        .sweep
+        .result()
+        .unwrap()
+        .clone();
+    app.on_sweep_result(again);
+    assert_eq!(app.selected_sweep_row().unwrap().name, "kept");
+}
+
+#[test]
+fn leaving_the_sweep_for_another_list_drops_it() {
+    let mut app = app_with_sweep_rows();
+    run(&mut app, "flux");
+    assert_eq!(app.view_state.current_view, View::ResourceList);
+    assert!(app.async_state.sweep.result().is_none());
+}
+
+#[test]
+fn a_new_sweep_from_a_sweeps_describe_view_keeps_its_request() {
+    use crate::kube::sweep::SweepScope;
+    let mut app = app_with_sweep_rows();
+    app.handle_key(make_key(KeyCode::Enter));
+    assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+
+    run(&mut app, "unmanaged");
+    assert_eq!(app.view_state.current_view, View::OwnershipList);
+    assert_eq!(
+        sweep_request(&app).scope,
+        SweepScope::Unmanaged {
+            include_other: false
+        },
+        "leaving the old sweep must not drop the new one"
+    );
+}
+
+#[test]
+fn native_off_closes_sweeps_and_rescans_do_nothing() {
+    let mut app = app_with_sweep_rows();
+    run(&mut app, "native");
+    assert!(!app.config.native_resources);
+    assert_eq!(app.view_state.current_view, View::ResourceList);
+    assert!(app.view_state.sweep_request.is_none());
+
+    // Even if a rescan were reached, it queues nothing (no discovery while off).
+    app.view_state.current_view = View::OwnershipList;
+    app.handle_key(make_ctrl_key(KeyCode::Char('r')));
+    assert!(app.async_state.sweep.pending().is_none());
+}
+
+#[test]
+fn a_context_switch_drops_the_sweep_and_late_results_leave_the_cursor_alone() {
+    let mut app = app_with_sweep_rows();
+    run(&mut app, "flux");
+    app.view_state.selected_index = 3;
+    // An old sweep's result arriving off its list doesn't move the cursor.
+    app.on_sweep_result(crate::kube::sweep::SweepResult::default());
+    assert_eq!(app.view_state.selected_index, 3);
+
+    app.view_state.sweep_return = Some(("x".into(), 1, 0));
+    app.complete_context_switch("other-cluster".to_string(), None);
+    assert!(app.async_state.sweep.result().is_none());
+    assert!(app.view_state.sweep_return.is_none());
+    assert!(app.view_state.sweep_request.is_none());
+}
+
+#[test]
+fn flux_kind_commands_and_all_leave_the_sweep_for_the_flux_list() {
+    for command in ["ks", "ks,hr", "all"] {
+        let mut app = app_with_sweep_rows();
+        run(&mut app, command);
+        assert_eq!(
+            app.view_state.current_view,
+            View::ResourceList,
+            ":{command}"
+        );
+        assert!(
+            app.async_state.sweep.result().is_none(),
+            ":{command} releases the sweep"
+        );
+    }
 }

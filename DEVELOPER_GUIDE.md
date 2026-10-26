@@ -774,6 +774,25 @@ Design rules:
   a highlight: `trace::locate_in_graph` finds the object, or the first owner
   the graph lists (`ResourceGraph::node_containing` also searches workload /
   resource group entries), and focus starts there.
+- **Unmanaged and orphaned (#274):** `kube/standing.rs` judges where an
+  object stands — `Standing::{Flux, Orphaned, Other, System, Unmanaged}` —
+  on top of `ownership()`. Orphan rule: Flux labels name an owner that is
+  gone, or whose `status.inventory` (`<ns>_<name>_<group>_<kind>`) doesn't
+  list it (a recorded *empty* inventory counts — Flux writes it whether or
+  not it prunes). *Unknown over wrong*: no verdict when the owner is
+  unreadable or its API isn't served (only a 404 naming the object means
+  gone — `api::is_object_missing`), unsettled (not Ready / reconciling / a
+  newer generation than `status.observedGeneration` or the Ready
+  condition's), or keeps no inventory; never for objects younger than
+  `ORPHAN_GRACE` or Helm hooks, whatever the owner's state, nor for a
+  HelmRelease's generated chart source; a FluxInstance
+  member needs an explicit `fluxcd.controlplane.io/name` (the operator marks
+  its own objects `managed-by: flux-operator` too). Owners are read through
+  `FluxOwners` — once per owner, re-read after `OWNER_TTL` — by kind lists
+  (MANAGED-BY `orphaned (ks)`, on a timer, since an owner's inventory change
+  sends no event for the object) and by `kube/sweep.rs`, which lists every
+  catalog kind **metadata only**, skips owned objects and `SKIPPED_KINDS`,
+  and applies `ownership` config. Fixtures: `scripts/dev-manifests/simple/ownership.yaml`.
 - `nativeResources` is an **opt-in preview** (default `false`; `:native`
   toggles it per session). While off it must leave flux9s exactly Flux-only: no discovery
   (`request_kind_discovery` returns early), empty catalog, no kind watches.

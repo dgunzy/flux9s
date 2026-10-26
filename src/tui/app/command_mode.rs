@@ -59,6 +59,22 @@ pub(super) const COMMAND_TABLE: &[CommandSpec] = &[
         ],
     },
     CommandSpec {
+        matches: commands::is_unmanaged_command,
+        run: App::cmd_unmanaged,
+        help: &[
+            (":unmanaged [-n ns|-A]", "What Flux doesn't manage"),
+            (":unmanaged all", "…and what other tools manage"),
+        ],
+    },
+    CommandSpec {
+        matches: commands::is_orphaned_command,
+        run: App::cmd_orphaned,
+        help: &[
+            (":orphaned [-n ns|-A]", "What Flux left behind"),
+            (":orphaned <kind>/<n>", "What one Flux object left behind"),
+        ],
+    },
+    CommandSpec {
         matches: commands::is_healthy_command,
         run: App::cmd_filter_healthy,
         help: &[(":healthy", "Show healthy resources")],
@@ -436,16 +452,19 @@ impl App {
                 false,
             ));
         } else {
-            let in_kind_lists = self.view_state.current_view == View::KindList
+            // Kind lists and sweeps need the preview: close them.
+            let needs_native = |view: View| matches!(view, View::KindList | View::OwnershipList);
+            let in_native_views = needs_native(self.view_state.current_view)
                 || self
                     .view_state
                     .nav_stack
                     .iter()
-                    .any(|entry| entry.view() == View::KindList);
-            if in_kind_lists {
+                    .any(|entry| needs_native(entry.view()));
+            if in_native_views {
                 self.go_home_flux();
             }
             self.async_state.kind_list.clear();
+            self.clear_sweep();
             self.async_state.kind_discovery.clear();
             self.async_state.namespace_list.clear();
             crate::models::kinds::catalog().clear();
@@ -776,7 +795,7 @@ impl App {
     pub(super) fn cmd_show_all(&mut self, _cmd: &str) {
         if matches!(
             self.view_state.current_view,
-            View::KindList | View::ResourceFavorites | View::EventList
+            View::KindList | View::OwnershipList | View::ResourceFavorites | View::EventList
         ) {
             self.go_home_flux();
         }

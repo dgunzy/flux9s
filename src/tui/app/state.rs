@@ -59,6 +59,9 @@ pub enum View {
     /// Live list of any non-Flux kind (#267), opened with `:<kind>`. Back
     /// walks the list history; `:flux` returns home.
     KindList,
+    /// What Flux doesn't manage (#274): an unmanaged / orphaned sweep, or
+    /// the orphans of one Flux object (`O`). Rows are any kind.
+    OwnershipList,
     /// Waiting for external editor / SSA apply
     ResourceEdit,
     Help,
@@ -84,7 +87,8 @@ impl View {
             | View::EventList
             | View::WorkloadList
             | View::InventoryList
-            | View::KindList => ScrollModel::Selection,
+            | View::KindList
+            | View::OwnershipList => ScrollModel::Selection,
             View::ResourceGraph => ScrollModel::Focus,
             View::ResourceDetail | View::ResourceEdit | View::Help => ScrollModel::Fixed,
         }
@@ -285,6 +289,14 @@ pub struct ViewState {
     /// `l` on a list fetched a workload only to stream its pods' logs: the
     /// logs replace the workload detail, so Back returns to the list.
     pub logs_replace_workload: bool,
+    /// The sweep the ownership list shows (#274), kept for its title and
+    /// `Ctrl-r`.
+    pub sweep_request: Option<crate::kube::sweep::SweepRequest>,
+    /// The row selected when `Ctrl-r` rescanned, to select again after.
+    pub sweep_reselect: Option<(String, String, String)>,
+    /// The list `O` drilled in from: its filter, selection, and scroll,
+    /// restored on the way back (the sweep shares those fields).
+    pub sweep_return: Option<(String, usize, usize)>,
     /// Why the current kind list can't be shown (e.g. RBAC), if it can't.
     pub kind_list_error: Option<String>,
     /// Scroll offset for the controller log view
@@ -341,6 +353,9 @@ impl Default for ViewState {
             helm_values_scroll_offset: 0,
             nav_stack: Vec::new(),
             logs_replace_workload: false,
+            sweep_request: None,
+            sweep_reselect: None,
+            sweep_return: None,
             kind_list_error: None,
             log_scroll_offset: 0,
             workload_scroll_offset: 0,
@@ -560,6 +575,8 @@ pub struct AsyncOperationState {
     /// Live list for the `:<kind>` browser (#267).
     pub kind_list:
         LiveTask<crate::kube::kind_list::KindListRequest, crate::kube::kind_list::KindListSnapshot>,
+    /// Unmanaged / orphaned sweep backing the ownership list (#274).
+    pub sweep: AsyncTask<crate::kube::sweep::SweepRequest, crate::kube::sweep::SweepResult>,
     /// API discovery feeding the kind registry, run on connect (#267).
     pub kind_discovery: AsyncTask<(), Vec<crate::models::kinds::KindSpec>>,
     /// Every namespace in the cluster, for the `:ns` picker (#267).
@@ -610,6 +627,7 @@ impl AsyncOperationState {
         self.helm_values.clear();
         self.workload_metrics.clear();
         self.kind_list.clear();
+        self.sweep.clear();
         self.kind_discovery.clear();
         self.namespace_list.clear();
         self.flux_namespace_discovery.clear();
@@ -836,6 +854,7 @@ mod tests {
             View::Pulse,
             View::HelmValues,
             View::KindList,
+            View::OwnershipList,
             View::ResourceEdit,
             View::Help,
         ];
@@ -866,6 +885,7 @@ mod tests {
             View::Pulse,
             View::HelmValues,
             View::KindList,
+            View::OwnershipList,
             View::ResourceEdit,
             View::Help,
         ];

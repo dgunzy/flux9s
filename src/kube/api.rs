@@ -289,6 +289,13 @@ fn classify_not_found(error: &kube::Error) -> NotFoundKind {
     NotFoundKind::Other
 }
 
+/// Whether a failed GET means the named object doesn't exist — as opposed
+/// to its API not being served at all (a CRD that isn't installed), which
+/// says nothing about the object.
+pub fn is_object_missing(error: &kube::Error) -> bool {
+    classify_not_found(error) == NotFoundKind::ResourceMissing
+}
+
 /// Get ApiResource for a resource type with version fallback
 ///
 /// **Why kubectl works without versions but kube-rs doesn't:**

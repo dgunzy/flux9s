@@ -246,6 +246,25 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
                 }
             }
         }
+        // A comma list; empty restores the default, `none` sweeps everywhere.
+        "ownership.ignoreNamespaces" => {
+            config.ownership.ignore_namespaces = match value.trim() {
+                "" => None,
+                "none" => Some(Vec::new()),
+                list => Some(
+                    list.split(',')
+                        .map(str::trim)
+                        .filter(|ns| !ns.is_empty())
+                        .map(str::to_string)
+                        .collect(),
+                ),
+            };
+        }
+        "ownership.ignore" => {
+            return Err(anyhow::anyhow!(
+                "ownership.ignore is a list of rules — edit the config file (flux9s config path)"
+            ));
+        }
         "connectTimeoutSeconds" => {
             let seconds = value
                 .parse::<u64>()

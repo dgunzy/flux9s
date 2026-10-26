@@ -41,6 +41,7 @@ A [K9s](https://github.com/derailed/k9s)-inspired terminal UI for monitoring Flu
 - **Workload drill-down** - Open a graph workload group to walk Deployments/StatefulSets/DaemonSets: live rollout status, containers, pods, events, pod logs, and restart/delete-pod actions
 - **Browse any kind (preview, opt-in)** - `:<kind>` opens a live list of any native resource or CRD (`:deploy`, `:po`, `:httproutes`) with health, a MANAGED-BY column, CRD printer columns, and the workload actions; `Esc` walks back, `:flux` returns home. Off by default: try it with `:native`, or `flux9s config set nativeResources true`
 - **Pod usage** - Live CPU/memory against limits, with no setup: auto-detects kubelet metrics (`nodes/proxy`), then metrics-server, then falls back to requests/limits
+- **Unmanaged and orphaned objects (preview, with `:native`)** - `:unmanaged` lists what Flux doesn't manage in a namespace (and who created it), `:orphaned` what Flux left behind — objects whose Kustomization or HelmRelease is gone or no longer lists them in its inventory — and `O` on a Kustomization / HelmRelease shows what that one left behind
 - **Pulse dashboard** - `:pulse` shows cluster health at a glance: per-kind counts, recent failures, and Flux distribution info
 - **CRD discovery (opt-in)** - `discoverFluxResources: true` dynamically shows any CRD labeled `app.kubernetes.io/part-of=flux` (Flagger, tofu-controller, ExternalArtifact-SDK controllers), view-only with generic columns
 - **Graph visualization** - Visualize resource relationships and dependencies (Kustomization, HelmRelease, etc.)
@@ -142,6 +143,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `g` - View resource graph (Kustomization, HelmRelease, etc.)
 - `h` - View reconciliation history
 - `t` - Trace ownership chain — for Flux resources, and (with `:native`) any object Flux manages; `g` / `m` from such an object open its Flux manager's graph / the manager itself
+- `O` - What a Kustomization, HelmRelease, ResourceSet, or FluxInstance left behind (with `:native`)
 - `W` - Reconcile with source (Kustomization, HelmRelease)
 - `d` - Describe resource
 - `Ctrl+d` - Delete resource (with confirmation)
@@ -159,6 +161,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `:favorites` or `:fav` - View favorite resources
 - `:ks,hr` - Several Flux kinds in one list; name a set you use often in your config (`views: {apps: {kinds: [ks, hr]}}`) and open it with `:apps` (views can also set a `namespace` and `sort`; `defaultSort: type` groups the list by kind at startup)
 - `:events` or `:ev` - Live Kubernetes events feed (current namespace scope)
+- `:unmanaged [all]` / `:orphaned [<kind>/<name>]` - What Flux doesn't manage, or left behind (`-n <ns>`, `-A`; with `:native`)
 - `:trace <kind>/<name> [-n <namespace>]` - Trace what manages an object; watching all namespaces, it finds the object without `-n`
 - `:logs [pod]` - Stream a Flux controller pod's logs (submenu without argument)
 - `:skin {skin-name}` - set skin directly
