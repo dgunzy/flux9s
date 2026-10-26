@@ -527,11 +527,8 @@ impl ResourceWatcher {
     /// Watch a resource type that may be served at different API versions across Flux releases.
     ///
     /// Uses DynamicObject to try each version in order, stopping at the first that responds.
-    /// Handles the resource types that graduated from beta to stable:
-    ///   - OCIRepository / Bucket / HelmRepository / HelmChart  (v1beta2 → v1, Flux 2.3)
-    ///   - HelmRelease                                           (v2beta2 → v2, Flux 2.3)
-    ///   - Alert / Provider                                      (v1beta3 → v1, Flux 2.10)
-    ///   - Receiver                                              (v1beta3 → v1, Flux 2.1)
+    /// Used for every kind whose API was promoted; the versions tried are
+    /// the kind's real history ([`FluxResourceKind::older_api_versions`]).
     fn watch_with_version_fallback(&mut self, resource_kind: FluxResourceKind) -> Result<()> {
         let api_resources = get_flux_api_resources_with_fallback(resource_kind)?;
         let client = self.client.clone();
@@ -733,8 +730,8 @@ impl ResourceWatcher {
         // Source Controller resources
         // GitRepository has been at v1 since Flux 2.0 — stable, no fallback needed.
         self.watch::<resource::GitRepository>()?;
-        // The five resources below graduated from beta to stable in Flux 2.3.0.
-        // Use version-fallback watches so older clusters (Flux 2.2.x) still work.
+        // The four below reached v1 in Flux 2.3–2.6 (HelmRepository and HelmChart
+        // 2.3, Bucket 2.4, OCIRepository 2.6): fall back on older clusters.
         self.watch_with_version_fallback(FluxResourceKind::OCIRepository)?;
         self.watch_with_version_fallback(FluxResourceKind::HelmRepository)?;
         self.watch_with_version_fallback(FluxResourceKind::Bucket)?;
@@ -747,19 +744,17 @@ impl ResourceWatcher {
         self.watch::<resource::Kustomization>()?;
 
         // Helm Controller resources
-        // HelmRelease graduated from v2beta2 to v2 in Flux 2.3.0.
+        // HelmRelease graduated from v2beta2 to v2 in Flux 2.3.
         self.watch_with_version_fallback(FluxResourceKind::HelmRelease)?;
 
-        // Image Reflector Controller resources
-        self.watch::<resource::ImageRepository>()?;
-        self.watch::<resource::ImagePolicy>()?;
-
-        // Image Automation Controller resources
-        self.watch::<resource::ImageUpdateAutomation>()?;
+        // Image Reflector / Automation Controller resources: v1 since Flux 2.7.
+        self.watch_with_version_fallback(FluxResourceKind::ImageRepository)?;
+        self.watch_with_version_fallback(FluxResourceKind::ImagePolicy)?;
+        self.watch_with_version_fallback(FluxResourceKind::ImageUpdateAutomation)?;
 
         // Notification Controller resources
-        // Alert and Provider graduated from v1beta3 to v1 in Flux 2.10 (Receiver
-        // in 2.1); v1beta3 is still served but deprecated. Fall back for older clusters.
+        // Alert and Provider graduated from v1beta3 to v1 in Flux 2.10 (Receiver,
+        // from v1beta2, in 2.0). Fall back for older clusters.
         self.watch_with_version_fallback(FluxResourceKind::Alert)?;
         self.watch_with_version_fallback(FluxResourceKind::Provider)?;
         self.watch_with_version_fallback(FluxResourceKind::Receiver)?;

@@ -53,7 +53,9 @@ values always redacted).
 What manages a resource, step by step: its controller owners
 (`Pod → ReplicaSet → Deployment`, the same chain MANAGED-BY follows), the Flux object that applies it
 (Kustomization, HelmRelease, ResourceSet, or FluxInstance), and that object's
-source and revision. When something other than Flux manages the chain —
+source and revision. A HelmRelease's source is the one helm-controller
+generated for it — a HelmChart and its repository, or (for a Flux 2.10
+OCIRepository chart template) the generated OCIRepository. When something other than Flux manages the chain —
 Argo CD, Helm, another tool — or nothing does, the trace ends there and says
 so.
 

@@ -868,6 +868,11 @@ async fn oci_chart_template_traces_to_its_generated_ocirepository() {
 
     let fields = FluxResourceKind::HelmRelease.extract_fields(&release);
     assert_eq!(
+        fields.get("CHART").map(String::as_str),
+        Some("oci://ghcr.io/stefanprodan/charts/podinfo"),
+        "a reconciled release still shows the chart URL, not the generated source"
+    );
+    assert_eq!(
         fields.get("VERSION").map(String::as_str),
         Some(">=6.0.0"),
         "the OCI ref stands in for the chart version"
@@ -915,5 +920,35 @@ async fn oci_chart_template_traces_to_its_generated_ocirepository() {
         left.rows.is_empty(),
         "the generated OCIRepository is not an orphan: {:?}",
         left.rows
+    );
+}
+
+/// Looking a Flux object up by name in every namespace (`:trace <kind>/<name>`
+/// while watching all namespaces) and namespace discovery use the version the
+/// cluster serves — on Flux 2.2, OCIRepository only at `v1beta2`.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-legacy dev cluster"]
+async fn lookups_by_name_and_namespace_discovery_fall_back_on_older_flux() {
+    let client = client_for(&legacy_context()).await;
+    let found = flux9s::kube::objects::find_by_name(&client, "OCIRepository", None, "podinfo-oci")
+        .await
+        .unwrap_or_else(|e| panic!("lookup failed: {e:#}"));
+    let namespaces: Vec<&str> = found.iter().map(|o| o.namespace.as_str()).collect();
+    assert_eq!(namespaces, ["flux-resources"]);
+
+    let served = flux9s::kube::api::served_flux_api_resource(
+        &client,
+        flux9s::models::FluxResourceKind::OCIRepository,
+    )
+    .await
+    .expect("OCIRepository is served");
+    assert_eq!(served.version, "v1beta2");
+
+    let discovered = flux9s::kube::discover_namespaces_with_flux_resources(&client)
+        .await
+        .expect("namespace discovery");
+    assert!(
+        discovered.iter().any(|ns| ns == "flux-resources"),
+        "{discovered:?}"
     );
 }

@@ -979,27 +979,17 @@ fn create_graph_node_from_value(
                 .and_then(|p| p.as_str())
                 .map(|s| s.to_string())
         }
-        // For HelmRelease, use chart name or version
+        // For HelmRelease, the list's CHART (name or OCI URL), else VERSION —
+        // the same extraction as the table.
         else if kind == "HelmRelease" {
-            spec.get("chart")
-                .and_then(|c| c.get("spec"))
-                .and_then(|cs| cs.get("chart"))
-                .and_then(|ch| ch.as_str())
-                .map(|s| format!("chart: {}", s))
+            let fields = FluxResourceKind::HelmRelease.extract_fields(obj_value);
+            fields
+                .get(crate::models::flux_resource_kind::field_names::CHART)
+                .map(|chart| format!("chart: {chart}"))
                 .or_else(|| {
-                    // OCIRepository chart template (Flux 2.10+)
-                    spec.get("chart")
-                        .and_then(|c| c.get("spec"))
-                        .and_then(|cs| cs.get("url"))
-                        .and_then(|u| u.as_str())
-                        .map(|s| format!("chart: {}", s))
-                })
-                .or_else(|| {
-                    spec.get("chart")
-                        .and_then(|c| c.get("spec"))
-                        .and_then(|cs| cs.get("version"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| format!("version: {}", s))
+                    fields
+                        .get(crate::models::flux_resource_kind::field_names::VERSION)
+                        .map(|version| format!("version: {version}"))
                 })
         } else {
             None

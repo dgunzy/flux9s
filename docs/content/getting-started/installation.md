@@ -76,8 +76,8 @@ The binary will be available at `target/release/flux9s`.
 
 {{% alert title="Prerequisites" color="info" %}}
 
-- **Rust 1.70+** (if compiling from source)
-- **Kubernetes cluster** with Flux CD installed
+- **Rust 1.89+** (if compiling from source)
+- **Kubernetes cluster** with Flux 2.2 or later installed ([tested versions](/user-guide/flux-resources/#flux-versions))
 - **kubeconfig** configured to access your cluster
   {{% /alert %}}
 

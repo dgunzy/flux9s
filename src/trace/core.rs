@@ -337,32 +337,17 @@ async fn resolve_helmrelease_source(
         let (generated_kind, chart_ns, chart_name) =
             crate::kube::standing::generated_chart_source(helm_chart_ref, default_ns);
         match FluxResourceKind::parse_optional(&generated_kind) {
-            Some(FluxResourceKind::HelmChart) => {
-                if let Some(chart_node) = fetch_and_trace_flux_resource(
-                    client,
-                    FluxResourceKind::HelmChart.as_str(),
-                    &chart_ns,
-                    &chart_name,
-                )
-                .await?
+            Some(kind @ (FluxResourceKind::HelmChart | FluxResourceKind::OCIRepository)) => {
+                if let Some(generated) =
+                    fetch_and_trace_flux_resource(client, kind.as_str(), &chart_ns, &chart_name)
+                        .await?
                 {
-                    // Add HelmChart to chain
-                    chain.push(chart_node.clone());
-                    // Resolve the HelmChart's source
-                    return resolve_helmchart_source(client, &chart_node, &chart_ns).await;
-                }
-            }
-            Some(FluxResourceKind::OCIRepository) => {
-                // The generated OCIRepository is the source itself.
-                if let Some(source) = fetch_and_trace_flux_resource(
-                    client,
-                    FluxResourceKind::OCIRepository.as_str(),
-                    &chart_ns,
-                    &chart_name,
-                )
-                .await?
-                {
-                    return Ok(Some(source));
+                    if kind == FluxResourceKind::OCIRepository {
+                        return Ok(Some(generated)); // the source itself
+                    }
+                    // A HelmChart sits between the release and its source.
+                    chain.push(generated.clone());
+                    return resolve_helmchart_source(client, &generated, &chart_ns).await;
                 }
             }
             _ => tracing::warn!("Unsupported status.helmChart kind: {}", generated_kind),
