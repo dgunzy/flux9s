@@ -163,9 +163,17 @@ pub async fn find_by_name(
     api_version: Option<&str>,
     name: &str,
 ) -> anyhow::Result<Vec<ObjectRef>> {
-    let (resource, scope) = match api_version {
-        Some(api_version) => discover(client, api_version, kind).await?,
-        None => {
+    let flux_kind = crate::models::FluxResourceKind::parse_optional(kind);
+    let (resource, scope) = match (api_version, flux_kind) {
+        (Some(api_version), _) => discover(client, api_version, kind).await?,
+        // Flux kinds: whichever version this cluster's Flux serves.
+        (None, Some(flux_kind)) => {
+            let resource = crate::kube::api::served_flux_api_resource(client, flux_kind)
+                .await
+                .with_context(|| format!("{kind} isn't served by this cluster"))?;
+            (resource, Scope::Namespaced)
+        }
+        (None, None) => {
             let (group, version, plural) = crate::kube::get_gvk_for_resource_type(kind)?;
             let api_version = if group.is_empty() {
                 version.clone()

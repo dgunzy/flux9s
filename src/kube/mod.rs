@@ -538,46 +538,38 @@ pub async fn list_all_namespaces(client: &Client) -> Result<Vec<String>> {
 }
 
 pub async fn discover_namespaces_with_flux_resources(client: &Client) -> Result<Vec<String>> {
-    use crate::kube::api::get_gvk_for_resource_type;
+    use crate::kube::api::{get_flux_api_resources_with_fallback, is_version_missing_error};
     use crate::models::FluxResourceKind;
     use kube::api::{Api, ListParams};
-    use kube::core::{ApiResource, DynamicObject};
+    use kube::core::DynamicObject;
 
     // Map to count resources per namespace
     let mut namespace_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
 
-    // Query all Flux resource types using FluxResourceKind enum
-    // This ensures we use the single source of truth for resource definitions
+    // Every Flux kind, at the version this cluster serves (the newest one
+    // flux9s knows first, then the kind's older versions), metadata only.
+    // Kinds that aren't installed, or can't be listed, are skipped.
     for kind in FluxResourceKind::all() {
-        let resource_type = kind.as_str();
-
-        // Get API metadata from the resource type using the centralized function
-        match get_gvk_for_resource_type(resource_type) {
-            Ok((group, version, plural)) => {
-                let api_resource = ApiResource {
-                    group: group.clone(),
-                    version: version.clone(),
-                    api_version: format!("{}/{}", group, version),
-                    kind: String::new(), // Not needed for listing
-                    plural: plural.clone(),
-                };
-
-                let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
-
-                // List all resources of this type across all namespaces
-                // Ignore errors for individual resource types (some may not exist in cluster)
-                if let Ok(list) = api.list(&ListParams::default()).await {
+        let Ok(candidates) = get_flux_api_resources_with_fallback(*kind) else {
+            continue;
+        };
+        for api_resource in candidates {
+            let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
+            match api.list_metadata(&ListParams::default()).await {
+                Ok(list) => {
                     for item in list.items {
-                        if let Some(namespace) = item.metadata.namespace.as_ref() {
-                            *namespace_counts.entry(namespace.clone()).or_insert(0) += 1;
+                        if let Some(namespace) = item.metadata.namespace {
+                            *namespace_counts.entry(namespace).or_insert(0) += 1;
                         }
                     }
+                    break;
                 }
-            }
-            Err(e) => {
-                // Log but continue - some resource types might not be available
-                tracing::debug!("Failed to get API metadata for {}: {}", resource_type, e);
+                Err(e) if is_version_missing_error(&e.to_string()) => continue,
+                Err(e) => {
+                    tracing::debug!("Cannot list {} for namespace discovery: {e}", kind.as_str());
+                    break;
+                }
             }
         }
     }

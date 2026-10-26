@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Docs: supported and tested Flux versions (2.2 and later; tested on 2.2,
+  2.9, 2.10)
+
+### Fixed
+- On Flux 2.1–2.9, `:trace alert/<name>` and `:trace provider/<name>`
+  across all namespaces failed, and namespaces holding only Alerts or
+  Providers were missing from namespace discovery — both used the Flux
+  2.10 API version only. They now use the version the cluster serves
+- A reconciled HelmRelease's CHART shows its chart (name, or an OCI chart
+  template's URL) instead of the generated source's name; for an OCI chart
+  template VERSION shows its ref in the controller's order (digest, then
+  semver, then tag), never the ignored `version`
+- Older API versions are tried only where a kind really had them (no more
+  requests for versions that never existed, such as HelmRelease
+  `v2beta3`); the image kinds now fall back on Flux before 2.7 —
+  ImageUpdateAutomation to `v1beta2`, then `v1beta1` (Flux 2.2)
+- Finding which version a Flux kind is served at uses API discovery, so it
+  works for users whose RBAC only allows some names
+
 ## [1.4.3] - 2026-10-26
 
 # Version 1.4.3 Changelog

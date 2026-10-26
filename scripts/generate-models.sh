@@ -76,7 +76,10 @@ process_crd_file() {
         
         # Process with kopium
         # Use --smart-derive-elision to automatically remove Default from structs that can't derive it
-        if kopium --filename "$split_file" --derive Default --derive PartialEq --docs --smart-derive-elision >> "$combined_output" 2>&1; then
+        # Run from the temp dir with a relative filename: kopium records its
+        # command line in the generated header, and an absolute temp path
+        # would make every regeneration differ by machine and run.
+        if (cd "$temp_dir" && kopium --filename "$(basename "$split_file")" --derive Default --derive PartialEq --docs --smart-derive-elision) >> "$combined_output" 2>&1; then
             processed=$((processed + 1))
             # Add separator between CRDs if not first
             if [ $processed -gt 1 ]; then

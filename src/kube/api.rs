@@ -165,67 +165,18 @@ pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String,
     Ok((group.to_string(), version.to_string(), plural.to_string()))
 }
 
-/// Generate fallback API versions based on the default version
-///
-/// This generates common fallback versions without hardcoding specific resource types.
-/// For example, if default is "v1", it will try "v1beta3", "v1beta2", "v1beta1", "v1alpha1".
-/// If default is "v2", it will try "v2beta2", "v2beta1", "v1", "v1beta2", etc.
-fn generate_fallback_versions(default_version: &str) -> Vec<String> {
-    let mut fallbacks = Vec::new();
-
-    // Parse version (e.g., "v1", "v2beta1", "v1beta2")
-    if let Some(version_num) = default_version.strip_prefix('v') {
-        // Extract major version and suffix
-        let parts: Vec<&str> = version_num.splitn(2, |c: char| c.is_alphabetic()).collect();
-        let major = parts[0].parse::<u32>().unwrap_or(1);
-        let suffix = if parts.len() > 1 { parts[1] } else { "" };
-
-        // If it's a stable version (v1, v2, etc.), generate beta/alpha fallbacks
-        if suffix.is_empty() {
-            // For v1: try v1beta3 (notification, before Flux 2.10), v1beta2,
-            // v1beta1, v1alpha1
-            fallbacks.push(format!("v{}beta3", major));
-            fallbacks.push(format!("v{}beta2", major));
-            fallbacks.push(format!("v{}beta1", major));
-            fallbacks.push(format!("v{}alpha1", major));
-
-            // Also try previous major version's stable and betas
-            if major > 1 {
-                let prev_major = major - 1;
-                fallbacks.push(format!("v{}", prev_major));
-                fallbacks.push(format!("v{}beta2", prev_major));
-                fallbacks.push(format!("v{}beta1", prev_major));
-            }
-        } else if suffix.starts_with("beta") {
-            // If it's a beta version, try other beta versions and alpha
-            let beta_num = suffix
-                .strip_prefix("beta")
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(1);
-            if beta_num > 1 {
-                fallbacks.push(format!("v{}beta{}", major, beta_num - 1));
-            }
-            fallbacks.push(format!("v{}beta1", major));
-            fallbacks.push(format!("v{}alpha1", major));
-
-            // Also try previous major version
-            if major > 1 {
-                fallbacks.push(format!("v{}", major - 1));
-            }
-        } else if suffix.starts_with("alpha") {
-            // If it's an alpha version, try other alpha versions
-            let alpha_num = suffix
-                .strip_prefix("alpha")
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(1);
-            if alpha_num > 1 {
-                fallbacks.push(format!("v{}alpha{}", major, alpha_num - 1));
-            }
-            fallbacks.push(format!("v{}alpha1", major));
-        }
-    }
-
-    fallbacks
+/// Older API versions to try for `resource_type` when its current one
+/// isn't served: the Flux kind's real version history
+/// ([`FluxResourceKind::older_api_versions`]); none for anything else.
+fn fallback_versions(resource_type: &str) -> Vec<String> {
+    FluxResourceKind::parse_optional(resource_type)
+        .map(|kind| {
+            kind.older_api_versions()
+                .iter()
+                .map(|v| v.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Get all Flux ApiResources to try for a resource kind, ordered from newest to oldest.
@@ -239,7 +190,7 @@ pub fn get_flux_api_resources_with_fallback(
     let (group, default_version, plural) = get_gvk_for_resource_type(resource_type)?;
     let mut versions = vec![default_version.clone()];
 
-    for fallback in generate_fallback_versions(&default_version) {
+    for fallback in fallback_versions(resource_type) {
         if !versions.contains(&fallback) {
             versions.push(fallback);
         }
@@ -255,6 +206,45 @@ pub fn get_flux_api_resources_with_fallback(
             plural: plural.clone(),
         })
         .collect())
+}
+
+/// The API version of a Flux kind this cluster serves: the first of
+/// [`get_flux_api_resources_with_fallback`] whose version lists the kind in
+/// API discovery. Discovery is readable by every authenticated user, so the
+/// answer doesn't depend on RBAC (a 403 says nothing about whether a version
+/// exists, and a user limited to some names can't list unfiltered). `None`
+/// when no version is served, or discovery can't be read.
+pub async fn served_flux_api_resource(
+    client: &kube::Client,
+    kind: FluxResourceKind,
+) -> Option<ApiResource> {
+    let candidates = get_flux_api_resources_with_fallback(kind).ok()?;
+    let group = candidates.first()?.group.clone();
+    let discovered = match kube::discovery::oneshot::group(client, &group).await {
+        Ok(discovered) => discovered,
+        Err(e) => {
+            tracing::debug!("Discovery of {group} failed: {e}");
+            return None;
+        }
+    };
+    first_served(candidates, |version, plural| {
+        discovered
+            .versioned_resources(version)
+            .iter()
+            .any(|(resource, _)| resource.plural == plural)
+    })
+}
+
+/// The first candidate `serves(version, plural)` accepts. A group can serve
+/// a version without every kind (notification `v1` had Receiver long before
+/// Alert), so the kind is checked, not just the version.
+fn first_served(
+    candidates: Vec<ApiResource>,
+    serves: impl Fn(&str, &str) -> bool,
+) -> Option<ApiResource> {
+    candidates
+        .into_iter()
+        .find(|candidate| serves(&candidate.version, &candidate.plural))
 }
 
 /// Classification of a failed GET used while probing API versions.
@@ -357,12 +347,8 @@ pub async fn get_api_resource_with_fallback(
         },
     }
 
-    // Generate fallback versions dynamically based on the default version
-    // This avoids hardcoding specific resource types and versions
-    let fallback_versions = generate_fallback_versions(&default_version);
-
-    // Try fallback versions
-    for version in fallback_versions {
+    // Then the kind's older versions, newest first.
+    for version in fallback_versions(resource_type) {
         let fallback_api_resource = ApiResource {
             group: group.clone(),
             version: version.clone(),
@@ -439,54 +425,63 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_generate_fallback_versions_stable_v1() {
-        let fallbacks = generate_fallback_versions("v1");
-        assert!(
-            fallbacks.contains(&"v1beta2".to_string()),
-            "v1 should fall back to v1beta2 for older clusters"
-        );
-        assert!(fallbacks.contains(&"v1beta1".to_string()));
+    fn versions(kind: FluxResourceKind) -> Vec<String> {
+        get_flux_api_resources_with_fallback(kind)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.version)
+            .collect()
     }
 
     #[test]
-    fn test_notification_kinds_fall_back_to_v1beta3_then_v1beta2() {
-        // Alert/Provider moved to v1 in Flux 2.10; older clusters serve v1beta3
-        // (Flux 2.1–2.9) or v1beta2 (before that).
-        for kind in [
-            FluxResourceKind::Alert,
-            FluxResourceKind::Provider,
-            FluxResourceKind::Receiver,
-        ] {
-            let versions: Vec<String> = get_flux_api_resources_with_fallback(kind)
-                .unwrap()
-                .into_iter()
-                .map(|r| r.version)
-                .collect();
-            assert_eq!(versions[..3], ["v1", "v1beta3", "v1beta2"], "{kind:?}");
-        }
+    fn fallbacks_are_each_kinds_real_version_history() {
+        assert_eq!(
+            versions(FluxResourceKind::HelmRelease),
+            ["v2", "v2beta2", "v2beta1"]
+        );
+        assert_eq!(versions(FluxResourceKind::OCIRepository), ["v1", "v1beta2"]);
+        // Alert / Provider: v1 in Flux 2.10, v1beta3 in 2.2–2.9, v1beta2 before.
+        assert_eq!(
+            versions(FluxResourceKind::Alert),
+            ["v1", "v1beta3", "v1beta2"]
+        );
+        assert_eq!(
+            versions(FluxResourceKind::Provider),
+            ["v1", "v1beta3", "v1beta2"]
+        );
+        // Receiver went v1beta2 → v1 (Flux 2.0); it never had v1beta3.
+        assert_eq!(versions(FluxResourceKind::Receiver), ["v1", "v1beta2"]);
+        assert_eq!(versions(FluxResourceKind::ImagePolicy), ["v1", "v1beta2"]);
+        // v1beta2 only since Flux 2.3: Flux 2.2 serves v1beta1.
+        assert_eq!(
+            versions(FluxResourceKind::ImageUpdateAutomation),
+            ["v1", "v1beta2", "v1beta1"]
+        );
+        assert_eq!(versions(FluxResourceKind::Kustomization), ["v1"]);
+        assert!(
+            fallback_versions("Deployment").is_empty(),
+            "built-ins have none"
+        );
     }
 
     #[test]
-    fn test_generate_fallback_versions_stable_v2() {
-        let fallbacks = generate_fallback_versions("v2");
-        assert!(
-            fallbacks.contains(&"v2beta2".to_string()),
-            "v2 should fall back to v2beta2 for older clusters (e.g. HelmRelease)"
+    fn the_served_version_is_the_first_whose_version_lists_the_kind() {
+        let candidates = || get_flux_api_resources_with_fallback(FluxResourceKind::Alert).unwrap();
+        // Flux 2.9: notification v1 exists (Receiver) but not for alerts.
+        let flux_2_9 = |version: &str, plural: &str| match version {
+            "v1" => plural == "receivers",
+            "v1beta3" | "v1beta2" => plural == "alerts" || plural == "providers",
+            _ => false,
+        };
+        assert_eq!(
+            first_served(candidates(), flux_2_9).map(|r| r.version),
+            Some("v1beta3".to_string())
         );
-        assert!(fallbacks.contains(&"v1".to_string()));
-    }
-
-    #[test]
-    fn test_generate_fallback_versions_beta_does_not_include_stable_next() {
-        // v2beta2 should NOT generate v2 as a fallback — that's a promotion, not a fallback.
-        // This was the HelmRelease bug: impl_watchable! said v2beta2 so individual-resource ops
-        // tried v2beta2 first and the fallback list never reached v2.
-        let fallbacks = generate_fallback_versions("v2beta2");
-        assert!(
-            !fallbacks.contains(&"v2".to_string()),
-            "beta fallbacks should not include the stable promoted version"
+        assert_eq!(
+            first_served(candidates(), |_, _| true).map(|r| r.version),
+            Some("v1".to_string())
         );
+        assert_eq!(first_served(candidates(), |_, _| false), None);
     }
 
     #[test]

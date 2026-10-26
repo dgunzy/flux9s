@@ -76,6 +76,38 @@ pub enum FluxResourceKind {
 }
 
 impl FluxResourceKind {
+    /// API versions older Flux releases serve this kind at, newest first —
+    /// tried in order when the current version (from the generated model)
+    /// isn't served. Exactly the versions each kind has had, so no cluster
+    /// is asked for one that never existed.
+    pub fn older_api_versions(&self) -> &'static [&'static str] {
+        match self {
+            // v1 since Flux 2.3 (HelmRepository, HelmChart), 2.4 (Bucket),
+            // and 2.6 (OCIRepository); v1beta2 before.
+            Self::OCIRepository | Self::HelmRepository | Self::Bucket | Self::HelmChart => {
+                &["v1beta2"]
+            }
+            // v2 since Flux 2.3; v2beta2 since 2.2.
+            Self::HelmRelease => &["v2beta2", "v2beta1"],
+            // v1 since Flux 2.10; v1beta3 since 2.2.
+            Self::Alert | Self::Provider => &["v1beta3", "v1beta2"],
+            // v1 since Flux 2.0.
+            Self::Receiver => &["v1beta2"],
+            // v1 since Flux 2.7.
+            Self::ImageRepository | Self::ImagePolicy => &["v1beta2"],
+            // v1 since Flux 2.7; v1beta2 since 2.3, v1beta1 before.
+            Self::ImageUpdateAutomation => &["v1beta2", "v1beta1"],
+            Self::GitRepository
+            | Self::Kustomization
+            | Self::ExternalArtifact
+            | Self::ArtifactGenerator
+            | Self::ResourceSet
+            | Self::ResourceSetInputProvider
+            | Self::FluxReport
+            | Self::FluxInstance => &[],
+        }
+    }
+
     /// Annotation key used by Flux Operator resources to control reconciliation.
     pub const RECONCILE_ANNOTATION: &str = "fluxcd.controlplane.io/reconcile";
 
@@ -438,11 +470,22 @@ impl FluxResourceKind {
                     if let Some(chart) = chart_field("chart").or_else(|| chart_field("url")) {
                         fields.insert(CHART.to_string(), chart.to_string());
                     }
-                    if let Some(version) = chart_field("version")
-                        .or_else(|| oci_ref("tag"))
-                        .or_else(|| oci_ref("semver"))
-                        .or_else(|| oci_ref("digest"))
-                    {
+                    // An OCIRepository template pulls by its ref, in the
+                    // controller's precedence (digest, then semver, then tag);
+                    // `version` (the CRD allows `*`) doesn't apply to it.
+                    let oci_template = spec
+                        .get("chart")
+                        .and_then(|c| c.get("kind"))
+                        .and_then(|k| k.as_str())
+                        == Some("OCIRepository");
+                    let version = if oci_template {
+                        oci_ref("digest")
+                            .or_else(|| oci_ref("semver"))
+                            .or_else(|| oci_ref("tag"))
+                    } else {
+                        chart_field("version")
+                    };
+                    if let Some(version) = version {
                         fields.insert(VERSION.to_string(), version.to_string());
                     }
                     // Extract INTERVAL (common across types)
@@ -636,7 +679,11 @@ impl FluxResourceKind {
         // Extract status fields
         if let Some(status) = obj.get("status").and_then(|s| s.as_object()) {
             if matches!(self, FluxResourceKind::HelmRelease) {
-                if let Some(helm_chart) = status.get("helmChart").and_then(|hc| hc.as_str()) {
+                // The chart from spec (name, or an OCI template's URL) wins;
+                // the generated source only stands in when spec has none.
+                if !fields.contains_key(CHART)
+                    && let Some(helm_chart) = status.get("helmChart").and_then(|hc| hc.as_str())
+                {
                     fields.insert(CHART.to_string(), helm_chart.to_string());
                 }
                 if let Some(release_status) = status
@@ -935,6 +982,39 @@ mod tests {
         assert_eq!(fields.get("CHART"), Some(&"cert-manager".to_string()));
         assert_eq!(fields.get("VERSION"), Some(&"v1.13.6".to_string()));
         assert_eq!(fields.get("INTERVAL"), Some(&"15m".to_string()));
+    }
+
+    #[test]
+    fn helmrelease_chart_comes_from_spec_even_once_reconciled() {
+        let obj = json!({
+            "spec": {"chart": {"kind": "OCIRepository", "spec": {
+                "url": "oci://ghcr.io/stefanprodan/charts/podinfo",
+                "version": "*",
+                "ref": {"tag": "6.7.0", "semver": ">=6.0.0", "digest": "sha256:abc"}
+            }}},
+            "status": {"helmChart": "OCIRepository/apps/apps-podinfo"}
+        });
+        let fields = FluxResourceKind::HelmRelease.extract_fields(&obj);
+        assert_eq!(
+            fields.get("CHART").map(String::as_str),
+            Some("oci://ghcr.io/stefanprodan/charts/podinfo"),
+            "status.helmChart doesn't replace the URL"
+        );
+        assert_eq!(
+            fields.get("VERSION").map(String::as_str),
+            Some("sha256:abc"),
+            "the ref decides (digest, semver, tag), not the ignored `version: *`"
+        );
+        let by_ref = json!({"spec": {"chartRef": {"kind": "OCIRepository", "name": "podinfo"}},
+            "status": {"helmChart": "OCIRepository/apps/podinfo"}});
+        assert_eq!(
+            FluxResourceKind::HelmRelease
+                .extract_fields(&by_ref)
+                .get("CHART")
+                .map(String::as_str),
+            Some("OCIRepository/apps/podinfo"),
+            "without a chart in spec, the source stands in"
+        );
     }
 
     #[test]
