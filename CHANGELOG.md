@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.3] - 2026-10-26
+
+# Version 1.4.3 Changelog
+
+**Added**
+- View for orphaned resources (#314)
+- Tests for Flux CRD changes (#315)
+
+**Changed**
+- Updated Flux CRDs to latest versions (#313, #312)
+
 ### Added
 - Unmanaged and orphaned objects (#274, native resources on): `:unmanaged`
   lists what Flux doesn't manage in a namespace (`all` adds what Argo CD,
