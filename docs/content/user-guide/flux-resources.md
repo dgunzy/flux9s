@@ -12,7 +12,7 @@ Select a resource in the list (or open its detail, YAML, or graph) and press:
 
 | Key | Operation | Applies to |
 | --- | --- | --- |
-| `s` | Suspend reconciliation | Resources with `spec.suspend` (GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, ImageUpdateAutomation, …); Flux Operator kinds use their reconcile annotation |
+| `s` | Suspend reconciliation | Every kind with `spec.suspend` (sources, Kustomization, HelmRelease, image kinds, Alert, Provider, Receiver); Flux Operator kinds and ArtifactGenerator use their reconcile annotation, as `flux suspend` does. Not ExternalArtifact or FluxReport |
 | `r` | Resume reconciliation | Same as suspend |
 | `R` | Reconcile now | All Flux resources (not while suspended) |
 | `W` | Reconcile with its source | Kustomization, HelmRelease |

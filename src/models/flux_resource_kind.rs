@@ -57,6 +57,44 @@ pub mod labels {
     pub const PRUNE: &str = "kustomize.toolkit.fluxcd.io/prune";
 }
 
+/// How a kind's reconciliation is switched off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuspendSwitch {
+    /// `spec.suspend: true`.
+    Spec,
+    /// The annotation set to `disabled` (Flux Operator kinds,
+    /// ArtifactGenerator); resumed with `enabled`.
+    Annotation(&'static str),
+}
+
+impl SuspendSwitch {
+    /// Whether `obj` is suspended.
+    pub fn is_suspended(self, obj: &Value) -> bool {
+        match self {
+            SuspendSwitch::Spec => obj
+                .pointer("/spec/suspend")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            SuspendSwitch::Annotation(key) => {
+                obj.pointer("/metadata/annotations")
+                    .and_then(|a| a.get(key))
+                    .and_then(Value::as_str)
+                    == Some("disabled")
+            }
+        }
+    }
+
+    /// The merge patch that suspends (or resumes) an object.
+    pub fn patch(self, suspend: bool) -> Value {
+        match self {
+            SuspendSwitch::Spec => serde_json::json!({ "spec": { "suspend": suspend } }),
+            SuspendSwitch::Annotation(key) => serde_json::json!({
+                "metadata": { "annotations": { key: if suspend { "disabled" } else { "enabled" } } }
+            }),
+        }
+    }
+}
+
 /// Declares every Flux kind once: its variant (named exactly as the CRD's
 /// `kind`), the generated model it is read with, and its `:` command
 /// aliases. The enum, [`FluxResourceKind::ALL`], the name ↔ kind mappings,
@@ -235,11 +273,11 @@ impl FluxResourceKind {
     }
 
     /// Whether this kind records the objects it applies in
-    /// `status.inventory.entries`, so the graph can discover its downstream
+    /// `status.inventory`, so the graph can discover its downstream
     /// resources from the inventory:
-    /// - Kustomization
-    /// - ResourceSet
-    /// - FluxInstance
+    /// - Kustomization, ResourceSet, FluxInstance (`status.inventory.entries`)
+    /// - ArtifactGenerator (`status.inventory[]`: its ExternalArtifacts,
+    ///   possibly in other namespaces since Flux 2.10)
     ///
     /// HelmRelease is deliberately excluded — its inventory lives in Helm
     /// storage Secrets and has a dedicated discovery path.
@@ -249,6 +287,7 @@ impl FluxResourceKind {
             FluxResourceKind::Kustomization
                 | FluxResourceKind::ResourceSet
                 | FluxResourceKind::FluxInstance
+                | FluxResourceKind::ArtifactGenerator
         )
     }
 
@@ -277,70 +316,52 @@ impl FluxResourceKind {
         matches!(self, FluxResourceKind::Alert | FluxResourceKind::Provider)
     }
 
-    /// Check if this resource type uses annotation-based suspension instead of spec.suspend.
-    ///
-    /// Flux Operator resources (FluxInstance, ResourceSet, ResourceSetInputProvider) have no
-    /// spec.suspend field. Suspension is controlled via the annotation
-    /// `fluxcd.controlplane.io/reconcile: disabled` and resumed by setting it to `enabled`.
-    pub fn uses_annotation_suspend(&self) -> bool {
-        matches!(
-            self,
-            FluxResourceKind::FluxInstance
-                | FluxResourceKind::ResourceSet
-                | FluxResourceKind::ResourceSetInputProvider
-        )
+    /// How this kind's reconciliation is suspended — `None` when it can't
+    /// be. Matches the CRDs (`spec.suspend`; checked against `crds/` by a
+    /// test) and the Flux CLI's annotations for kinds without the field.
+    pub fn suspend_switch(&self) -> Option<SuspendSwitch> {
+        match self {
+            Self::GitRepository
+            | Self::OCIRepository
+            | Self::HelmRepository
+            | Self::Bucket
+            | Self::HelmChart
+            | Self::Kustomization
+            | Self::HelmRelease
+            | Self::ImageRepository
+            | Self::ImagePolicy
+            | Self::ImageUpdateAutomation
+            | Self::Alert
+            | Self::Provider
+            | Self::Receiver => Some(SuspendSwitch::Spec),
+            Self::FluxInstance | Self::ResourceSet | Self::ResourceSetInputProvider => {
+                Some(SuspendSwitch::Annotation(Self::RECONCILE_ANNOTATION))
+            }
+            // `flux suspend artifact generator` (Flux 2.10).
+            Self::ArtifactGenerator => Some(SuspendSwitch::Annotation(
+                "source.extensions.fluxcd.io/reconcile",
+            )),
+            Self::ExternalArtifact | Self::FluxReport => None,
+        }
     }
 
-    /// Extract suspended state using the mechanism defined by this resource kind.
-    pub fn extract_suspended(&self, obj: &Value) -> Option<bool> {
-        if self.uses_annotation_suspend() {
-            return Some(
-                obj.get("metadata")
-                    .and_then(|m| m.get("annotations"))
-                    .and_then(|a| a.get(Self::RECONCILE_ANNOTATION))
-                    .and_then(|v| v.as_str())
-                    .map(|v| v == "disabled")
-                    .unwrap_or(false),
-            );
-        }
+    /// Whether `s`/`r` (suspend / resume) apply ([`Self::suspend_switch`]).
+    pub fn supports_suspend(&self) -> bool {
+        self.suspend_switch().is_some()
+    }
 
+    /// Whether the object is suspended, read the way its kind records it;
+    /// `false` for kinds that can't be.
+    pub fn extract_suspended(&self, obj: &Value) -> Option<bool> {
         Some(
-            obj.get("spec")
-                .and_then(|s| s.get("suspend"))
-                .and_then(|s| s.as_bool())
-                .unwrap_or(false),
+            self.suspend_switch()
+                .is_some_and(|switch| switch.is_suspended(obj)),
         )
     }
 
     /// The kinds with reconciliation history ([`Self::supports_history`]).
     pub fn history_supported_types() -> impl Iterator<Item = Self> {
         Self::ALL.iter().copied().filter(Self::supports_history)
-    }
-
-    /// Whether `s`/`r` (suspend / resume) apply: everything with a
-    /// suspend switch (`spec.suspend`, or the Flux Operator's annotation).
-    pub fn supports_suspend(&self) -> bool {
-        match self {
-            Self::GitRepository
-            | Self::OCIRepository
-            | Self::HelmRepository
-            | Self::Kustomization
-            | Self::HelmRelease
-            | Self::ImageUpdateAutomation
-            | Self::FluxInstance
-            | Self::ResourceSet
-            | Self::ResourceSetInputProvider => true,
-            Self::Bucket
-            | Self::HelmChart
-            | Self::ExternalArtifact
-            | Self::ArtifactGenerator
-            | Self::ImageRepository
-            | Self::ImagePolicy
-            | Self::Alert
-            | Self::Provider
-            | Self::Receiver
-            | Self::FluxReport => false,
-        }
     }
 
     /// Whether the kind pulls from a Flux source (`spec.sourceRef`, or a
@@ -1002,6 +1023,34 @@ mod tests {
     }
 
     #[test]
+    fn artifact_generators_suspend_through_their_annotation() {
+        let ag = |value: &str| json!({"metadata": {"annotations": {"source.extensions.fluxcd.io/reconcile": value}}});
+        let kind = FluxResourceKind::ArtifactGenerator;
+        assert_eq!(kind.extract_suspended(&ag("disabled")), Some(true));
+        assert_eq!(kind.extract_suspended(&ag("enabled")), Some(false));
+        assert_eq!(kind.extract_suspended(&json!({})), Some(false));
+        // The Flux Operator's annotation doesn't suspend an ArtifactGenerator.
+        let operator =
+            json!({"metadata": {"annotations": {"fluxcd.controlplane.io/reconcile": "disabled"}}});
+        assert_eq!(kind.extract_suspended(&operator), Some(false));
+
+        let switch = kind.suspend_switch().unwrap();
+        assert_eq!(switch.patch(true), ag("disabled"));
+        assert_eq!(switch.patch(false), ag("enabled"));
+        assert_eq!(
+            FluxResourceKind::Kustomization
+                .suspend_switch()
+                .unwrap()
+                .patch(true),
+            json!({"spec": {"suspend": true}})
+        );
+        assert_eq!(
+            FluxResourceKind::FluxReport.extract_suspended(&json!({"spec": {"suspend": true}})),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn test_extract_suspended_annotation_defaults_false() {
         let obj = json!({
             "metadata": {
@@ -1359,6 +1408,8 @@ mod tests {
         assert!(FluxResourceKind::Kustomization.has_inventory_downstream());
         assert!(FluxResourceKind::ResourceSet.has_inventory_downstream());
         assert!(FluxResourceKind::FluxInstance.has_inventory_downstream());
+        // ArtifactGenerator's status.inventory[] lists its ExternalArtifacts
+        assert!(FluxResourceKind::ArtifactGenerator.has_inventory_downstream());
         // HelmRelease has its own path (Helm storage Secrets)
         assert!(!FluxResourceKind::HelmRelease.has_inventory_downstream());
         assert!(!FluxResourceKind::GitRepository.has_inventory_downstream());

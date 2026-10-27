@@ -12,12 +12,14 @@ spec:
     #   HelmChart v1beta2→v1, HelmRelease v2beta2→v2
     # This cluster intentionally serves all five at their pre-graduation beta versions,
     # which exercises flux9s's version fallback (tries stable first, falls back to beta).
+    # notification-controller serves Alert / Provider at v1beta3 (v1 only in Flux 2.10).
     version: "2.2.x"
     registry: "ghcr.io/fluxcd"
   components:
     - source-controller
     - kustomize-controller
     - helm-controller
+    - notification-controller
   cluster:
     type: kubernetes
     multitenant: false

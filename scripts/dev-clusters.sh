@@ -9,8 +9,9 @@
 #
 #   flux9s-simple   — Flux 2.10.x + source-watcher; day-to-day dev testing (steps, AG, events)
 #   flux9s-stress   — Flux 2.7.x; 40+ resources of every kind for page-scroll / large lists
-#   flux9s-legacy   — Flux 2.2.x with OCIRepository/Bucket at v1beta2; tests the
-#                     version-fallback logic (flux9s tries v1 first, then v1beta2)
+#   flux9s-legacy   — Flux 2.2.x with OCIRepository/Bucket at v1beta2 and
+#                     Alert/Provider at v1beta3; tests the version-fallback logic
+#                     (flux9s tries the current version first, then older ones)
 #
 # All clusters are installed via the Flux Operator (no flux bootstrap).
 # Resources deliberately point to real public sources so some actually reconcile.
@@ -122,7 +123,7 @@ apply_fluxinstance() {
 # Apply the legacy FluxInstance (Flux 2.2.x, source/kustomize/helm only)
 apply_fluxinstance_legacy() {
     local ctx="$1"
-    info "Applying legacy FluxInstance (Flux 2.2.x — source/kustomize/helm only) …"
+    info "Applying legacy FluxInstance (Flux 2.2.x — source/kustomize/helm/notification) …"
     kubectl --context "$ctx" apply -f "${MANIFEST_DIR}/fluxinstance-legacy.yaml"
 
     sleep 5
@@ -163,7 +164,7 @@ wait_for_flux_crds() {
 }
 
 # Wait for the subset of Flux CRDs installed by the legacy cluster
-# (source/kustomize/helm only — no notification or image controllers)
+# (source/kustomize/helm/notification — no image controllers)
 wait_for_flux_crds_legacy() {
     local ctx="$1"
 
@@ -175,6 +176,8 @@ wait_for_flux_crds_legacy() {
         ocirepositories.source.toolkit.fluxcd.io \
         kustomizations.kustomize.toolkit.fluxcd.io \
         helmreleases.helm.toolkit.fluxcd.io \
+        alerts.notification.toolkit.fluxcd.io \
+        providers.notification.toolkit.fluxcd.io \
         resourcesets.fluxcd.controlplane.io \
         resourcesetinputproviders.fluxcd.controlplane.io; do
         local retries="$CRD_WAIT_RETRIES"
@@ -236,6 +239,8 @@ apply_legacy_manifests() {
         ocirepositories.source.toolkit.fluxcd.io \
         kustomizations.kustomize.toolkit.fluxcd.io \
         helmreleases.helm.toolkit.fluxcd.io \
+        alerts.notification.toolkit.fluxcd.io \
+        providers.notification.toolkit.fluxcd.io \
         resourcesets.fluxcd.controlplane.io \
         resourcesetinputproviders.fluxcd.controlplane.io; then
         warn "Skipping legacy manifests for $ctx because Flux CRDs are not all available yet"

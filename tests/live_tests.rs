@@ -1000,7 +1000,8 @@ async fn watch_all_reports_every_kind_on_flux_2_10() {
 }
 
 /// Flux 2.2: the promoted kinds are read at their older versions
-/// (HelmRelease v2beta2, OCIRepository / HelmRepository / HelmChart v1beta2).
+/// (HelmRelease v2beta2, OCIRepository / HelmRepository / HelmChart v1beta2,
+/// Alert / Provider v1beta3).
 #[tokio::test]
 #[ignore = "requires the kind-flux9s-legacy dev cluster (Flux 2.2)"]
 async fn watch_all_falls_back_on_older_flux() {
@@ -1011,9 +1012,126 @@ async fn watch_all_falls_back_on_older_flux() {
         "HelmChart",
         "Kustomization",
         "HelmRelease",
+        "Alert",
+        "Provider",
     ];
     let seen = watched_kinds(&legacy_context(), &expected).await;
     for kind in expected {
         assert!(seen.contains(kind), "{kind} not watched; saw {seen:?}");
+    }
+}
+
+/// Flux 2.10 cross-namespace artifacts: an ArtifactGenerator's graph shows
+/// the ExternalArtifact it generated in another namespace, in that
+/// namespace (its inventory entry names it).
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+async fn artifact_generator_graph_follows_cross_namespace_artifacts() {
+    use flux9s::trace::build_resource_graph;
+
+    let client = client_for(&simple_context()).await;
+    let nodes = eventually("cross-namespace ExternalArtifact in the graph", 120, || {
+        let client = client.clone();
+        async move {
+            let graph = build_resource_graph(
+                &client,
+                "ArtifactGenerator",
+                "flux-resources",
+                "cross-namespace",
+            )
+            .await
+            .ok()?;
+            let nodes: Vec<_> = graph
+                .nodes
+                .iter()
+                .map(|n| (n.kind.clone(), n.namespace.clone(), n.name.clone()))
+                .collect();
+            nodes
+                .iter()
+                .any(|(kind, _, name)| kind == "ExternalArtifact" && name == "apps-shared")
+                .then_some(nodes)
+        }
+    })
+    .await;
+    assert!(
+        nodes.contains(&(
+            "ExternalArtifact".to_string(),
+            "flux-artifacts".to_string(),
+            "apps-shared".to_string()
+        )),
+        "the artifact is in its own namespace: {nodes:?}"
+    );
+}
+
+/// ArtifactGenerators suspend through `source.extensions.fluxcd.io/reconcile`
+/// (Flux 2.10 `flux suspend artifact generator`): flux9s reads it and its
+/// suspend / resume operations write it.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+async fn artifact_generators_suspend_and_resume_through_their_annotation() {
+    use flux9s::models::FluxResourceKind;
+    use flux9s::operations::{FluxOperation, ResumeOperation, SuspendOperation};
+
+    let client = client_for(&simple_context()).await;
+    let (kind, ns, name) = ("ArtifactGenerator", "flux-resources", "cross-namespace");
+    let suspended = || {
+        let client = client.clone();
+        async move {
+            let obj = flux9s::kube::fetch::fetch_resource(&client, kind, ns, name)
+                .await
+                .unwrap_or_else(|e| panic!("fetch {kind}: {e:#}"));
+            FluxResourceKind::ArtifactGenerator
+                .extract_suspended(&obj)
+                .unwrap_or(false)
+        }
+    };
+
+    SuspendOperation
+        .execute(&client, kind, ns, name)
+        .await
+        .unwrap_or_else(|e| panic!("suspend: {e:#}"));
+    assert!(suspended().await, "suspended after s");
+    ResumeOperation
+        .execute(&client, kind, ns, name)
+        .await
+        .unwrap_or_else(|e| panic!("resume: {e:#}"));
+    assert!(!suspended().await, "resumed after r");
+}
+
+/// Flux 2.2–2.9 serve Alert / Provider at `v1beta3` only (v1 is Flux 2.10):
+/// lookups by name and by discovery both fall back to it.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-legacy dev cluster (Flux 2.2)"]
+async fn notification_kinds_fall_back_to_v1beta3_on_older_flux() {
+    use flux9s::models::FluxResourceKind;
+
+    let client = client_for(&legacy_context()).await;
+    for (kind, name) in [
+        (FluxResourceKind::Alert, "on-error"),
+        (FluxResourceKind::Provider, "generic"),
+    ] {
+        let by_name = flux9s::kube::get_api_resource_with_fallback(
+            &client,
+            kind.as_str(),
+            "flux-resources",
+            name,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{kind}: {e:#}"));
+        assert_eq!(by_name.version, "v1beta3", "{kind} by name");
+
+        let served = flux9s::kube::api::served_flux_api_resource(&client, kind)
+            .await
+            .unwrap_or_else(|| panic!("{kind}: no served version"));
+        assert_eq!(served.version, "v1beta3", "{kind} via discovery");
+
+        let object =
+            flux9s::kube::fetch::fetch_resource(&client, kind.as_str(), "flux-resources", name)
+                .await
+                .unwrap_or_else(|e| panic!("{kind}: {e:#}"));
+        assert_eq!(
+            object["apiVersion"],
+            "notification.toolkit.fluxcd.io/v1beta3"
+        );
     }
 }

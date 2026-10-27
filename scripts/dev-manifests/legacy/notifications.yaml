@@ -1,0 +1,26 @@
+# Legacy cluster notifications — Flux 2.2.x serves Alert and Provider at
+# v1beta3 (v1 only arrived in Flux 2.10), so flux9s must fall back from v1.
+# Receiver has been v1 since Flux 2.0 and needs no fallback.
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: generic
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  type: generic
+  address: http://example.invalid/flux
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: on-error
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  providerRef:
+    name: generic
+  eventSeverity: error
+  eventSources:
+    - kind: Kustomization
+      name: "*"
