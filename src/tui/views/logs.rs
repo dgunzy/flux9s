@@ -5,8 +5,8 @@
 //! resumes). Reuses the shared text-search machinery (`/`, `n`/`N`).
 
 use crate::tui::app::logs::LogSession;
-use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
+use crate::tui::views::props::{Fetched, TextScroll};
 use crate::tui::views::yaml::{apply_text_search, decorate_title_with_search, find_match_lines};
 use ratatui::{
     Frame,
@@ -20,13 +20,19 @@ use ratatui::{
 pub fn render_controller_logs(
     f: &mut Frame,
     area: Rect,
-    session: Option<&LogSession>,
-    loading: bool,
+    session: Fetched<'_, LogSession>,
     follow: bool,
-    scroll_offset: &mut usize,
-    search: &mut TextSearchState,
+    text: TextScroll<'_>,
     theme: &Theme,
 ) {
+    let Fetched {
+        data: session,
+        loading,
+    } = session;
+    let TextScroll {
+        offset: scroll_offset,
+        search,
+    } = text;
     let Some(session) = session else {
         if loading {
             crate::tui::views::helpers::render_loading_state(
@@ -118,6 +124,7 @@ pub fn render_controller_logs(
 mod tests {
     use super::*;
     use crate::tui::app::logs::{LogEvent, LogState};
+    use crate::tui::app::state::TextSearchState;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -144,11 +151,9 @@ mod tests {
                 render_controller_logs(
                     frame,
                     frame.area(),
-                    state.session.as_ref(),
-                    state.is_loading(),
+                    Fetched::new(state.session.as_ref(), state.is_loading()),
                     state.follow,
-                    scroll_offset,
-                    &mut TextSearchState::default(),
+                    TextScroll::new(scroll_offset, &mut TextSearchState::default()),
                     &Theme::default(),
                 );
             })

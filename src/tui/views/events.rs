@@ -6,6 +6,7 @@
 
 use crate::kube::events::KubeEventInfo;
 use crate::tui::theme::Theme;
+use crate::tui::views::props::ListCursor;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -14,6 +15,14 @@ use ratatui::{
 };
 use std::cmp;
 
+/// What the events list shows.
+pub struct EventListProps<'a> {
+    pub events: &'a [KubeEventInfo],
+    pub total_count: usize,
+    pub filter: &'a str,
+    pub all_namespaces: bool,
+}
+
 /// Render the Kubernetes events table.
 ///
 /// `events` is pre-filtered and sorted newest-first; `total_count` is the
@@ -21,14 +30,20 @@ use std::cmp;
 pub fn render_kube_events(
     f: &mut Frame,
     area: Rect,
-    events: &[KubeEventInfo],
-    total_count: usize,
-    selected_index: usize,
-    scroll_offset: &mut usize,
-    filter: &str,
-    all_namespaces: bool,
+    props: EventListProps<'_>,
+    cursor: ListCursor<'_>,
     theme: &Theme,
 ) {
+    let EventListProps {
+        events,
+        total_count,
+        filter,
+        all_namespaces,
+    } = props;
+    let ListCursor {
+        selected: selected_index,
+        offset: scroll_offset,
+    } = cursor;
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling
 
@@ -166,12 +181,13 @@ mod tests {
                 render_kube_events(
                     frame,
                     frame.area(),
-                    events,
-                    events.len(),
-                    0,
-                    &mut scroll_offset,
-                    "",
-                    all_namespaces,
+                    EventListProps {
+                        events,
+                        total_count: events.len(),
+                        filter: "",
+                        all_namespaces,
+                    },
+                    ListCursor::new(0, &mut scroll_offset),
                     &Theme::default(),
                 );
             })

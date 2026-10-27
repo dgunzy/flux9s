@@ -49,15 +49,28 @@ impl App {
         }
     }
 
-    /// Rows of a selection-scrolled view.
+    /// Rows of a selection-scrolled view (`ScrollModel::Selection`); none
+    /// for the others.
     fn selection_len(&self, view: View) -> usize {
         match view {
+            View::ResourceList | View::ResourceFavorites => self.get_filtered_resources().len(),
             View::EventList => self.filtered_kube_events().len(),
             View::WorkloadList => self.view_state.workload_rows.len(),
             View::InventoryList => self.view_state.inventory_rows.len(),
             View::KindList => self.filtered_kind_rows().len(),
             View::OwnershipList => self.filtered_sweep_rows().len(),
-            _ => self.get_filtered_resources().len(),
+            View::ResourceDetail
+            | View::ResourceDescribe
+            | View::ResourceYAML
+            | View::ResourceTrace
+            | View::ResourceGraph
+            | View::ResourceHistory
+            | View::Logs
+            | View::WorkloadDetail
+            | View::Pulse
+            | View::HelmValues
+            | View::ResourceEdit
+            | View::Help => 0,
         }
     }
 

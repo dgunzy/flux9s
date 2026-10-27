@@ -33,25 +33,16 @@ impl ResourceKey {
         }
     }
 
-    /// Parse a resource key string in the format defined by RESOURCE_KEY_FORMAT
-    ///
-    /// Returns None if the string doesn't have exactly 3 colon-separated parts.
+    /// Parse a key in the format defined by RESOURCE_KEY_FORMAT. Kinds and
+    /// namespaces never contain `:`, but names can (`system:controller:…`
+    /// ClusterRoles), so everything after the second `:` is the name. The
+    /// namespace is empty for cluster-scoped objects; kind and name aren't.
     pub fn parse(key: &str) -> Option<Self> {
-        let parts: Vec<&str> = key.split(':').collect();
-        if parts.len() == 3 {
-            Some(Self {
-                resource_type: parts[0].to_string(),
-                namespace: parts[1].to_string(),
-                name: parts[2].to_string(),
-            })
-        } else {
-            tracing::warn!(
-                "Failed to parse resource key '{}': expected format '{}'",
-                key,
-                crate::constants::RESOURCE_KEY_FORMAT
-            );
-            None
-        }
+        let mut parts = key.splitn(3, ':');
+        let resource_type = parts.next().filter(|k| !k.is_empty())?;
+        let namespace = parts.next()?;
+        let name = parts.next().filter(|n| !n.is_empty())?;
+        Some(Self::new(resource_type, namespace, name))
     }
 
     /// Convert the ResourceKey back to its string representation — the format
@@ -243,11 +234,6 @@ impl Default for ResourceState {
     }
 }
 
-/// Generate a unique key for a resource
-pub fn resource_key(namespace: &str, name: &str, resource_type: &str) -> String {
-    format!("{}:{}:{}", resource_type, namespace, name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,8 +258,22 @@ mod tests {
     fn test_resource_key_parse_invalid() {
         assert!(ResourceKey::parse("invalid").is_none());
         assert!(ResourceKey::parse("only:two").is_none());
-        assert!(ResourceKey::parse("too:many:parts:here").is_none());
+        assert!(ResourceKey::parse(":ns:name").is_none());
+        assert!(ResourceKey::parse("Kind:ns:").is_none());
         assert!(ResourceKey::parse("").is_none());
+    }
+
+    #[test]
+    fn names_may_contain_colons() {
+        let key = ResourceKey::parse("ClusterRole::system:controller:job-controller").unwrap();
+        assert_eq!(key.resource_type, "ClusterRole");
+        assert_eq!(key.namespace, "");
+        assert_eq!(key.name, "system:controller:job-controller");
+        assert_eq!(
+            ResourceKey::parse(&key.to_key_string()),
+            Some(key),
+            "round-trips"
+        );
     }
 
     #[test]
@@ -294,24 +294,6 @@ mod tests {
         let key_string = original.to_key_string();
         let parsed = ResourceKey::parse(&key_string).unwrap();
         assert_eq!(original, parsed);
-    }
-
-    #[test]
-    fn test_resource_key_generation() {
-        use crate::models::FluxResourceKind;
-        let key = resource_key(
-            "default",
-            "my-resource",
-            FluxResourceKind::Kustomization.as_str(),
-        );
-        assert_eq!(key, "Kustomization:default:my-resource");
-
-        let key2 = resource_key(
-            "flux-system",
-            "flux-system",
-            FluxResourceKind::GitRepository.as_str(),
-        );
-        assert_eq!(key2, "GitRepository:flux-system:flux-system");
     }
 
     #[test]
@@ -339,11 +321,12 @@ mod tests {
         };
 
         use crate::models::FluxResourceKind;
-        let key = resource_key(
+        let key = crate::watcher::ResourceKey::new(
+            FluxResourceKind::Kustomization.as_str(),
             "default",
             "test-resource",
-            FluxResourceKind::Kustomization.as_str(),
-        );
+        )
+        .to_key_string();
         state.upsert(key.clone(), info);
 
         assert_eq!(state.all().len(), 1);
@@ -374,11 +357,12 @@ mod tests {
             last_reconciled: None,
             reconciliation_history: Vec::new(),
         };
-        let key = resource_key(
+        let key = crate::watcher::ResourceKey::new(
+            FluxResourceKind::Kustomization.as_str(),
             "default",
             "test-resource",
-            FluxResourceKind::Kustomization.as_str(),
-        );
+        )
+        .to_key_string();
         state.upsert(key.clone(), info);
         assert_eq!(state.all().len(), 1);
 
@@ -439,12 +423,15 @@ mod tests {
         };
 
         state.upsert(
-            resource_key("default", "ks1", "Kustomization"),
+            crate::watcher::ResourceKey::new("Kustomization", "default", "ks1").to_key_string(),
             kustomization,
         );
-        state.upsert(resource_key("default", "repo1", "GitRepository"), gitrepo);
         state.upsert(
-            resource_key("default", "ks2", "Kustomization"),
+            crate::watcher::ResourceKey::new("GitRepository", "default", "repo1").to_key_string(),
+            gitrepo,
+        );
+        state.upsert(
+            crate::watcher::ResourceKey::new("Kustomization", "default", "ks2").to_key_string(),
             kustomization2,
         );
 
@@ -465,7 +452,12 @@ mod tests {
         use crate::models::FluxResourceKind;
         // Add resources of different types
         state.upsert(
-            resource_key("default", "ks1", FluxResourceKind::Kustomization.as_str()),
+            crate::watcher::ResourceKey::new(
+                FluxResourceKind::Kustomization.as_str(),
+                "default",
+                "ks1",
+            )
+            .to_key_string(),
             ResourceInfo {
                 name: "ks1".to_string(),
                 namespace: "default".to_string(),
@@ -483,7 +475,12 @@ mod tests {
         );
 
         state.upsert(
-            resource_key("default", "ks2", FluxResourceKind::Kustomization.as_str()),
+            crate::watcher::ResourceKey::new(
+                FluxResourceKind::Kustomization.as_str(),
+                "default",
+                "ks2",
+            )
+            .to_key_string(),
             ResourceInfo {
                 name: "ks2".to_string(),
                 namespace: "default".to_string(),
@@ -501,7 +498,12 @@ mod tests {
         );
 
         state.upsert(
-            resource_key("default", "repo1", FluxResourceKind::GitRepository.as_str()),
+            crate::watcher::ResourceKey::new(
+                FluxResourceKind::GitRepository.as_str(),
+                "default",
+                "repo1",
+            )
+            .to_key_string(),
             ResourceInfo {
                 name: "repo1".to_string(),
                 namespace: "default".to_string(),
@@ -536,7 +538,12 @@ mod tests {
 
         use crate::models::FluxResourceKind;
         state.upsert(
-            resource_key("default", "test", FluxResourceKind::Kustomization.as_str()),
+            crate::watcher::ResourceKey::new(
+                FluxResourceKind::Kustomization.as_str(),
+                "default",
+                "test",
+            )
+            .to_key_string(),
             ResourceInfo {
                 name: "test".to_string(),
                 namespace: "default".to_string(),

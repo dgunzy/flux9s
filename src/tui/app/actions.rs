@@ -65,15 +65,10 @@ pub(crate) enum ActionSpec {
     /// A registered [`crate::operations::FluxOperation`], by its keybinding:
     /// validity check, read-only gate, and confirmation are shared.
     Operation(char),
-    /// A JSON merge patch on the action's target. `{{now}}` is replaced with
-    /// the current time (RFC 3339, UTC).
+    /// A JSON merge patch on the action's target (an annotation is
+    /// `{"metadata":{"annotations":{…}}}`). `{{now}}` is replaced with the
+    /// current time (RFC 3339, UTC).
     Patch { patch: &'static str, write: Write },
-    /// Set one annotation on the target (`{{now}}` allowed in the value).
-    Annotate {
-        key: &'static str,
-        value: &'static str,
-        write: Write,
-    },
 }
 
 /// How a write action is confirmed, reported, and limited.
@@ -98,9 +93,6 @@ impl ActionSpec {
                 serde_json::from_str(&patch.replace("{{now}}", now))
                     .map_err(|e| anyhow::anyhow!("Invalid patch in action: {e}")),
             ),
-            ActionSpec::Annotate { key, value, .. } => Some(Ok(serde_json::json!({
-                "metadata": {"annotations": {*key: value.replace("{{now}}", now)}}
-            }))),
             ActionSpec::Builtin(_) | ActionSpec::Operation(_) => None,
         }
     }
@@ -108,7 +100,7 @@ impl ActionSpec {
     /// Confirmation / status wording and kind filter of a write action.
     pub(crate) fn write_info(&self) -> Option<&Write> {
         match self {
-            ActionSpec::Patch { write, .. } | ActionSpec::Annotate { write, .. } => Some(write),
+            ActionSpec::Patch { write, .. } => Some(write),
             ActionSpec::Builtin(_) | ActionSpec::Operation(_) => None,
         }
     }
@@ -1226,7 +1218,7 @@ impl App {
         {
             return NATIVE_OBJECT_LAYOUT;
         }
-        view_layout(view)
+        view.footer_layout()
     }
 
     /// Footer hints for the current state: the layout, minus actions that
@@ -1263,7 +1255,7 @@ impl App {
                 self.handle_operation_key(op_key);
                 None
             }
-            ActionSpec::Patch { .. } | ActionSpec::Annotate { .. } => {
+            ActionSpec::Patch { .. } => {
                 self.request_write(&action.spec);
                 None
             }

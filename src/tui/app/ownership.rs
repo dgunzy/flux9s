@@ -121,7 +121,7 @@ impl App {
         if let Some(request) = self.view_state.sweep_request.clone() {
             self.view_state.sweep_reselect = self
                 .selected_sweep_row()
-                .map(|row| (row.kind.clone(), row.namespace.clone(), row.name.clone()));
+                .map(|row| ResourceKey::new(&row.kind, &row.namespace, &row.name));
             self.async_state.sweep.request(request);
         }
     }
@@ -181,9 +181,12 @@ impl App {
         }
         let rows = self.filtered_sweep_rows();
         let index = selected
-            .and_then(|(kind, namespace, name)| {
-                rows.iter()
-                    .position(|r| r.kind == kind && r.namespace == namespace && r.name == name)
+            .and_then(|key| {
+                rows.iter().position(|r| {
+                    r.kind == key.resource_type
+                        && r.namespace == key.namespace
+                        && r.name == key.name
+                })
             })
             .unwrap_or_else(|| {
                 self.view_state

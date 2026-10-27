@@ -33,8 +33,12 @@ pub fn render_reconciliation_history(
     f.render_widget(block, area);
 
     // Get the full resource object to extract status.history
-    let key =
-        crate::watcher::resource_key(&resource.namespace, &resource.name, &resource.resource_type);
+    let key = crate::watcher::ResourceKey::new(
+        &resource.resource_type,
+        &resource.namespace,
+        &resource.name,
+    )
+    .to_key_string();
 
     let obj = match resource_objects.get(&key) {
         Some(obj) => obj,

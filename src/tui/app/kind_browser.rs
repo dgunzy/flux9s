@@ -6,11 +6,12 @@
 //! walks back through previously opened lists, and `:flux` / `:all` return
 //! to the Flux list from anywhere.
 
-use super::core::App;
+use super::core::{App, PendingKindCommand};
 use super::state::View;
 use crate::kube::kind_list::{KindListRequest, KindListSnapshot, KindRow};
 use crate::kube::workloads::ObjectAction;
 use crate::models::kinds::{Capabilities, KindSpec};
+use crate::watcher::ResourceKey;
 
 /// Minimum gap between discovery re-checks triggered by unknown kinds.
 const REDISCOVERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
@@ -215,14 +216,12 @@ impl App {
             .map_or(Capabilities::VIEW_ONLY, |r| r.spec.caps)
     }
 
-    /// The selected row's `(kind, namespace, name)`.
-    pub(super) fn selected_kind_object(&self) -> Option<(String, String, String)> {
-        let kind = self.async_state.kind_list.key()?.spec.gvk.kind.clone();
-        let row = self
-            .filtered_kind_rows()
-            .get(self.view_state.selected_index)
-            .map(|row| (row.namespace.clone(), row.name.clone()))?;
-        Some((kind, row.0, row.1))
+    /// The selected row's kind, namespace, and name.
+    pub(super) fn selected_kind_object(&self) -> Option<ResourceKey> {
+        let kind = &self.async_state.kind_list.key()?.spec.gvk.kind;
+        let rows = self.filtered_kind_rows();
+        let row = rows.get(self.view_state.selected_index)?;
+        Some(ResourceKey::new(kind, &row.namespace, &row.name))
     }
 
     /// Enter on a kind row: workload kinds open the shared workload detail
@@ -232,46 +231,58 @@ impl App {
             self.open_describe_view();
             return;
         }
-        if let Some((kind, namespace, name)) = self.selected_kind_object() {
-            self.open_workload_detail(kind, namespace, name, false);
+        if let Some(key) = self.selected_kind_object() {
+            self.open_workload_detail(key.resource_type, key.namespace, key.name, false);
         }
     }
 
     /// `l`: pods stream directly; workloads load their detail and continue
     /// into pod logs (container picker included), like the workload list.
     pub(super) fn kind_logs_selected(&mut self) {
-        let Some((kind, namespace, name)) = self.selected_kind_object() else {
+        let Some(key) = self.selected_kind_object() else {
             return;
         };
         if self.kind_list_caps().workload_detail {
-            self.open_workload_detail(kind, namespace, name, true);
+            self.open_workload_detail(key.resource_type, key.namespace, key.name, true);
         } else {
-            self.open_pod_logs(&namespace, &name);
+            self.open_pod_logs(&key.namespace, &key.name);
         }
     }
 
     /// `Ctrl+d`: confirm deleting the selected pod.
     pub(super) fn kind_delete_pod_selected(&mut self) {
-        if let Some((_, namespace, name)) = self.selected_kind_object() {
+        if let Some(ResourceKey {
+            namespace, name, ..
+        }) = self.selected_kind_object()
+        {
             self.confirm_object_action(ObjectAction::DeletePod { namespace, name });
         }
     }
 
+    /// Hold a `:<kind>` typed while discovery runs ([`PendingKindCommand`]).
+    pub(super) fn hold_kind_command(&mut self, token: &str) {
+        self.pending_kind_command = Some(PendingKindCommand {
+            token: token.to_string(),
+            view: self.view_state.current_view,
+        });
+        self.set_status_message((
+            format!("Discovering the cluster's kinds — :{token} opens when ready"),
+            false,
+        ));
+    }
+
     /// Discovery finished: open a kind command that was typed while it ran.
-    /// Skipped if the user has since moved to a view it would yank them out
-    /// of (only list views pick it up).
+    /// Skipped if the user has since moved to another view — it would yank
+    /// them out of it.
     pub(crate) fn on_kind_discovery_complete(&mut self) {
         // Only now are the cluster's kind names known (#302).
         self.warn_views_shadowing_discovered_kinds();
-        let Some(token) = self.pending_kind_command.take() else {
+        let Some(PendingKindCommand { token, view }) = self.pending_kind_command.take() else {
             return;
         };
-        let on_a_list = matches!(
-            self.view_state.current_view,
-            View::ResourceList | View::KindList | View::OwnershipList | View::ResourceFavorites
-        );
+        let still_there = self.view_state.current_view == view;
         match crate::models::kinds::resolve(&token) {
-            Some(spec) if on_a_list && spec.family == crate::models::kinds::Family::Native => {
+            Some(spec) if still_there && spec.family == crate::models::kinds::Family::Native => {
                 self.open_kind_list(spec);
             }
             Some(_) => {}

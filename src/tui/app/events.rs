@@ -200,11 +200,12 @@ impl App {
             return;
         };
 
-        let key = crate::watcher::resource_key(
+        let key = crate::watcher::ResourceKey::new(
+            &event.involved_kind,
             &event.involved_namespace,
             &event.involved_name,
-            &event.involved_kind,
-        );
+        )
+        .to_key_string();
         if self.state.get(&key).is_none() {
             // Not watched but resolvable (a native object, #262): describe it.
             if !event.involved_api_version.is_empty() {
@@ -410,12 +411,12 @@ impl App {
         match self.view_state.current_view {
             View::KindList => {
                 let spec = &self.async_state.kind_list.key()?.spec;
-                let (kind, namespace, name) = self.selected_kind_object()?;
+                let key = self.selected_kind_object()?;
                 Some(ObjectRef::native(
                     spec.gvk.api_version(),
-                    kind,
-                    namespace,
-                    name,
+                    key.resource_type,
+                    key.namespace,
+                    key.name,
                 ))
             }
             View::WorkloadList => self
@@ -439,12 +440,11 @@ impl App {
         }
     }
 
-    /// Run a data-driven write action ([`ActionSpec::Patch`] /
-    /// [`ActionSpec::Annotate`]) on the current target: kind filter,
-    /// read-only gate, then the usual confirmation.
+    /// Run a data-driven write action ([`ActionSpec::Patch`]) on the
+    /// current target: kind filter, read-only gate, then the usual
+    /// confirmation.
     ///
     /// [`ActionSpec::Patch`]: super::actions::ActionSpec::Patch
-    /// [`ActionSpec::Annotate`]: super::actions::ActionSpec::Annotate
     pub(super) fn request_write(&mut self, spec: &super::actions::ActionSpec) {
         let Some(write) = spec.write_info() else {
             return;
@@ -586,11 +586,12 @@ impl App {
             View::EventList => {
                 let events = self.filtered_kube_events();
                 let event = events.get(self.view_state.selected_index)?;
-                let key = crate::watcher::resource_key(
+                let key = crate::watcher::ResourceKey::new(
+                    &event.involved_kind,
                     &event.involved_namespace,
                     &event.involved_name,
-                    &event.involved_kind,
-                );
+                )
+                .to_key_string();
                 if self.state.get(&key).is_some() || event.involved_api_version.is_empty() {
                     return None;
                 }
@@ -604,7 +605,18 @@ impl App {
             View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace => {
                 self.selection_state.native_object.clone()
             }
-            _ => None,
+            View::ResourceList
+            | View::ResourceDetail
+            | View::ResourceGraph
+            | View::ResourceFavorites
+            | View::ResourceHistory
+            | View::Logs
+            | View::WorkloadList
+            | View::WorkloadDetail
+            | View::Pulse
+            | View::HelmValues
+            | View::ResourceEdit
+            | View::Help => None,
         }
     }
 
@@ -629,60 +641,60 @@ impl App {
     }
 
     pub(super) fn handle_operation_key(&mut self, op_key: char) {
-        if let Some(resource) = self.get_current_resource() {
-            if let Some(operation) = self.operation_registry.get_by_keybinding(op_key) {
-                if !operation.is_valid_for(&resource.resource_type) {
-                    self.set_status_message((
-                        format!(
-                            "Operation '{}' is not valid for {}",
-                            operation.name(),
-                            resource.resource_type
-                        ),
-                        true,
-                    ));
-                    return;
-                }
-
-                if self.config.read_only {
-                    self.set_status_message((
-                        crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
-                        true,
-                    ));
-                    return;
-                }
-
-                if operation.requires_confirmation() {
-                    self.async_state.confirmation_pending =
-                        Some(Confirmation::Flux(PendingOperation::new(
-                            resource.resource_type.clone(),
-                            resource.namespace.clone(),
-                            resource.name.clone(),
-                            op_key,
-                        )));
-                    return;
-                }
-
-                let feedback_msg = if op_key == 'W' {
+        if let Some(resource) = self.get_current_resource()
+            && let Some(operation) = self.operation_registry.get_by_keybinding(op_key)
+        {
+            if !operation.is_valid_for(&resource.resource_type) {
+                self.set_status_message((
                     format!(
-                        "Reconciling {}/{} with source...",
-                        resource.resource_type, resource.name
-                    )
-                } else {
-                    format!(
-                        "{} {}/{}...",
+                        "Operation '{}' is not valid for {}",
                         operation.name(),
-                        resource.resource_type,
-                        resource.name
-                    )
-                };
-                self.set_status_message((feedback_msg, false));
-                self.execute_operation(
-                    &resource.resource_type,
-                    &resource.namespace,
-                    &resource.name,
-                    op_key,
-                );
+                        resource.resource_type
+                    ),
+                    true,
+                ));
+                return;
             }
+
+            if self.config.read_only {
+                self.set_status_message((
+                    crate::constants::READ_ONLY_WRITE_ACTION_MESSAGE.to_string(),
+                    true,
+                ));
+                return;
+            }
+
+            if operation.requires_confirmation() {
+                self.async_state.confirmation_pending =
+                    Some(Confirmation::Flux(PendingOperation::new(
+                        resource.resource_type.clone(),
+                        resource.namespace.clone(),
+                        resource.name.clone(),
+                        op_key,
+                    )));
+                return;
+            }
+
+            let feedback_msg = if op_key == 'W' {
+                format!(
+                    "Reconciling {}/{} with source...",
+                    resource.resource_type, resource.name
+                )
+            } else {
+                format!(
+                    "{} {}/{}...",
+                    operation.name(),
+                    resource.resource_type,
+                    resource.name
+                )
+            };
+            self.set_status_message((feedback_msg, false));
+            self.execute_operation(
+                &resource.resource_type,
+                &resource.namespace,
+                &resource.name,
+                op_key,
+            );
         }
     }
 
@@ -904,7 +916,8 @@ impl App {
                 namespace,
                 name,
             } => {
-                let key = crate::watcher::resource_key(namespace, name, kind);
+                let key = crate::watcher::ResourceKey::new(kind.as_str(), namespace, name)
+                    .to_key_string();
                 let suspended = self
                     .state
                     .get(&key)
@@ -937,11 +950,12 @@ impl App {
     pub(super) fn open_selected_detail(&mut self) {
         let resources = self.get_filtered_resources();
         if let Some(resource) = resources.get(self.view_state.selected_index) {
-            let key = crate::watcher::resource_key(
+            let key = crate::watcher::ResourceKey::new(
+                &resource.resource_type,
                 &resource.namespace,
                 &resource.name,
-                &resource.resource_type,
-            );
+            )
+            .to_key_string();
             self.selection_state.selected_resource_key = Some(key);
             self.navigate_to(View::ResourceDetail);
         }
@@ -951,11 +965,12 @@ impl App {
     pub(super) fn toggle_selected_favorite(&mut self) {
         let resources = self.get_filtered_resources();
         if let Some(resource) = resources.get(self.view_state.selected_index) {
-            let key = crate::watcher::resource_key(
+            let key = crate::watcher::ResourceKey::new(
+                &resource.resource_type,
                 &resource.namespace,
                 &resource.name,
-                &resource.resource_type,
-            );
+            )
+            .to_key_string();
             self.toggle_favorite(&key);
             self.set_status_message((
                 if self.is_favorite(&key) {
@@ -974,11 +989,12 @@ impl App {
         if let Some(resource) = self.get_current_resource() {
             use crate::models::FluxResourceKind;
 
-            let key = crate::watcher::resource_key(
+            let key = crate::watcher::ResourceKey::new(
+                &resource.resource_type,
                 &resource.namespace,
                 &resource.name,
-                &resource.resource_type,
-            );
+            )
+            .to_key_string();
 
             // Check if resource object exists and has status.history
             let obj = self.resource_objects.get(&key);
@@ -1006,7 +1022,6 @@ impl App {
                     )
                 } else {
                     let supported_types: Vec<String> = FluxResourceKind::history_supported_types()
-                        .iter()
                         .map(|k| k.as_str().to_string())
                         .collect();
                     format!(
@@ -1039,11 +1054,12 @@ impl App {
             }
 
             // Trigger graph building
-            let key = crate::watcher::resource_key(
+            let key = crate::watcher::ResourceKey::new(
+                &resource.resource_type,
                 &resource.namespace,
                 &resource.name,
-                &resource.resource_type,
-            );
+            )
+            .to_key_string();
 
             self.selection_state.selected_resource_key = Some(key.clone());
             self.async_state.graph.request(

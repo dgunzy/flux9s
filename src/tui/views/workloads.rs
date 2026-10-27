@@ -6,8 +6,8 @@
 
 use crate::kube::metrics::{MetricsSnapshot, MetricsSource, format_memory};
 use crate::kube::workloads::{PodRow, WorkloadData, WorkloadRef};
-use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
+use crate::tui::views::props::{Fetched, TextScroll};
 use crate::tui::views::yaml::{apply_text_search, decorate_title_with_search, find_match_lines};
 use ratatui::{
     Frame,
@@ -182,10 +182,10 @@ fn bar_spans(cells: &[BarCell], used_style: Style, theme: &Theme) -> Vec<Span<'s
         BarCell::Request => Style::default().fg(theme.text_label),
     };
     for &kind in cells {
-        if current.is_some_and(|c| c != kind) {
-            if let Some(c) = current {
-                spans.push(Span::styled(std::mem::take(&mut run), style_of(c)));
-            }
+        if current.is_some_and(|c| c != kind)
+            && let Some(c) = current
+        {
+            spans.push(Span::styled(std::mem::take(&mut run), style_of(c)));
         }
         current = Some(kind);
         run.push(match kind {
@@ -462,13 +462,19 @@ fn build_workload_lines(
 pub fn render_workload_detail(
     f: &mut Frame,
     area: Rect,
-    workload: Option<&WorkloadData>,
+    workload: Fetched<'_, WorkloadData>,
     metrics: Option<&MetricsSnapshot>,
-    loading: bool,
-    scroll_offset: &mut usize,
-    search: &mut TextSearchState,
+    text: TextScroll<'_>,
     theme: &Theme,
 ) {
+    let Fetched {
+        data: workload,
+        loading,
+    } = workload;
+    let TextScroll {
+        offset: scroll_offset,
+        search,
+    } = text;
     let Some(workload) = workload else {
         if loading {
             crate::tui::views::helpers::render_loading_state(

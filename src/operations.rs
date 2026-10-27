@@ -3,6 +3,7 @@
 //! Provides extensible system for performing Flux operations on resources.
 //! Operations are implemented as a trait-based system for easy extension.
 
+use crate::models::FluxResourceKind;
 use crate::watcher::ResourceInfo;
 use anyhow::{Context, Result};
 use kube::Api;
@@ -104,8 +105,15 @@ pub trait FluxOperation: Send + Sync {
     /// Human-readable name for this operation
     fn name(&self) -> &'static str;
 
-    /// Whether this operation is valid for the given resource type
-    fn is_valid_for(&self, resource_type: &str) -> bool;
+    /// Whether this operation applies to a Flux kind.
+    fn applies_to(&self, kind: FluxResourceKind) -> bool;
+
+    /// Whether this operation is valid for the given resource type: a Flux
+    /// kind it [`applies_to`](Self::applies_to). Dynamically discovered
+    /// kinds (#197) are view-only, so no operation applies to them.
+    fn is_valid_for(&self, resource_type: &str) -> bool {
+        FluxResourceKind::parse_optional(resource_type).is_some_and(|kind| self.applies_to(kind))
+    }
 }
 
 /// Suspend operation - suspends reconciliation
@@ -184,20 +192,8 @@ impl FluxOperation for SuspendOperation {
         "Suspend"
     }
 
-    fn is_valid_for(&self, resource_type: &str) -> bool {
-        use crate::models::FluxResourceKind;
-        matches!(
-            FluxResourceKind::parse_optional(resource_type),
-            Some(FluxResourceKind::GitRepository)
-                | Some(FluxResourceKind::OCIRepository)
-                | Some(FluxResourceKind::HelmRepository)
-                | Some(FluxResourceKind::Kustomization)
-                | Some(FluxResourceKind::HelmRelease)
-                | Some(FluxResourceKind::ImageUpdateAutomation)
-                | Some(FluxResourceKind::FluxInstance)
-                | Some(FluxResourceKind::ResourceSet)
-                | Some(FluxResourceKind::ResourceSetInputProvider)
-        )
+    fn applies_to(&self, kind: FluxResourceKind) -> bool {
+        kind.supports_suspend()
     }
 }
 
@@ -277,20 +273,8 @@ impl FluxOperation for ResumeOperation {
         "Resume"
     }
 
-    fn is_valid_for(&self, resource_type: &str) -> bool {
-        use crate::models::FluxResourceKind;
-        matches!(
-            FluxResourceKind::parse_optional(resource_type),
-            Some(FluxResourceKind::GitRepository)
-                | Some(FluxResourceKind::OCIRepository)
-                | Some(FluxResourceKind::HelmRepository)
-                | Some(FluxResourceKind::Kustomization)
-                | Some(FluxResourceKind::HelmRelease)
-                | Some(FluxResourceKind::ImageUpdateAutomation)
-                | Some(FluxResourceKind::FluxInstance)
-                | Some(FluxResourceKind::ResourceSet)
-                | Some(FluxResourceKind::ResourceSetInputProvider)
-        )
+    fn applies_to(&self, kind: FluxResourceKind) -> bool {
+        kind.supports_suspend()
     }
 }
 
@@ -363,10 +347,8 @@ impl FluxOperation for DeleteOperation {
         "Delete"
     }
 
-    fn is_valid_for(&self, resource_type: &str) -> bool {
-        // All built-in Flux kinds; dynamically discovered kinds (#197) are
-        // view-only, so mutations never apply to them.
-        crate::models::FluxResourceKind::parse_optional(resource_type).is_some()
+    fn applies_to(&self, _kind: FluxResourceKind) -> bool {
+        true
     }
 }
 
@@ -466,10 +448,8 @@ impl FluxOperation for ReconcileOperation {
         "Reconcile"
     }
 
-    fn is_valid_for(&self, resource_type: &str) -> bool {
-        // All built-in Flux kinds; dynamically discovered kinds (#197) are
-        // view-only, so the reconcile annotation never applies to them.
-        crate::models::FluxResourceKind::parse_optional(resource_type).is_some()
+    fn applies_to(&self, _kind: FluxResourceKind) -> bool {
+        true
     }
 }
 
@@ -493,10 +473,7 @@ impl FluxOperation for ReconcileWithSourceOperation {
 
         // Only works for Kustomization and HelmRelease
         let kind = FluxResourceKind::parse_optional(resource_type);
-        if !matches!(
-            kind,
-            Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
-        ) {
+        if !kind.is_some_and(|kind| kind.has_source_ref()) {
             return Err(anyhow::anyhow!(
                 "Reconcile with source only works for Kustomization and HelmRelease, not {}",
                 resource_type
@@ -659,44 +636,28 @@ impl FluxOperation for ReconcileWithSourceOperation {
                 .and_then(|t| t.as_str());
 
             // Check if source is ready
-            let is_ready = current_source
-                .data
-                .get("status")
-                .and_then(|s| s.get("conditions"))
-                .and_then(|c| c.as_array())
-                .and_then(|c| {
-                    c.iter()
-                        .find(|cond| {
-                            cond.get("type")
-                                .and_then(|t| t.as_str())
-                                .map(|t| t == "Ready")
-                                .unwrap_or(false)
-                        })
-                        .and_then(|cond| cond.get("status").and_then(|st| st.as_str()))
-                        .map(|st| st == "True")
-                })
-                .unwrap_or(false);
+            let is_ready = crate::kube::conditions::is_ready(&current_source.data).unwrap_or(false);
 
             // Check if lastHandledReconcileAt matches requestedAt
             // We check if the requestedAt annotation exists and if lastHandled matches it
-            if let Some(requested_at) = current_requested_at {
-                if let Some(handled_at) = last_handled {
-                    // Compare timestamps - they should match if reconciliation completed
-                    if handled_at == requested_at {
-                        source_reconciled = true;
-                        // Also check if ready, but don't require it if reconciliation completed
-                        if is_ready {
+            if let Some(requested_at) = current_requested_at
+                && let Some(handled_at) = last_handled
+            {
+                // Compare timestamps - they should match if reconciliation completed
+                if handled_at == requested_at {
+                    source_reconciled = true;
+                    // Also check if ready, but don't require it if reconciliation completed
+                    if is_ready {
+                        break;
+                    } else {
+                        // Source reconciled but not ready - wait a bit more
+                        if attempts >= 5 {
+                            // Give up waiting for ready state after 5 seconds
+                            tracing::info!(
+                                "Source {} reconciled but not ready, proceeding anyway",
+                                source_kind
+                            );
                             break;
-                        } else {
-                            // Source reconciled but not ready - wait a bit more
-                            if attempts >= 5 {
-                                // Give up waiting for ready state after 5 seconds
-                                tracing::info!(
-                                    "Source {} reconciled but not ready, proceeding anyway",
-                                    source_kind
-                                );
-                                break;
-                            }
                         }
                     }
                 }
@@ -776,12 +737,8 @@ impl FluxOperation for ReconcileWithSourceOperation {
         "Reconcile with Source"
     }
 
-    fn is_valid_for(&self, resource_type: &str) -> bool {
-        use crate::models::FluxResourceKind;
-        matches!(
-            FluxResourceKind::parse_optional(resource_type),
-            Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
-        )
+    fn applies_to(&self, kind: FluxResourceKind) -> bool {
+        kind.has_source_ref()
     }
 }
 

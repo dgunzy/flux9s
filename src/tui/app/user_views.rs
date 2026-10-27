@@ -10,7 +10,6 @@
 //! `defaultResourceFilter` takes a view name or a kind list.
 
 use super::core::App;
-use super::state::View;
 use crate::config::ViewConfig;
 use crate::models::kind_filter::KindFilter;
 use crate::models::kinds::{self, Family};
@@ -18,12 +17,10 @@ use crate::models::list_sort::{ListSort, SortKey};
 use std::collections::BTreeMap;
 
 impl App {
-    /// Show `filter` in the Flux list — `:ks`, `:ks,hr`, or a view.
+    /// Show `filter` in the Flux list — `:ks`, `:ks,hr`, or a view — from
+    /// whichever view the command was typed in.
     pub(super) fn show_kinds(&mut self, filter: KindFilter) {
-        if matches!(
-            self.view_state.current_view,
-            View::KindList | View::OwnershipList
-        ) {
+        if !self.view_state.current_view.is_flux_list() {
             self.go_home_flux();
         }
         self.view_state.kind_filter = filter;
@@ -86,11 +83,7 @@ impl App {
                 && self.async_state.kind_discovery.is_loading() =>
             {
                 self.switch_namespace(namespace);
-                self.pending_kind_command = Some(head.to_string());
-                self.set_status_message((
-                    format!("Discovering the cluster's kinds — :{head} opens when ready"),
-                    false,
-                ));
+                self.hold_kind_command(head);
             }
             None => self.set_status_message((
                 format!("-n works with views and kinds; '{head}' is neither"),

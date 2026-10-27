@@ -181,21 +181,21 @@ impl Config {
             );
             return env_skin;
         }
-        if let Some(context) = context_name {
-            if let Some(context_skin) = self.context_skins.get(context) {
-                tracing::debug!(
-                    "Using context-specific skin for '{}': {}",
-                    context,
-                    context_skin
-                );
-                return context_skin.clone();
-            }
+        if let Some(context) = context_name
+            && let Some(context_skin) = self.context_skins.get(context)
+        {
+            tracing::debug!(
+                "Using context-specific skin for '{}': {}",
+                context,
+                context_skin
+            );
+            return context_skin.clone();
         }
-        if self.read_only {
-            if let Some(ref skin) = self.ui.skin_read_only {
-                tracing::debug!("Using readonly-specific skin: {}", skin);
-                return skin.clone();
-            }
+        if self.read_only
+            && let Some(ref skin) = self.ui.skin_read_only
+        {
+            tracing::debug!("Using readonly-specific skin: {}", skin);
+            return skin.clone();
         }
         tracing::debug!("Using default skin: {}", self.ui.skin);
         self.ui.skin.clone()

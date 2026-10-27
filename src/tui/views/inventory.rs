@@ -9,6 +9,7 @@
 use crate::kube::inventory::InventoryEntry;
 use crate::kube::object_status::{ObjectHealth, ObjectStatus};
 use crate::tui::theme::Theme;
+use crate::tui::views::props::{Fetched, ListCursor};
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -22,12 +23,18 @@ pub fn render_inventory_list(
     f: &mut Frame,
     area: Rect,
     rows: &[InventoryEntry],
-    statuses: Option<&[ObjectStatus]>,
-    statuses_loading: bool,
-    selected_index: usize,
-    scroll_offset: &mut usize,
+    statuses: Fetched<'_, [ObjectStatus]>,
+    cursor: ListCursor<'_>,
     theme: &Theme,
 ) {
+    let Fetched {
+        data: statuses,
+        loading: statuses_loading,
+    } = statuses;
+    let ListCursor {
+        selected: selected_index,
+        offset: scroll_offset,
+    } = cursor;
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2;
     let viewport = crate::tui::views::scroll::Viewport::list_with_margin(
@@ -208,10 +215,8 @@ mod tests {
                     f,
                     f.area(),
                     rows,
-                    statuses,
-                    loading,
-                    0,
-                    &mut scroll,
+                    Fetched::new(statuses, loading),
+                    ListCursor::new(0, &mut scroll),
                     &Theme::default(),
                 );
             })

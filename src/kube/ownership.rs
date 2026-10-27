@@ -22,6 +22,7 @@
 //!    weaker evidence than the owner chain.
 
 use crate::models::FluxResourceKind;
+use crate::models::flux_resource_kind::labels;
 use crate::watcher::ResourceKey;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -49,9 +50,9 @@ const LOOKUP_CONCURRENCY: usize = 8;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Manager {
     /// `kind` is the Flux kind (Kustomization, HelmRelease, ResourceSet,
-    /// FluxInstance).
+    /// FluxInstance — those that [`FluxResourceKind::can_orphan`]).
     Flux {
-        kind: String,
+        kind: FluxResourceKind,
         namespace: String,
         name: String,
     },
@@ -71,12 +72,12 @@ impl Manager {
     /// full name is one keypress away in describe / workload detail).
     pub fn short_label(&self) -> String {
         match self {
-            Manager::Flux { kind, .. } => match FluxResourceKind::parse_optional(kind) {
-                Some(FluxResourceKind::Kustomization) => "Flux ks".to_string(),
-                Some(FluxResourceKind::HelmRelease) => "Flux hr".to_string(),
-                Some(FluxResourceKind::ResourceSet) => "Flux rset".to_string(),
-                Some(FluxResourceKind::FluxInstance) => "Flux instance".to_string(),
-                _ => format!("Flux {kind}"),
+            Manager::Flux { kind, .. } => match kind {
+                FluxResourceKind::Kustomization => "Flux ks".to_string(),
+                FluxResourceKind::HelmRelease => "Flux hr".to_string(),
+                FluxResourceKind::ResourceSet => "Flux rset".to_string(),
+                FluxResourceKind::FluxInstance => "Flux instance".to_string(),
+                other => format!("Flux {other}"),
             },
             Manager::ArgoCd { .. } => "Argo CD".to_string(),
             Manager::Helm { .. } => "Helm".to_string(),
@@ -97,7 +98,7 @@ impl Manager {
                 } else {
                     format!("{namespace}/{name}")
                 };
-                if kind == FluxResourceKind::FluxInstance.as_str() {
+                if *kind == FluxResourceKind::FluxInstance {
                     format!("{kind} {target}")
                 } else {
                     format!("Flux {kind} {target}")
@@ -122,7 +123,7 @@ impl Manager {
                 namespace,
                 name,
             } => Some(ResourceKey::new(
-                kind.clone(),
+                kind.as_str(),
                 if namespace.is_empty() {
                     fallback_namespace.to_string()
                 } else {
@@ -189,22 +190,13 @@ pub fn detect_manager(obj: &Value) -> Option<Manager> {
     let label = string_map(obj, "labels");
     let annotation = string_map(obj, "annotations");
 
-    // Ownership label prefixes (labels, not API groups — ResourceSet's
-    // differs from its group).
-    for (prefix, kind) in [
-        (
-            "kustomize.toolkit.fluxcd.io",
-            FluxResourceKind::Kustomization,
-        ),
-        ("helm.toolkit.fluxcd.io", FluxResourceKind::HelmRelease),
-        (
-            "resourceset.fluxcd.controlplane.io",
-            FluxResourceKind::ResourceSet,
-        ),
-    ] {
+    for kind in FluxResourceKind::ALL {
+        let Some(prefix) = kind.owner_label_prefix() else {
+            continue;
+        };
         if let Some(name) = label(&format!("{prefix}/name")) {
             return Some(Manager::Flux {
-                kind: kind.as_str().to_string(),
+                kind: *kind,
                 namespace: label(&format!("{prefix}/namespace"))
                     .unwrap_or_default()
                     .to_string(),
@@ -212,15 +204,13 @@ pub fn detect_manager(obj: &Value) -> Option<Manager> {
             });
         }
     }
-    if label("app.kubernetes.io/managed-by") == Some("flux-operator") {
+    if label(labels::MANAGED_BY) == Some(labels::FLUX_OPERATOR) {
         return Some(Manager::Flux {
-            kind: FluxResourceKind::FluxInstance.as_str().to_string(),
-            namespace: label("fluxcd.controlplane.io/namespace")
+            kind: FluxResourceKind::FluxInstance,
+            namespace: label(labels::OPERATOR_NAMESPACE)
                 .unwrap_or_default()
                 .to_string(),
-            name: label("fluxcd.controlplane.io/name")
-                .unwrap_or("flux")
-                .to_string(),
+            name: label(labels::OPERATOR_NAME).unwrap_or("flux").to_string(),
         });
     }
 
@@ -254,7 +244,7 @@ fn helm_manager(obj: &Value) -> Option<Manager> {
 /// The generic `app.kubernetes.io/managed-by` claim — weak evidence (pod
 /// templates copy it), used only when there's no owner chain to follow.
 fn weak_manager(obj: &Value) -> Option<Manager> {
-    string_map(obj, "labels")("app.kubernetes.io/managed-by")
+    string_map(obj, "labels")(labels::MANAGED_BY)
         .filter(|m| !m.is_empty())
         .map(|m| Manager::Other(m.to_string()))
 }
@@ -423,8 +413,8 @@ pub async fn flux_manager_suspended(client: &kube::Client, manager: &Manager) ->
     else {
         return None;
     };
-    let flux_kind = FluxResourceKind::parse_optional(kind)?;
-    let fetch = crate::kube::fetch::fetch_resource(client, kind, namespace, name);
+    let flux_kind = *kind;
+    let fetch = crate::kube::fetch::fetch_resource(client, kind.as_str(), namespace, name);
     let object = tokio::time::timeout(MANAGER_TIMEOUT, fetch)
         .await
         .ok()?
@@ -479,14 +469,15 @@ fn describe_resolution(owner: &OwnerRef, resolved: Option<&Resolved>) -> String 
     }
 }
 
+/// Resolved owner kinds by `(apiVersion, kind)`.
+type ApiCache = std::sync::Mutex<HashMap<(String, String), (ApiResource, Scope)>>;
+
 /// API resources for owner kinds, shared by every resolver (all kind lists,
 /// every describe) so kinds aren't re-discovered per call. Only successful
 /// lookups are cached — a transient timeout is retried next time. Cleared
 /// on context switch.
-fn api_cache() -> &'static std::sync::Mutex<HashMap<(String, String), (ApiResource, Scope)>> {
-    static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<HashMap<(String, String), (ApiResource, Scope)>>,
-    > = std::sync::OnceLock::new();
+fn api_cache() -> &'static ApiCache {
+    static CACHE: std::sync::OnceLock<ApiCache> = std::sync::OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
@@ -844,7 +835,7 @@ mod tests {
             "direct owner's kind while resolving"
         );
         let resolved = Resolved::Manager(Manager::Flux {
-            kind: "Kustomization".into(),
+            kind: crate::models::FluxResourceKind::Kustomization,
             namespace: "flux-system".into(),
             name: "apps".into(),
         });
@@ -969,7 +960,7 @@ mod tests {
     #[test]
     fn managed_by_names_the_flux_object_directly_or_through_the_chain() {
         let ks = Manager::Flux {
-            kind: "Kustomization".into(),
+            kind: crate::models::FluxResourceKind::Kustomization,
             namespace: "flux-system".into(),
             name: "apps".into(),
         };
@@ -1018,7 +1009,7 @@ mod tests {
 
         // A Flux label without a namespace means the object's own.
         let unlabelled_ns = Manager::Flux {
-            kind: "HelmRelease".into(),
+            kind: crate::models::FluxResourceKind::HelmRelease,
             namespace: String::new(),
             name: "podinfo".into(),
         };

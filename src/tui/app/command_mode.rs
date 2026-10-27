@@ -296,11 +296,7 @@ impl App {
                 && self.config.native_resources
                 && self.async_state.kind_discovery.is_loading() =>
             {
-                self.pending_kind_command = Some(cmd_lower.clone());
-                self.set_status_message((
-                    format!("Discovering the cluster's kinds — :{cmd} opens when ready"),
-                    false,
-                ));
+                self.hold_kind_command(&cmd_lower);
             }
             // Preview off: a recognisable Kubernetes kind gets pointed at
             // :native instead of an unhelpful "unknown command".
@@ -453,13 +449,12 @@ impl App {
             ));
         } else {
             // Kind lists and sweeps need the preview: close them.
-            let needs_native = |view: View| matches!(view, View::KindList | View::OwnershipList);
-            let in_native_views = needs_native(self.view_state.current_view)
+            let in_native_views = self.view_state.current_view.needs_native()
                 || self
                     .view_state
                     .nav_stack
                     .iter()
-                    .any(|entry| needs_native(entry.view()));
+                    .any(|entry| entry.view().needs_native());
             if in_native_views {
                 self.go_home_flux();
             }
@@ -694,11 +689,11 @@ impl App {
             self.degraded_watchers.clear();
             self.forbidden_watchers.clear();
 
-            if let Some(ref mut watcher) = self.watcher {
-                if let Err(e) = watcher.set_namespace(new_namespace) {
-                    tracing::warn!("Failed to switch namespace: {}", e);
-                    self.set_status_message((format!("Failed to switch namespace: {}", e), true));
-                }
+            if let Some(ref mut watcher) = self.watcher
+                && let Err(e) = watcher.set_namespace(new_namespace)
+            {
+                tracing::warn!("Failed to switch namespace: {}", e);
+                self.set_status_message((format!("Failed to switch namespace: {}", e), true));
             }
         }
 
@@ -785,18 +780,15 @@ impl App {
         }
     }
 
-    /// `:all` — clear resource-type and health filters and return to the main
-    /// resource list (also from the favorites and events views).
     /// `:flux` — back to the Flux resource list, as it was left.
     pub(super) fn cmd_show_flux(&mut self, _cmd: &str) {
         self.go_home_flux();
     }
 
+    /// `:all` — clear resource-type and health filters and show the Flux
+    /// list, from whichever view it was typed in.
     pub(super) fn cmd_show_all(&mut self, _cmd: &str) {
-        if matches!(
-            self.view_state.current_view,
-            View::KindList | View::OwnershipList | View::ResourceFavorites | View::EventList
-        ) {
+        if !self.view_state.current_view.is_flux_list() {
             self.go_home_flux();
         }
         if !self.view_state.kind_filter.is_all() {

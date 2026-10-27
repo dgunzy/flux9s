@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::kube::conditions;
 use crate::kube::objects::ObjectRef;
 use crate::kube::ownership::Manager;
 use crate::models::FluxResourceKind;
@@ -48,10 +49,7 @@ pub async fn trace_target(client: &kube::Client, target: &ObjectRef) -> Result<T
     // chain (as the Flux CLI does).
     let initial_kind =
         FluxResourceKind::parse_optional(&initial_node.kind).filter(|_| initial_node.is_flux());
-    if matches!(
-        initial_kind,
-        Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
-    ) {
+    if initial_kind.is_some_and(|kind| kind.has_source_ref()) {
         let (walked_chain, walked_source, _) =
             walk_owner_chain(client, Vec::new(), obj_value, current_ns.clone()).await?;
         if walked_source.is_some() || !walked_chain.is_empty() {
@@ -136,10 +134,9 @@ async fn walk_owner_chain(
                 chain.push(owner_node.clone());
 
                 // A Kustomization or HelmRelease: resolve its source and stop.
-                if matches!(
-                    FluxResourceKind::parse_optional(&flux_owner.kind),
-                    Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
-                ) {
+                if FluxResourceKind::parse_optional(&flux_owner.kind)
+                    .is_some_and(|kind| kind.has_source_ref())
+                {
                     let source = resolve_source(client, &mut chain, &owner_node, &owner_ns).await?;
                     return Ok((chain, source, TraceOutcome::Flux));
                 }
@@ -207,10 +204,8 @@ async fn walk_owner_chain(
             chain.push(owner_node.clone());
         }
         if owner_is_flux
-            && matches!(
-                FluxResourceKind::parse_optional(&owner_ref.kind),
-                Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
-            )
+            && FluxResourceKind::parse_optional(&owner_ref.kind)
+                .is_some_and(|kind| kind.has_source_ref())
         {
             let source = resolve_source(client, &mut chain, &owner_node, &current_ns).await?;
             return Ok((chain, source, TraceOutcome::Flux));
@@ -334,8 +329,11 @@ async fn resolve_helmrelease_source(
         .and_then(|s| s.get("helmChart"))
         .and_then(|hc| hc.as_str())
     {
-        let (generated_kind, chart_ns, chart_name) =
-            crate::kube::standing::generated_chart_source(helm_chart_ref, default_ns);
+        let ResourceKey {
+            resource_type: generated_kind,
+            namespace: chart_ns,
+            name: chart_name,
+        } = crate::kube::standing::generated_chart_source(helm_chart_ref, default_ns);
         match FluxResourceKind::parse_optional(&generated_kind) {
             Some(kind @ (FluxResourceKind::HelmChart | FluxResourceKind::OCIRepository)) => {
                 if let Some(generated) =
@@ -435,24 +433,22 @@ async fn resolve_helmrelease_source(
         .and_then(|s| s.get("chart"))
         .and_then(|c| c.get("spec"))
         .and_then(|cs| cs.as_object())
+        && let Some(source_ref) = chart_spec.get("sourceRef").and_then(|sr| sr.as_object())
     {
-        if let Some(source_ref) = chart_spec.get("sourceRef").and_then(|sr| sr.as_object()) {
-            let source_kind = source_ref
-                .get("kind")
-                .and_then(|k| k.as_str())
-                .context("chart.spec.sourceRef missing kind")?;
-            let source_name = source_ref
-                .get("name")
-                .and_then(|n| n.as_str())
-                .context("chart.spec.sourceRef missing name")?;
-            let source_ns = source_ref
-                .get("namespace")
-                .and_then(|n| n.as_str())
-                .unwrap_or(default_ns);
+        let source_kind = source_ref
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .context("chart.spec.sourceRef missing kind")?;
+        let source_name = source_ref
+            .get("name")
+            .and_then(|n| n.as_str())
+            .context("chart.spec.sourceRef missing name")?;
+        let source_ns = source_ref
+            .get("namespace")
+            .and_then(|n| n.as_str())
+            .unwrap_or(default_ns);
 
-            return fetch_and_trace_flux_resource(client, source_kind, source_ns, source_name)
-                .await;
-        }
+        return fetch_and_trace_flux_resource(client, source_kind, source_ns, source_name).await;
     }
 
     Ok(None)
@@ -499,15 +495,6 @@ async fn resolve_helmchart_source(
     Ok(None)
 }
 
-/// Parse a namespaced name reference (format: "namespace/name" or just "name")
-fn parse_namespaced_name(ref_str: &str, default_ns: &str) -> (String, String) {
-    if let Some((ns, name)) = ref_str.split_once('/') {
-        (ns.to_string(), name.to_string())
-    } else {
-        (default_ns.to_string(), ref_str.to_string())
-    }
-}
-
 /// The Flux object an object's labels name as its manager — the same
 /// detection as the kind lists' MANAGED-BY column ([`detect_manager`]), so
 /// trace and the lists agree (Kustomization, HelmRelease, ResourceSet, and
@@ -521,7 +508,7 @@ fn find_flux_owner_from_labels(obj: &Value) -> Option<SourceRef> {
             namespace,
             name,
         } => Some(SourceRef {
-            kind,
+            kind: kind.as_str().to_string(),
             name,
             namespace: (!namespace.is_empty()).then_some(namespace),
         }),
@@ -610,27 +597,13 @@ fn create_trace_node(obj: &Value) -> Result<TraceNode> {
 
     // Extract status - properly find Ready condition
     let status = obj.get("status").and_then(|s| s.as_object()).map(|s| {
-        let mut ready = None;
-        let mut message = None;
-
-        // Find Ready condition
-        if let Some(conditions) = s.get("conditions").and_then(|c| c.as_array()) {
-            for cond in conditions {
-                if let Some(cond_type) = cond.get("type").and_then(|t| t.as_str()) {
-                    if cond_type == "Ready" {
-                        ready = cond
-                            .get("status")
-                            .and_then(|st| st.as_str())
-                            .map(|st| st == "True");
-                        message = cond
-                            .get("message")
-                            .and_then(|m| m.as_str())
-                            .map(|s| s.to_string());
-                        break;
-                    }
-                }
-            }
-        }
+        let ready_condition = s
+            .get("conditions")
+            .and_then(|c| conditions::of_type(c, conditions::READY));
+        let ready = ready_condition.map(conditions::Condition::is_true);
+        let message = ready_condition
+            .and_then(conditions::Condition::message)
+            .map(str::to_string);
 
         TraceStatus {
             ready,
@@ -672,20 +645,20 @@ fn create_trace_node(obj: &Value) -> Result<TraceNode> {
         }
 
         // Extract sourceRef (for Kustomization, HelmRelease, HelmChart, ExternalArtifact)
-        if let Some(source_ref) = s.get("sourceRef").and_then(|sr| sr.as_object()) {
-            if let (Some(kind), Some(name)) = (
+        if let Some(source_ref) = s.get("sourceRef").and_then(|sr| sr.as_object())
+            && let (Some(kind), Some(name)) = (
                 source_ref.get("kind").and_then(|k| k.as_str()),
                 source_ref.get("name").and_then(|n| n.as_str()),
-            ) {
-                trace_spec.source_ref = Some(SourceRef {
-                    kind: kind.to_string(),
-                    name: name.to_string(),
-                    namespace: source_ref
-                        .get("namespace")
-                        .and_then(|n| n.as_str())
-                        .map(|s| s.to_string()),
-                });
-            }
+            )
+        {
+            trace_spec.source_ref = Some(SourceRef {
+                kind: kind.to_string(),
+                name: name.to_string(),
+                namespace: source_ref
+                    .get("namespace")
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.to_string()),
+            });
         }
 
         trace_spec

@@ -271,29 +271,28 @@ impl ThemeLoader {
         let mut has_colors = false;
 
         // Check body colors
-        if let Some(body) = &k9s.body {
-            if body.fg.is_some() || body.bg.is_some() || body.logo.is_some() {
-                has_colors = true;
-            }
+        if let Some(body) = &k9s.body
+            && (body.fg.is_some() || body.bg.is_some() || body.logo.is_some())
+        {
+            has_colors = true;
         }
 
         // Check frame colors
-        if let Some(frame) = &k9s.frame {
-            if frame.border.is_some()
+        if let Some(frame) = &k9s.frame
+            && (frame.border.is_some()
                 || frame.menu.is_some()
                 || frame.crumbs.is_some()
                 || frame.status.is_some()
-                || frame.title.is_some()
-            {
-                has_colors = true;
-            }
+                || frame.title.is_some())
+        {
+            has_colors = true;
         }
 
         // Check view colors
-        if let Some(views) = &k9s.views {
-            if views.table.is_some() || views.yaml.is_some() || views.logs.is_some() {
-                has_colors = true;
-            }
+        if let Some(views) = &k9s.views
+            && (views.table.is_some() || views.yaml.is_some() || views.logs.is_some())
+        {
+            has_colors = true;
         }
 
         if !has_colors {
@@ -358,12 +357,12 @@ impl ThemeLoader {
 
             // Frame colors
             if let Some(frame) = k9s.frame {
-                if let Some(border) = frame.border {
-                    if let Some(fg) = border.fg {
-                        // Border color - could map to header colors
-                        theme.header_resources = parse_color(&fg)?;
-                        colors_applied += 1;
-                    }
+                if let Some(border) = frame.border
+                    && let Some(fg) = border.fg
+                {
+                    // Border color - could map to header colors
+                    theme.header_resources = parse_color(&fg)?;
+                    colors_applied += 1;
                 }
 
                 if let Some(menu) = frame.menu {
@@ -407,11 +406,11 @@ impl ThemeLoader {
                     }
                 }
 
-                if let Some(title) = frame.title {
-                    if let Some(fg) = title.fg {
-                        theme.header_context = parse_color(&fg)?;
-                        colors_applied += 1;
-                    }
+                if let Some(title) = frame.title
+                    && let Some(fg) = title.fg
+                {
+                    theme.header_context = parse_color(&fg)?;
+                    colors_applied += 1;
                 }
             }
 
@@ -435,11 +434,11 @@ impl ThemeLoader {
                             colors_applied += 1;
                         }
                     }
-                    if let Some(header) = table.header {
-                        if let Some(fg) = header.fg {
-                            theme.table_header = parse_color(&fg)?;
-                            colors_applied += 1;
-                        }
+                    if let Some(header) = table.header
+                        && let Some(fg) = header.fg
+                    {
+                        theme.table_header = parse_color(&fg)?;
+                        colors_applied += 1;
                     }
                 }
 
@@ -454,11 +453,11 @@ impl ThemeLoader {
                     }
                 }
 
-                if let Some(logs) = views.logs {
-                    if let Some(fg) = logs.fg {
-                        theme.text_primary = parse_color(&fg)?;
-                        colors_applied += 1;
-                    }
+                if let Some(logs) = views.logs
+                    && let Some(fg) = logs.fg
+                {
+                    theme.text_primary = parse_color(&fg)?;
+                    colors_applied += 1;
                 }
             }
         }
@@ -484,12 +483,12 @@ impl ThemeLoader {
         // Check config skins directory (where user-installed skins go)
         if let Ok(entries) = std::fs::read_dir(paths::skins_dir()) {
             for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.ends_with(".yaml") {
-                        let skin_name = name.trim_end_matches(".yaml").to_string();
-                        if !skins.contains(&skin_name) {
-                            skins.push(skin_name);
-                        }
+                if let Some(name) = entry.file_name().to_str()
+                    && name.ends_with(".yaml")
+                {
+                    let skin_name = name.trim_end_matches(".yaml").to_string();
+                    if !skins.contains(&skin_name) {
+                        skins.push(skin_name);
                     }
                 }
             }
@@ -498,12 +497,12 @@ impl ThemeLoader {
         // Check data skins directory (legacy location)
         if let Ok(entries) = std::fs::read_dir(paths::user_skins_dir()) {
             for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.ends_with(".yaml") {
-                        let skin_name = name.trim_end_matches(".yaml").to_string();
-                        if !skins.contains(&skin_name) {
-                            skins.push(skin_name);
-                        }
+                if let Some(name) = entry.file_name().to_str()
+                    && name.ends_with(".yaml")
+                {
+                    let skin_name = name.trim_end_matches(".yaml").to_string();
+                    if !skins.contains(&skin_name) {
+                        skins.push(skin_name);
                     }
                 }
             }

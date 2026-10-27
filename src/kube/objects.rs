@@ -173,22 +173,10 @@ pub async fn find_by_name(
                 .with_context(|| format!("{kind} isn't served by this cluster"))?;
             (resource, Scope::Namespaced)
         }
-        (None, None) => {
-            let (group, version, plural) = crate::kube::get_gvk_for_resource_type(kind)?;
-            let api_version = if group.is_empty() {
-                version.clone()
-            } else {
-                format!("{group}/{version}")
-            };
-            let resource = ApiResource {
-                group,
-                version,
-                api_version,
-                kind: kind.to_string(),
-                plural,
-            };
-            (resource, Scope::Namespaced)
-        }
+        (None, None) => (
+            crate::kube::api::api_resource_for_kind(kind)?,
+            Scope::Namespaced,
+        ),
     };
     let found = |namespace: String| match api_version {
         Some(api_version) => ObjectRef::native(api_version, kind, namespace, name),

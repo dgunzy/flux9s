@@ -1,5 +1,6 @@
 //! Resource detail view rendering
 
+use crate::kube::conditions;
 use crate::models::FluxResourceKind;
 use crate::models::flux_resource_kind::field_names;
 use crate::tui::theme::Theme;
@@ -64,17 +65,6 @@ struct StepInfo {
     phase: Option<StepPhase>,
 }
 
-/// Find a condition of the given type in `status.conditions`.
-fn find_condition<'a>(
-    obj: &'a serde_json::Value,
-    cond_type: &str,
-) -> Option<&'a serde_json::Value> {
-    obj.pointer("/status/conditions")?
-        .as_array()?
-        .iter()
-        .find(|c| c["type"].as_str() == Some(cond_type))
-}
-
 /// Extract the ResourceSet steps and derive each step's phase.
 ///
 /// The operator reports step progress only through condition messages:
@@ -108,22 +98,22 @@ fn extract_resource_set_steps(obj: &serde_json::Value) -> Vec<StepInfo> {
             .position(|info| message.contains(&format!("\"{}\"", info.name)))
     };
 
-    let reconciling = find_condition(obj, "Reconciling")
-        .filter(|c| c["status"].as_str() == Some("True"))
-        .and_then(|c| c["message"].as_str())
+    let reconciling = conditions::find(obj, conditions::RECONCILING)
+        .filter(|c| c.is_true())
+        .and_then(|c| c.message())
         .filter(|m| m.contains("Applying step"))
         .and_then(named_step_position);
-    let ready = find_condition(obj, "Ready");
+    let ready = conditions::find(obj, conditions::READY);
     let failed = ready
-        .filter(|c| c["status"].as_str() == Some("False"))
-        .and_then(|c| c["message"].as_str())
+        .filter(|c| c.is_false())
+        .and_then(|c| c.message())
         .and_then(named_step_position);
 
     let marker = if let Some(pos) = reconciling {
         Some((pos, StepPhase::Applying))
     } else if let Some(pos) = failed {
         Some((pos, StepPhase::Failed))
-    } else if ready.is_some_and(|c| c["status"].as_str() == Some("True")) {
+    } else if ready.is_some_and(|c| c.is_true()) {
         // Fully reconciled: every step applied.
         for info in &mut infos {
             info.phase = Some(StepPhase::Done);

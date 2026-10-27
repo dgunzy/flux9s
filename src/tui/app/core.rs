@@ -9,6 +9,14 @@ use crate::watcher::ResourceState;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 
+/// A `:<kind>` held while kind discovery runs, and the view it was typed
+/// in: it opens when discovery lands only if the user is still there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingKindCommand {
+    pub token: String,
+    pub view: View,
+}
+
 /// Main application state
 pub struct App {
     // Core data
@@ -37,7 +45,7 @@ pub struct App {
     pub(crate) all_namespaces: Vec<String>,
     pub(crate) pending_context_switch: Option<String>,
     /// A `:<kind>` typed before discovery finished, opened when it lands.
-    pub(crate) pending_kind_command: Option<String>,
+    pub(crate) pending_kind_command: Option<PendingKindCommand>,
     /// Views already warned about for hiding a discovered kind (#302), so
     /// rediscovery (context switch, `:native`) doesn't repeat the warning.
     pub(crate) view_shadows_warned: std::collections::HashSet<String>,
@@ -504,11 +512,11 @@ impl App {
 
     /// Start the Kubernetes events watcher (no-op if already running).
     pub(crate) fn start_kube_events_watch(&mut self) {
-        if let Some(ref mut watcher) = self.watcher {
-            if let Err(e) = watcher.watch_kube_events() {
-                tracing::warn!("Failed to start events watcher: {}", e);
-                self.set_status_message((format!("Failed to watch events: {}", e), true));
-            }
+        if let Some(ref mut watcher) = self.watcher
+            && let Err(e) = watcher.watch_kube_events()
+        {
+            tracing::warn!("Failed to start events watcher: {}", e);
+            self.set_status_message((format!("Failed to watch events: {}", e), true));
         }
     }
 
@@ -541,7 +549,10 @@ impl App {
             .all()
             .iter()
             .filter(|r| r.resource_type == kind)
-            .map(|r| crate::watcher::resource_key(&r.namespace, &r.name, &r.resource_type))
+            .map(|r| {
+                crate::watcher::ResourceKey::new(&r.resource_type, &r.namespace, &r.name)
+                    .to_key_string()
+            })
             .collect();
         for key in keys {
             self.state.remove(&key);
@@ -766,11 +777,10 @@ impl App {
         if let (Some(_), Some(time)) = (
             &self.ui_state.status_message,
             &self.ui_state.status_message_time,
-        ) {
-            if time.elapsed().as_secs() >= STATUS_MESSAGE_TIMEOUT_SECS {
-                self.ui_state.status_message = None;
-                self.ui_state.status_message_time = None;
-            }
+        ) && time.elapsed().as_secs() >= STATUS_MESSAGE_TIMEOUT_SECS
+        {
+            self.ui_state.status_message = None;
+            self.ui_state.status_message_time = None;
         }
     }
 
@@ -981,7 +991,8 @@ impl App {
 
         if self.view_state.current_view == View::ResourceFavorites {
             resources.retain(|r| {
-                let key = crate::watcher::resource_key(&r.namespace, &r.name, &r.resource_type);
+                let key = crate::watcher::ResourceKey::new(&r.resource_type, &r.namespace, &r.name)
+                    .to_key_string();
                 self.selection_state.favorites.contains(&key)
             });
         }
@@ -1039,8 +1050,10 @@ impl App {
         // first, #306); everything else sorts by kind name.
         let kind_order = self.view_state.kind_filter.kinds();
         resources.sort_by(|a, b| {
-            let a_key = crate::watcher::resource_key(&a.namespace, &a.name, &a.resource_type);
-            let b_key = crate::watcher::resource_key(&b.namespace, &b.name, &b.resource_type);
+            let a_key = crate::watcher::ResourceKey::new(&a.resource_type, &a.namespace, &a.name)
+                .to_key_string();
+            let b_key = crate::watcher::ResourceKey::new(&b.resource_type, &b.namespace, &b.name)
+                .to_key_string();
             let a_is_favorite = self.selection_state.favorites.contains(&a_key);
             let b_is_favorite = self.selection_state.favorites.contains(&b_key);
 

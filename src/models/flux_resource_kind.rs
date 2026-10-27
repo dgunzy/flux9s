@@ -44,35 +44,104 @@ pub mod field_names {
     pub const INPUTS: &str = "INPUTS";
 }
 
-/// Enumeration of all Flux CRD resource kinds
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FluxResourceKind {
+/// Labels and annotations Flux puts on the objects it manages.
+pub mod labels {
+    /// `app.kubernetes.io/managed-by`; the Flux Operator sets it to
+    /// [`FLUX_OPERATOR`] on what a FluxInstance applies.
+    pub const MANAGED_BY: &str = "app.kubernetes.io/managed-by";
+    pub const FLUX_OPERATOR: &str = "flux-operator";
+    /// The FluxInstance an operator-applied object belongs to.
+    pub const OPERATOR_NAME: &str = "fluxcd.controlplane.io/name";
+    pub const OPERATOR_NAMESPACE: &str = "fluxcd.controlplane.io/namespace";
+    /// `disabled` opts an object out of Flux garbage collection.
+    pub const PRUNE: &str = "kustomize.toolkit.fluxcd.io/prune";
+}
+
+/// Declares every Flux kind once: its variant (named exactly as the CRD's
+/// `kind`), the generated model it is read with, and its `:` command
+/// aliases. The enum, [`FluxResourceKind::ALL`], the name ↔ kind mappings,
+/// the aliases, and the API group/version/plural ([`FluxResourceKind::api_resource`],
+/// read from the generated model's `#[kube(...)]` attributes) all come from
+/// this one table, so adding a kind is one line and nothing can drift.
+macro_rules! flux_kinds {
+    ($( $(#[$doc:meta])* $variant:ident => $model:ty, [$($alias:literal),+ $(,)?]; )+) => {
+        /// Enumeration of all Flux CRD resource kinds
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum FluxResourceKind {
+            $( $(#[$doc])* $variant, )+
+        }
+
+        impl FluxResourceKind {
+            /// Every Flux kind, in table order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// The kind's name, as the API server spells it.
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $( Self::$variant => stringify!($variant), )+
+                }
+            }
+
+            /// The `:` command names for this kind (lowercase): its name,
+            /// plural, and short aliases.
+            pub fn aliases(&self) -> &'static [&'static str] {
+                match self {
+                    $( Self::$variant => &[$($alias),+], )+
+                }
+            }
+
+            /// Group, current version, and plural, taken from the generated
+            /// model — the version flux9s asks for first.
+            pub fn api_resource(&self) -> kube::core::ApiResource {
+                match self {
+                    $( Self::$variant => kube::core::ApiResource::erase::<$model>(&()), )+
+                }
+            }
+
+            fn from_name(s: &str) -> Option<Self> {
+                match s {
+                    $( stringify!($variant) => Some(Self::$variant), )+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+use crate::models::_generated::{
+    flux_operator_fluxinstances, flux_operator_fluxreports,
+    flux_operator_resourcesetinputproviders, flux_operator_resourcesets, helm_controller,
+    image_automation_controller, image_reflector_controller, kustomize_controller,
+    notification_controller, source_controller, source_watcher,
+};
+
+flux_kinds! {
     // Source Controller resources
-    GitRepository,
-    OCIRepository,
-    HelmRepository,
-    Bucket,
-    HelmChart,
-    ExternalArtifact,
-    ArtifactGenerator,
+    GitRepository => source_controller::GitRepository, ["gitrepository", "gitrepo", "gitrepositories"];
+    OCIRepository => source_controller::OciRepository, ["ocirepository", "oci", "ocirepositories"];
+    HelmRepository => source_controller::HelmRepository, ["helmrepository", "helmrepo", "helmrepositories"];
+    Bucket => source_controller::Bucket, ["bucket", "buckets"];
+    HelmChart => source_controller::HelmChart, ["helmchart", "helmcharts"];
+    ExternalArtifact => source_controller::ExternalArtifact, ["externalartifact", "externalartifacts", "ea"];
+    ArtifactGenerator => source_watcher::ArtifactGenerator, ["artifactgenerator", "artifactgenerators", "ag"];
     // Kustomize Controller resources
-    Kustomization,
+    Kustomization => kustomize_controller::Kustomization, ["kustomization", "ks", "kustomizations"];
     // Helm Controller resources
-    HelmRelease,
+    HelmRelease => helm_controller::HelmRelease, ["helmrelease", "hr", "helmreleases"];
     // Image Reflector Controller resources
-    ImageRepository,
-    ImagePolicy,
+    ImageRepository => image_reflector_controller::ImageRepository, ["imagerepository", "imagerepositories"];
+    ImagePolicy => image_reflector_controller::ImagePolicy, ["imagepolicy", "imagepolicies"];
     // Image Automation Controller resources
-    ImageUpdateAutomation,
+    ImageUpdateAutomation => image_automation_controller::ImageUpdateAutomation, ["imageupdateautomation", "imageupdateautomations"];
     // Notification Controller resources
-    Alert,
-    Provider,
-    Receiver,
+    Alert => notification_controller::Alert, ["alert", "alerts"];
+    Provider => notification_controller::Provider, ["provider", "providers"];
+    Receiver => notification_controller::Receiver, ["receiver", "receivers"];
     // Flux Operator resources
-    ResourceSet,
-    ResourceSetInputProvider,
-    FluxReport,
-    FluxInstance,
+    ResourceSet => flux_operator_resourcesets::ResourceSet, ["resourceset", "resourcesets", "rset"];
+    ResourceSetInputProvider => flux_operator_resourcesetinputproviders::ResourceSetInputProvider, ["resourcesetinputprovider", "resourcesetinputproviders", "rsip"];
+    FluxReport => flux_operator_fluxreports::FluxReport, ["fluxreport", "fluxreports", "fr"];
+    FluxInstance => flux_operator_fluxinstances::FluxInstance, ["fluxinstance", "fluxinstances", "fi"];
 }
 
 impl FluxResourceKind {
@@ -108,33 +177,23 @@ impl FluxResourceKind {
         }
     }
 
+    /// Every version to try for this kind, newest first: the generated
+    /// model's ([`Self::api_resource`]), then [`Self::older_api_versions`].
+    pub fn api_resources(&self) -> Vec<kube::core::ApiResource> {
+        let current = self.api_resource();
+        let older = self
+            .older_api_versions()
+            .iter()
+            .map(|version| kube::core::ApiResource {
+                version: (*version).to_string(),
+                api_version: format!("{}/{}", current.group, version),
+                ..current.clone()
+            });
+        std::iter::once(current.clone()).chain(older).collect()
+    }
+
     /// Annotation key used by Flux Operator resources to control reconciliation.
     pub const RECONCILE_ANNOTATION: &str = "fluxcd.controlplane.io/reconcile";
-
-    /// Get the display name as a string
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            FluxResourceKind::GitRepository => "GitRepository",
-            FluxResourceKind::OCIRepository => "OCIRepository",
-            FluxResourceKind::HelmRepository => "HelmRepository",
-            FluxResourceKind::Bucket => "Bucket",
-            FluxResourceKind::HelmChart => "HelmChart",
-            FluxResourceKind::ExternalArtifact => "ExternalArtifact",
-            FluxResourceKind::ArtifactGenerator => "ArtifactGenerator",
-            FluxResourceKind::Kustomization => "Kustomization",
-            FluxResourceKind::HelmRelease => "HelmRelease",
-            FluxResourceKind::ImageRepository => "ImageRepository",
-            FluxResourceKind::ImagePolicy => "ImagePolicy",
-            FluxResourceKind::ImageUpdateAutomation => "ImageUpdateAutomation",
-            FluxResourceKind::Alert => "Alert",
-            FluxResourceKind::Provider => "Provider",
-            FluxResourceKind::Receiver => "Receiver",
-            FluxResourceKind::ResourceSet => "ResourceSet",
-            FluxResourceKind::ResourceSetInputProvider => "ResourceSetInputProvider",
-            FluxResourceKind::FluxReport => "FluxReport",
-            FluxResourceKind::FluxInstance => "FluxInstance",
-        }
-    }
 
     /// Try to parse a string into a FluxResourceKind, returning None if invalid
     /// Use this when you want Option<Self> instead of Result<Self, String>
@@ -142,70 +201,18 @@ impl FluxResourceKind {
         s.parse().ok()
     }
 
-    /// Get all Flux resource kinds
-    ///
-    /// Returns an array of all FluxResourceKind variants.
-    /// This is useful for iterating over all resource types dynamically.
+    /// Get all Flux resource kinds ([`Self::ALL`]).
     pub fn all() -> &'static [Self] {
-        &[
-            FluxResourceKind::GitRepository,
-            FluxResourceKind::OCIRepository,
-            FluxResourceKind::HelmRepository,
-            FluxResourceKind::Bucket,
-            FluxResourceKind::HelmChart,
-            FluxResourceKind::ExternalArtifact,
-            FluxResourceKind::ArtifactGenerator,
-            FluxResourceKind::Kustomization,
-            FluxResourceKind::HelmRelease,
-            FluxResourceKind::ImageRepository,
-            FluxResourceKind::ImagePolicy,
-            FluxResourceKind::ImageUpdateAutomation,
-            FluxResourceKind::Alert,
-            FluxResourceKind::Provider,
-            FluxResourceKind::Receiver,
-            FluxResourceKind::ResourceSet,
-            FluxResourceKind::ResourceSetInputProvider,
-            FluxResourceKind::FluxReport,
-            FluxResourceKind::FluxInstance,
-        ]
+        Self::ALL
     }
 
-    /// Try to parse a string (case-insensitive) into a FluxResourceKind
-    pub fn from_str_case_insensitive(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "gitrepository" | "gitrepo" | "gitrepositories" => {
-                Some(FluxResourceKind::GitRepository)
-            }
-            "ocirepository" | "oci" | "ocirepositories" => Some(FluxResourceKind::OCIRepository),
-            "helmrepository" | "helmrepo" | "helmrepositories" => {
-                Some(FluxResourceKind::HelmRepository)
-            }
-            "bucket" | "buckets" => Some(FluxResourceKind::Bucket),
-            "helmchart" | "helmcharts" => Some(FluxResourceKind::HelmChart),
-            "externalartifact" | "externalartifacts" | "ea" => {
-                Some(FluxResourceKind::ExternalArtifact)
-            }
-            "artifactgenerator" | "artifactgenerators" | "ag" => {
-                Some(FluxResourceKind::ArtifactGenerator)
-            }
-            "kustomization" | "ks" | "kustomizations" => Some(FluxResourceKind::Kustomization),
-            "helmrelease" | "hr" | "helmreleases" => Some(FluxResourceKind::HelmRelease),
-            "imagerepository" | "imagerepositories" => Some(FluxResourceKind::ImageRepository),
-            "imagepolicy" | "imagepolicies" => Some(FluxResourceKind::ImagePolicy),
-            "imageupdateautomation" | "imageupdateautomations" => {
-                Some(FluxResourceKind::ImageUpdateAutomation)
-            }
-            "alert" | "alerts" => Some(FluxResourceKind::Alert),
-            "provider" | "providers" => Some(FluxResourceKind::Provider),
-            "receiver" | "receivers" => Some(FluxResourceKind::Receiver),
-            "resourceset" | "resourcesets" | "rset" => Some(FluxResourceKind::ResourceSet),
-            "resourcesetinputprovider" | "resourcesetinputproviders" | "rsip" => {
-                Some(FluxResourceKind::ResourceSetInputProvider)
-            }
-            "fluxreport" | "fluxreports" | "fr" => Some(FluxResourceKind::FluxReport),
-            "fluxinstance" | "fluxinstances" | "fi" => Some(FluxResourceKind::FluxInstance),
-            _ => None,
-        }
+    /// The kind a `:` command names (any case): a name, plural, or alias.
+    pub fn from_alias(s: &str) -> Option<Self> {
+        let s = s.to_lowercase();
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.aliases().contains(&s.as_str()))
     }
 
     /// Check if this resource type supports the graph view
@@ -305,25 +312,76 @@ impl FluxResourceKind {
         )
     }
 
-    /// Get all resource types that support graph view
-    pub fn graph_supported_types() -> &'static [Self] {
-        &[
-            FluxResourceKind::Kustomization,
-            FluxResourceKind::HelmRelease,
-            FluxResourceKind::ArtifactGenerator,
-            FluxResourceKind::FluxInstance,
-            FluxResourceKind::ResourceSet,
-        ]
+    /// The kinds with reconciliation history ([`Self::supports_history`]).
+    pub fn history_supported_types() -> impl Iterator<Item = Self> {
+        Self::ALL.iter().copied().filter(Self::supports_history)
     }
 
-    /// Get all resource types that support reconciliation history
-    pub fn history_supported_types() -> &'static [Self] {
-        &[
-            FluxResourceKind::FluxInstance,
-            FluxResourceKind::ResourceSet,
-            FluxResourceKind::Kustomization,
-            FluxResourceKind::HelmRelease,
-        ]
+    /// Whether `s`/`r` (suspend / resume) apply: everything with a
+    /// suspend switch (`spec.suspend`, or the Flux Operator's annotation).
+    pub fn supports_suspend(&self) -> bool {
+        match self {
+            Self::GitRepository
+            | Self::OCIRepository
+            | Self::HelmRepository
+            | Self::Kustomization
+            | Self::HelmRelease
+            | Self::ImageUpdateAutomation
+            | Self::FluxInstance
+            | Self::ResourceSet
+            | Self::ResourceSetInputProvider => true,
+            Self::Bucket
+            | Self::HelmChart
+            | Self::ExternalArtifact
+            | Self::ArtifactGenerator
+            | Self::ImageRepository
+            | Self::ImagePolicy
+            | Self::Alert
+            | Self::Provider
+            | Self::Receiver
+            | Self::FluxReport => false,
+        }
+    }
+
+    /// Whether the kind pulls from a Flux source (`spec.sourceRef`, or a
+    /// HelmRelease's chart source): what traces resolve and `W` reconciles
+    /// first.
+    pub fn has_source_ref(&self) -> bool {
+        matches!(self, Self::Kustomization | Self::HelmRelease)
+    }
+
+    /// The label prefix this kind stamps on what it applies
+    /// (`<prefix>/name`, `<prefix>/namespace`). These are labels, not API
+    /// groups — ResourceSet's differs from its group. FluxInstance marks
+    /// its objects differently ([`labels::MANAGED_BY`]).
+    pub fn owner_label_prefix(&self) -> Option<&'static str> {
+        match self {
+            Self::Kustomization => Some("kustomize.toolkit.fluxcd.io"),
+            Self::HelmRelease => Some("helm.toolkit.fluxcd.io"),
+            Self::ResourceSet => Some("resourceset.fluxcd.controlplane.io"),
+            Self::GitRepository
+            | Self::OCIRepository
+            | Self::HelmRepository
+            | Self::Bucket
+            | Self::HelmChart
+            | Self::ExternalArtifact
+            | Self::ArtifactGenerator
+            | Self::ImageRepository
+            | Self::ImagePolicy
+            | Self::ImageUpdateAutomation
+            | Self::Alert
+            | Self::Provider
+            | Self::Receiver
+            | Self::ResourceSetInputProvider
+            | Self::FluxReport
+            | Self::FluxInstance => None,
+        }
+    }
+
+    /// Whether objects it applied can be left behind (orphaned): the kinds
+    /// that label what they apply.
+    pub fn can_orphan(&self) -> bool {
+        self.owner_label_prefix().is_some() || *self == Self::FluxInstance
     }
 
     /// Get column headers for this resource type
@@ -688,21 +746,18 @@ impl FluxResourceKind {
                 }
                 if let Some(release_status) = status
                     .get("conditions")
-                    .and_then(|c| c.as_array())
-                    .and_then(|arr| {
-                        arr.iter()
-                            .find(|c| c.get("type").and_then(|t| t.as_str()) == Some("Ready"))
+                    .and_then(|c| {
+                        crate::kube::conditions::of_type(c, crate::kube::conditions::READY)
                     })
-                    .and_then(|c| c.get("status"))
-                    .and_then(|s| s.as_str())
+                    .and_then(|c| c.status())
                 {
                     fields.insert(STATUS.to_string(), release_status.to_string());
                 }
             }
-            if matches!(self, FluxResourceKind::Receiver) {
-                if let Some(webhook) = status.get("webhookPath").and_then(|w| w.as_str()) {
-                    fields.insert(WEBHOOK.to_string(), webhook.to_string());
-                }
+            if matches!(self, FluxResourceKind::Receiver)
+                && let Some(webhook) = status.get("webhookPath").and_then(|w| w.as_str())
+            {
+                fields.insert(WEBHOOK.to_string(), webhook.to_string());
             }
             if matches!(self, FluxResourceKind::OCIRepository) {
                 if let Some(digest) = status
@@ -742,28 +797,7 @@ impl FromStr for FluxResourceKind {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "GitRepository" => Ok(FluxResourceKind::GitRepository),
-            "OCIRepository" => Ok(FluxResourceKind::OCIRepository),
-            "HelmRepository" => Ok(FluxResourceKind::HelmRepository),
-            "Bucket" => Ok(FluxResourceKind::Bucket),
-            "HelmChart" => Ok(FluxResourceKind::HelmChart),
-            "ExternalArtifact" => Ok(FluxResourceKind::ExternalArtifact),
-            "ArtifactGenerator" => Ok(FluxResourceKind::ArtifactGenerator),
-            "Kustomization" => Ok(FluxResourceKind::Kustomization),
-            "HelmRelease" => Ok(FluxResourceKind::HelmRelease),
-            "ImageRepository" => Ok(FluxResourceKind::ImageRepository),
-            "ImagePolicy" => Ok(FluxResourceKind::ImagePolicy),
-            "ImageUpdateAutomation" => Ok(FluxResourceKind::ImageUpdateAutomation),
-            "Alert" => Ok(FluxResourceKind::Alert),
-            "Provider" => Ok(FluxResourceKind::Provider),
-            "Receiver" => Ok(FluxResourceKind::Receiver),
-            "ResourceSet" => Ok(FluxResourceKind::ResourceSet),
-            "ResourceSetInputProvider" => Ok(FluxResourceKind::ResourceSetInputProvider),
-            "FluxReport" => Ok(FluxResourceKind::FluxReport),
-            "FluxInstance" => Ok(FluxResourceKind::FluxInstance),
-            _ => Err(format!("Unknown Flux resource kind: {}", s)),
-        }
+        Self::from_name(s).ok_or_else(|| format!("Unknown Flux resource kind: {}", s))
     }
 }
 
@@ -793,23 +827,75 @@ mod tests {
     }
 
     #[test]
-    fn test_from_str_case_insensitive() {
+    fn test_from_alias() {
         assert_eq!(
-            FluxResourceKind::from_str_case_insensitive("gitrepository"),
+            FluxResourceKind::from_alias("gitrepository"),
             Some(FluxResourceKind::GitRepository)
         );
         assert_eq!(
-            FluxResourceKind::from_str_case_insensitive("GitRepository"),
+            FluxResourceKind::from_alias("GitRepository"),
             Some(FluxResourceKind::GitRepository)
         );
         assert_eq!(
-            FluxResourceKind::from_str_case_insensitive("ks"),
+            FluxResourceKind::from_alias("ks"),
             Some(FluxResourceKind::Kustomization)
         );
         assert_eq!(
-            FluxResourceKind::from_str_case_insensitive("oci"),
+            FluxResourceKind::from_alias("oci"),
             Some(FluxResourceKind::OCIRepository)
         );
+    }
+
+    #[test]
+    fn every_kind_round_trips_its_name() {
+        for kind in FluxResourceKind::ALL {
+            assert_eq!(FluxResourceKind::parse_optional(kind.as_str()), Some(*kind));
+            assert_eq!(FluxResourceKind::from_alias(kind.as_str()), Some(*kind));
+        }
+    }
+
+    #[test]
+    fn aliases_cover_name_and_plural_and_are_unique() {
+        let mut seen = std::collections::HashMap::new();
+        for kind in FluxResourceKind::ALL {
+            let aliases = kind.aliases();
+            assert!(
+                aliases.contains(&kind.as_str().to_lowercase().as_str()),
+                "{kind}"
+            );
+            assert!(
+                aliases.contains(&kind.api_resource().plural.as_str()),
+                "{kind}"
+            );
+            for alias in aliases {
+                assert_eq!(
+                    *alias,
+                    alias.to_lowercase(),
+                    "{kind}: aliases are lowercase"
+                );
+                if let Some(other) = seen.insert(*alias, *kind) {
+                    panic!("alias {alias} names both {other} and {kind}");
+                }
+            }
+        }
+        // Once only accepted by one of two alias tables.
+        assert_eq!(
+            FluxResourceKind::from_alias("helmrepo"),
+            Some(FluxResourceKind::HelmRepository)
+        );
+    }
+
+    #[test]
+    fn older_versions_never_repeat_the_current_one() {
+        for kind in FluxResourceKind::ALL {
+            let versions: Vec<_> = kind
+                .api_resources()
+                .into_iter()
+                .map(|r| r.version)
+                .collect();
+            let unique: std::collections::HashSet<_> = versions.iter().collect();
+            assert_eq!(unique.len(), versions.len(), "{kind}: {versions:?}");
+        }
     }
 
     #[test]

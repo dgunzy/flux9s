@@ -5,8 +5,8 @@
 //! by the values watch (see [`crate::kube::live::watch_helm_values`]).
 
 use crate::kube::helm_values::{HelmValues, SourceOutcome};
-use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
+use crate::tui::views::props::{Fetched, TextScroll};
 use crate::tui::views::yaml::{
     apply_text_search, decorate_title_with_search, find_match_lines, highlight_yaml_line,
 };
@@ -75,12 +75,18 @@ pub fn render_helm_values(
     f: &mut Frame,
     area: Rect,
     selected_resource_key: &Option<String>,
-    values: Option<&HelmValues>,
-    loading: bool,
-    scroll_offset: &mut usize,
-    search: &mut TextSearchState,
+    values: Fetched<'_, HelmValues>,
+    text: TextScroll<'_>,
     theme: &Theme,
 ) {
+    let Fetched {
+        data: values,
+        loading,
+    } = values;
+    let TextScroll {
+        offset: scroll_offset,
+        search,
+    } = text;
     let name = selected_resource_key
         .as_deref()
         .and_then(crate::watcher::ResourceKey::parse)
@@ -152,6 +158,7 @@ pub fn render_helm_values(
 mod tests {
     use super::*;
     use crate::kube::helm_values::{ValuesRef, ValuesSource};
+    use crate::tui::app::state::TextSearchState;
     use ratatui::{Terminal, backend::TestBackend};
     use serde_json::json;
 
@@ -165,10 +172,8 @@ mod tests {
                     f,
                     f.area(),
                     &Some("HelmRelease:apps:podinfo".to_string()),
-                    values,
-                    loading,
-                    &mut scroll,
-                    &mut search,
+                    Fetched::new(values, loading),
+                    TextScroll::new(&mut scroll, &mut search),
                     &Theme::default(),
                 )
             })

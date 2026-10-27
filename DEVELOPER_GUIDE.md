@@ -88,9 +88,9 @@ flux9s is a K9s-inspired terminal UI for monitoring Flux GitOps resources in rea
 Responsible for watching Flux resources via Kubernetes Watch API.
 
 - **`mod.rs`** - Main watcher orchestration, watch event handling, namespace management
-- **`resource.rs`** - Resource type definitions and `WatchableResource` trait implementations
+- **`resource.rs`** - Re-exports of the generated Flux models (for typed reads)
 - **`state.rs`** - Thread-safe resource state management with concurrent access
-- **`registry.rs`** - Resource registry for command mapping and aliases
+- **`registry.rs`** - `:` command lookups, read from `FluxResourceKind::aliases`
 
 **Key Design Decisions:**
 
@@ -334,7 +334,7 @@ flux9s/
 │   │   ├── mod.rs             # Watcher orchestration
 │   │   ├── resource.rs        # Resource definitions
 │   │   ├── state.rs           # State management
-│   │   └── registry.rs        # Resource registry
+│   │   └── registry.rs        # Command alias lookups
 │   ├── lib.rs                 # Library entry point — owns every module
 │   └── main.rs                # Binary entry point — thin shim over the library
 ├── tests/                      # Test suite
@@ -553,73 +553,29 @@ When adding support for a new Flux resource type:
 
 1. **Ensure CRD is fetched** - Add to `scripts/fetch-crds.sh` if needed
 2. **Regenerate models** - Run `./scripts/update-flux.sh`
-3. **Add to FluxResourceKind enum** (`src/models/flux_resource_kind.rs`):
+3. **Add one row to the `flux_kinds!` table** (`src/models/flux_resource_kind.rs`):
 
    ```rust
-   pub enum FluxResourceKind {
-       // ... existing variants
-       YourNewResource,
-   }
+   YourNewResource => source_controller::YourNewResource, ["yournewresource", "yournewresources", "ynr"];
    ```
 
-   Update `as_str()`, `from_str()`, and `from_str_case_insensitive()` methods.
+   The variant is spelled exactly as the CRD's `kind`. From this row come the
+   enum variant, `FluxResourceKind::ALL`, `as_str` / `FromStr`, the `:`
+   aliases (and help), and `api_resource()` — group, version, and plural read
+   from the generated model's `#[kube(...)]` attributes, so they can't drift
+   from the CRD. The watcher (`watch_all`) watches every kind in `ALL` as
+   `DynamicObject`s, trying `api_resources()` (current version, then
+   `older_api_versions`) until one is served.
+4. **Fill in the exhaustive matches** the compiler now flags:
+   `older_api_versions`, `supports_suspend`, `owner_label_prefix`, `columns`,
+   `extract_fields`, …
+5. **Re-export the model** in `src/watcher/resource.rs` if typed reads need it.
+6. **Add its row** to `every_kind_reads_its_api_from_the_generated_model`
+   (`tests/model_compatibility.rs`).
 
-4. **Re-export the type** in `src/watcher/resource.rs`:
-
-   ```rust
-   pub use source_controller::YourNewResource;
-   ```
-
-5. **Add `impl_watchable!` macro**:
-
-   ```rust
-   impl_watchable!(
-       YourNewResource,
-       "source.toolkit.fluxcd.io",
-       "v1",
-       "yournewresources",
-       "YourNewResource"
-   );
-   ```
-
-6. **Add to registry** in `src/watcher/registry.rs`:
-
-   ```rust
-   ResourceEntry {
-       display_name: "YourNewResource",
-       command_aliases: &["yournewresource", "ynr"],
-   },
-   ```
-
-7. **Add watch call** in `src/watcher/mod.rs` `watch_all()`:
-
-   ```rust
-   self.watch::<resource::YourNewResource>()?;
-   ```
-
-8. **Add fetch_resource! case** in `src/tui/mod.rs` `fetch_resource_yaml()`:
-
-   ```rust
-   Some(FluxResourceKind::YourNewResource) => fetch_resource!(YourNewResource),
-   ```
-
-9. **Add get_gvk case** in `src/tui/api.rs` `get_gvk_for_resource_type()`:
-
-   ```rust
-   Some(FluxResourceKind::YourNewResource) => (
-       YourNewResource::api_group(),
-       YourNewResource::api_version(),
-       YourNewResource::plural(),
-   ),
-   ```
-
-10. **Update tests** in `tests/resource_registry.rs`:
-    ```rust
-    let expected_types = vec![
-        // ... existing types
-        "YourNewResource",
-    ];
-    ```
+When a CRD update moves a kind to a new version, that test fails on purpose:
+update it and add the previous version to `older_api_versions`, so clusters
+on older Flux releases keep working.
 
 ## Keys, Footer, and Help (`src/tui/app/actions.rs`)
 
@@ -630,8 +586,8 @@ goes through the **action table**, `ACTIONS`. An `Action` is data:
 - `keys` (Control is the only significant modifier), `when` (view and kind
   capabilities; deny by default), `spec` (`Builtin(fn)` or
   `Operation(key)` → the `FluxOperation` registry with its read-only gate
-  and confirmation, or the data-only writes `Patch { patch, write }` /
-  `Annotate { key, value, write }` → `App::request_write`: kind filter,
+  and confirmation, or the data-only write `Patch { patch, write }`
+  → `App::request_write`: kind filter,
   read-only gate, confirmation, `ObjectAction::Patch`), a `footer` hint, a
   `help` line, and `sets_status`. Workload restart is a `Patch`.
 - **Native edit**: `Capabilities::edit` comes from discovery's `patch` verb

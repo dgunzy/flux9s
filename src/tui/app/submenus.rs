@@ -59,11 +59,10 @@ impl App {
                 // `:` falls through to command mode: close the submenu
                 // (restoring any theme preview) and start typing a command.
                 crossterm::event::KeyCode::Char(':') => {
-                    if submenu.command == submenu_ids::SKIN {
-                        if let Some(original_theme) = self.view_state.preview_original_theme.clone()
-                        {
-                            let _ = self.set_theme(&original_theme);
-                        }
+                    if submenu.command == submenu_ids::SKIN
+                        && let Some(original_theme) = self.view_state.preview_original_theme.clone()
+                    {
+                        let _ = self.set_theme(&original_theme);
                     }
                     self.view_state.submenu_state = None;
                     self.view_state.preview_original_theme = None;
@@ -155,11 +154,10 @@ impl App {
                         self.preview_theme_in_submenu();
                         return None;
                     }
-                    if submenu.command == submenu_ids::SKIN {
-                        if let Some(original_theme) = self.view_state.preview_original_theme.clone()
-                        {
-                            let _ = self.set_theme(&original_theme);
-                        }
+                    if submenu.command == submenu_ids::SKIN
+                        && let Some(original_theme) = self.view_state.preview_original_theme.clone()
+                    {
+                        let _ = self.set_theme(&original_theme);
                     }
                     self.view_state.submenu_state = None;
                     self.view_state.preview_original_theme = None;
@@ -172,13 +170,12 @@ impl App {
 
     /// Preview theme when navigating skin submenu
     pub(super) fn preview_theme_in_submenu(&mut self) {
-        if let Some(ref submenu) = self.view_state.submenu_state {
-            if submenu.command == submenu_ids::SKIN {
-                if let Some(theme_name) = submenu.selected_value() {
-                    // Preview the theme (don't show errors, just silently fail)
-                    let _ = self.preview_theme(&theme_name);
-                }
-            }
+        if let Some(ref submenu) = self.view_state.submenu_state
+            && submenu.command == submenu_ids::SKIN
+            && let Some(theme_name) = submenu.selected_value()
+        {
+            // Preview the theme (don't show errors, just silently fail)
+            let _ = self.preview_theme(&theme_name);
         }
     }
 

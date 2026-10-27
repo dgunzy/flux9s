@@ -89,14 +89,14 @@ impl ExtraKind {
         })
     }
 
-    /// `(group, version, plural)` in the shape
-    /// [`crate::kube::get_gvk_for_resource_type`] resolves to.
-    pub fn gvk(&self) -> (String, String, String) {
-        (
-            self.group.clone(),
-            self.version.clone(),
-            self.plural.clone(),
-        )
+    /// The `ApiResource` for watching / reading this kind.
+    pub fn api_resource(&self) -> kube::core::ApiResource {
+        crate::models::kinds::Gvk {
+            group: self.group.clone(),
+            version: self.version.clone(),
+            kind: self.kind.clone(),
+        }
+        .api_resource(&self.plural)
     }
 }
 
@@ -235,13 +235,10 @@ mod tests {
         assert_eq!(extra.plural, "widgets");
         assert_eq!(extra.short_names, ["wd"]);
         assert_eq!(extra.version, "v1", "last stored version wins");
+        let resource = extra.api_resource();
         assert_eq!(
-            extra.gvk(),
-            (
-                "example.com".to_string(),
-                "v1".to_string(),
-                "widgets".to_string()
-            )
+            (resource.api_version.as_str(), resource.plural.as_str()),
+            ("example.com/v1", "widgets")
         );
     }
 

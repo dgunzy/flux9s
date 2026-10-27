@@ -3,213 +3,54 @@ use kube::Api;
 use kube::core::{ApiResource, DynamicObject};
 
 use crate::models::FluxResourceKind;
-use crate::watcher::WatchableResource;
-use crate::watcher::{
-    Alert, ArtifactGenerator, Bucket, ExternalArtifact, FluxInstance, FluxReport, GitRepository,
-    HelmChart, HelmRelease, HelmRepository, ImagePolicy, ImageRepository, ImageUpdateAutomation,
-    Kustomization, OciRepository, Provider, Receiver, ResourceSet, ResourceSetInputProvider,
-};
 
-/// Get GroupVersionKind for a resource type
-pub fn get_gvk_for_resource_type(resource_type: &str) -> Result<(String, String, String)> {
-    let (group, version, plural) = match FluxResourceKind::parse_optional(resource_type) {
-        Some(FluxResourceKind::GitRepository) => (
-            GitRepository::api_group(),
-            GitRepository::api_version(),
-            GitRepository::plural(),
-        ),
-        Some(FluxResourceKind::OCIRepository) => (
-            OciRepository::api_group(),
-            OciRepository::api_version(),
-            OciRepository::plural(),
-        ),
-        Some(FluxResourceKind::HelmRepository) => (
-            HelmRepository::api_group(),
-            HelmRepository::api_version(),
-            HelmRepository::plural(),
-        ),
-        Some(FluxResourceKind::Bucket) => {
-            (Bucket::api_group(), Bucket::api_version(), Bucket::plural())
+/// How to read `resource_type` as dynamic objects: a Flux kind's current
+/// version from its generated model ([`FluxResourceKind::api_resource`]);
+/// common built-ins without discovery; anything else from the discovered
+/// kinds. For a Flux kind on an older cluster, use
+/// [`get_api_resource_with_fallback`] or [`served_flux_api_resource`].
+pub fn api_resource_for_kind(resource_type: &str) -> Result<ApiResource> {
+    if let Some(kind) = FluxResourceKind::parse_optional(resource_type) {
+        return Ok(kind.api_resource());
+    }
+    let built_in = |group: &str, plural: String| {
+        Ok(crate::models::kinds::Gvk {
+            group: group.to_string(),
+            version: "v1".to_string(),
+            kind: resource_type.to_string(),
         }
-        Some(FluxResourceKind::HelmChart) => (
-            HelmChart::api_group(),
-            HelmChart::api_version(),
-            HelmChart::plural(),
-        ),
-        Some(FluxResourceKind::ExternalArtifact) => (
-            ExternalArtifact::api_group(),
-            ExternalArtifact::api_version(),
-            ExternalArtifact::plural(),
-        ),
-        Some(FluxResourceKind::ArtifactGenerator) => (
-            ArtifactGenerator::api_group(),
-            ArtifactGenerator::api_version(),
-            ArtifactGenerator::plural(),
-        ),
-        Some(FluxResourceKind::Kustomization) => (
-            Kustomization::api_group(),
-            Kustomization::api_version(),
-            Kustomization::plural(),
-        ),
-        Some(FluxResourceKind::HelmRelease) => (
-            HelmRelease::api_group(),
-            HelmRelease::api_version(),
-            HelmRelease::plural(),
-        ),
-        Some(FluxResourceKind::ImageRepository) => (
-            ImageRepository::api_group(),
-            ImageRepository::api_version(),
-            ImageRepository::plural(),
-        ),
-        Some(FluxResourceKind::ImagePolicy) => (
-            ImagePolicy::api_group(),
-            ImagePolicy::api_version(),
-            ImagePolicy::plural(),
-        ),
-        Some(FluxResourceKind::ImageUpdateAutomation) => (
-            ImageUpdateAutomation::api_group(),
-            ImageUpdateAutomation::api_version(),
-            ImageUpdateAutomation::plural(),
-        ),
-        Some(FluxResourceKind::Alert) => {
-            (Alert::api_group(), Alert::api_version(), Alert::plural())
-        }
-        Some(FluxResourceKind::Provider) => (
-            Provider::api_group(),
-            Provider::api_version(),
-            Provider::plural(),
-        ),
-        Some(FluxResourceKind::Receiver) => (
-            Receiver::api_group(),
-            Receiver::api_version(),
-            Receiver::plural(),
-        ),
-        Some(FluxResourceKind::ResourceSet) => (
-            ResourceSet::api_group(),
-            ResourceSet::api_version(),
-            ResourceSet::plural(),
-        ),
-        Some(FluxResourceKind::ResourceSetInputProvider) => (
-            ResourceSetInputProvider::api_group(),
-            ResourceSetInputProvider::api_version(),
-            ResourceSetInputProvider::plural(),
-        ),
-        Some(FluxResourceKind::FluxReport) => (
-            FluxReport::api_group(),
-            FluxReport::api_version(),
-            FluxReport::plural(),
-        ),
-        Some(FluxResourceKind::FluxInstance) => (
-            FluxInstance::api_group(),
-            FluxInstance::api_version(),
-            FluxInstance::plural(),
-        ),
-        None => {
-            // For non-Flux resources, we should use DynamicObject and let the discovery API handle it
-            // However, for common Kubernetes built-in resources, we can provide defaults to avoid discovery overhead
-            match resource_type {
-                // Workload resources (apps/v1 API group) - Kubernetes built-ins only
-                "Deployment" | "StatefulSet" | "DaemonSet" | "ReplicaSet" => {
-                    return Ok((
-                        "apps".to_string(),
-                        "v1".to_string(),
-                        resource_type.to_lowercase() + "s",
-                    ));
-                }
-                // Core resources (v1 API group - no group prefix) - Kubernetes built-ins only
-                "Service" | "ConfigMap" | "Secret" | "Pod" | "Namespace" | "ServiceAccount" => {
-                    return Ok((
-                        "".to_string(),
-                        "v1".to_string(),
-                        resource_type.to_lowercase() + "s",
-                    ));
-                }
-                // Networking resources - Kubernetes built-ins only
-                "Ingress" => {
-                    return Ok((
-                        "networking.k8s.io".to_string(),
-                        "v1".to_string(),
-                        "ingresses".to_string(),
-                    ));
-                }
-                "NetworkPolicy" => {
-                    return Ok((
-                        "networking.k8s.io".to_string(),
-                        "v1".to_string(),
-                        "networkpolicies".to_string(),
-                    ));
-                }
-                // For all other resources: consult the dynamically
-                // discovered kinds (#197) before giving up. The registry is
-                // empty unless discoverFluxResources is enabled.
-                _ => {
-                    if let Some(extra) = crate::models::extra_kinds::global().get(resource_type) {
-                        return Ok(extra.gvk());
-                    }
-                    // Then any kind the cluster serves (#267 discovery; empty
-                    // while nativeResources is off).
-                    if let Some(spec) = crate::models::kinds::catalog().find_by_kind(resource_type)
-                    {
-                        return Ok((spec.gvk.group, spec.gvk.version, spec.names.plural));
-                    }
-                    return Err(anyhow::anyhow!(
-                        "Resource type '{}' is not a Flux or Kubernetes built-in resource. \
-                    For CRDs and custom resources, use DynamicObject with API discovery.",
-                        resource_type
-                    ));
-                }
-            }
-        }
+        .api_resource(plural))
     };
-
-    Ok((group.to_string(), version.to_string(), plural.to_string()))
-}
-
-/// Older API versions to try for `resource_type` when its current one
-/// isn't served: the Flux kind's real version history
-/// ([`FluxResourceKind::older_api_versions`]); none for anything else.
-fn fallback_versions(resource_type: &str) -> Vec<String> {
-    FluxResourceKind::parse_optional(resource_type)
-        .map(|kind| {
-            kind.older_api_versions()
-                .iter()
-                .map(|v| v.to_string())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Get all Flux ApiResources to try for a resource kind, ordered from newest to oldest.
-///
-/// This keeps the watcher fallback logic aligned with the central Flux resource metadata
-/// instead of repeating API groups, versions, and plurals at each callsite.
-pub fn get_flux_api_resources_with_fallback(
-    resource_kind: FluxResourceKind,
-) -> Result<Vec<ApiResource>> {
-    let resource_type = resource_kind.as_str();
-    let (group, default_version, plural) = get_gvk_for_resource_type(resource_type)?;
-    let mut versions = vec![default_version.clone()];
-
-    for fallback in fallback_versions(resource_type) {
-        if !versions.contains(&fallback) {
-            versions.push(fallback);
+    match resource_type {
+        "Deployment" | "StatefulSet" | "DaemonSet" | "ReplicaSet" => {
+            built_in("apps", resource_type.to_lowercase() + "s")
+        }
+        "Service" | "ConfigMap" | "Secret" | "Pod" | "Namespace" | "ServiceAccount" => {
+            built_in("", resource_type.to_lowercase() + "s")
+        }
+        "Ingress" => built_in("networking.k8s.io", "ingresses".to_string()),
+        "NetworkPolicy" => built_in("networking.k8s.io", "networkpolicies".to_string()),
+        _ => {
+            // Flux-adjacent kinds (#197; empty unless discoverFluxResources
+            // is on), then any kind the cluster serves (#267; empty while
+            // nativeResources is off).
+            if let Some(extra) = crate::models::extra_kinds::global().get(resource_type) {
+                return Ok(extra.api_resource());
+            }
+            if let Some(spec) = crate::models::kinds::catalog().find_by_kind(resource_type) {
+                return Ok(spec.api_resource());
+            }
+            Err(anyhow::anyhow!(
+                "Resource type '{}' is not a Flux or Kubernetes built-in resource. \
+                 For CRDs and custom resources, use DynamicObject with API discovery.",
+                resource_type
+            ))
         }
     }
-
-    Ok(versions
-        .into_iter()
-        .map(|version| ApiResource {
-            group: group.clone(),
-            version: version.clone(),
-            api_version: format!("{}/{}", group, version),
-            kind: resource_type.to_string(),
-            plural: plural.clone(),
-        })
-        .collect())
 }
 
 /// The API version of a Flux kind this cluster serves: the first of
-/// [`get_flux_api_resources_with_fallback`] whose version lists the kind in
+/// [`FluxResourceKind::api_resources`] whose version lists the kind in
 /// API discovery. Discovery is readable by every authenticated user, so the
 /// answer doesn't depend on RBAC (a 403 says nothing about whether a version
 /// exists, and a user limited to some names can't list unfiltered). `None`
@@ -218,7 +59,7 @@ pub async fn served_flux_api_resource(
     client: &kube::Client,
     kind: FluxResourceKind,
 ) -> Option<ApiResource> {
-    let candidates = get_flux_api_resources_with_fallback(kind).ok()?;
+    let candidates = kind.api_resources();
     let group = candidates.first()?.group.clone();
     let discovered = match kube::discovery::oneshot::group(client, &group).await {
         Ok(discovered) => discovered,
@@ -265,16 +106,14 @@ enum NotFoundKind {
 /// not found`) when only the object is missing — in which case the version IS
 /// served and there is no point probing fallback versions.
 fn classify_not_found(error: &kube::Error) -> NotFoundKind {
-    if let kube::Error::Api(api_err) = error {
-        if api_err.code == 404 {
-            let msg = api_err.message.to_lowercase();
-            if msg.contains("could not find the requested resource")
-                || msg.contains("page not found")
-            {
-                return NotFoundKind::VersionMissing;
-            }
-            return NotFoundKind::ResourceMissing;
+    if let kube::Error::Api(api_err) = error
+        && api_err.code == 404
+    {
+        let msg = api_err.message.to_lowercase();
+        if msg.contains("could not find the requested resource") || msg.contains("page not found") {
+            return NotFoundKind::VersionMissing;
         }
+        return NotFoundKind::ResourceMissing;
     }
     NotFoundKind::Other
 }
@@ -286,105 +125,46 @@ pub fn is_object_missing(error: &kube::Error) -> bool {
     classify_not_found(error) == NotFoundKind::ResourceMissing
 }
 
-/// Get ApiResource for a resource type with version fallback
-///
-/// **Why kubectl works without versions but kube-rs doesn't:**
-/// - kubectl uses Kubernetes API discovery (`/apis` endpoint) to find all available versions
-///   and automatically selects the preferred version or converts between versions
-/// - kube-rs requires explicit ApiResource specification, but we can discover versions
-///   by trying them (which is what this function does)
-///
-/// This function tries the default version first, then falls back to older versions if needed.
-/// Fallback versions are generated dynamically based on the default version, avoiding hardcoded
-/// version lists for specific resource types.
+/// The ApiResource to read `namespace/name` of `resource_type` with: for a
+/// Flux kind, the first of [`FluxResourceKind::api_resources`] the cluster
+/// answers for (kube-rs needs an explicit version, where kubectl discovers
+/// one). A GET that names the object as missing still proves its version is
+/// served, so probing stops there; only an unserved version moves on.
 pub async fn get_api_resource_with_fallback(
     client: &kube::Client,
     resource_type: &str,
     namespace: &str,
     name: &str,
 ) -> Result<ApiResource> {
-    // Get default group, version, and plural
-    let (group, default_version, plural) = get_gvk_for_resource_type(resource_type)?;
-
-    // For standard Kubernetes resources, use default version
-    if group.is_empty() {
-        return Ok(ApiResource {
-            group: group.clone(),
-            version: default_version.clone(),
-            api_version: format!("{}/{}", group, default_version),
-            kind: resource_type.to_string(),
-            plural: plural.clone(),
-        });
-    }
-
-    // Try default version first (usually v1, the newest)
-    let api_resource = ApiResource {
-        group: group.clone(),
-        version: default_version.clone(),
-        api_version: format!("{}/{}", group, default_version),
-        kind: resource_type.to_string(),
-        plural: plural.clone(),
+    let candidates = match FluxResourceKind::parse_optional(resource_type) {
+        Some(kind) => kind.api_resources(),
+        None => vec![api_resource_for_kind(resource_type)?],
     };
-
-    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &api_resource);
-
-    // Try to get the resource with default version
-    match api.get(name).await {
-        Ok(_) => {
-            // Default version works!
-            return Ok(api_resource);
-        }
-        Err(e) => match classify_not_found(&e) {
-            // Version doesn't exist on this cluster, try fallback versions below
-            NotFoundKind::VersionMissing => {}
-            // The API answered for this GVR, so the version is served — the named
-            // resource just doesn't exist. Return immediately instead of probing
-            // fallback versions; the caller's own GET produces the proper error.
-            NotFoundKind::ResourceMissing => return Ok(api_resource),
-            NotFoundKind::Other => {
-                return Err(anyhow::anyhow!("Failed to fetch {}: {}", resource_type, e));
-            }
-        },
+    let Some(newest) = candidates.first().cloned() else {
+        anyhow::bail!("No API version known for {resource_type}");
+    };
+    // Core resources are always served at v1.
+    if newest.group.is_empty() {
+        return Ok(newest);
     }
 
-    // Then the kind's older versions, newest first.
-    for version in fallback_versions(resource_type) {
-        let fallback_api_resource = ApiResource {
-            group: group.clone(),
-            version: version.clone(),
-            api_version: format!("{}/{}", group, version),
-            kind: resource_type.to_string(),
-            plural: plural.clone(),
-        };
-
-        let fallback_api: Api<DynamicObject> =
-            Api::namespaced_with(client.clone(), namespace, &fallback_api_resource);
-
-        match fallback_api.get(name).await {
-            Ok(_) => {
-                // This version works!
-                tracing::debug!(
-                    "Using fallback version {} for {} (default was {})",
-                    version,
-                    resource_type,
-                    default_version
-                );
-                return Ok(fallback_api_resource);
-            }
+    for candidate in candidates {
+        let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &candidate);
+        match api.get(name).await {
+            Ok(_) => return Ok(candidate),
             Err(e) => match classify_not_found(&e) {
-                NotFoundKind::VersionMissing => {} // Try the next version
-                // Version is served; resource doesn't exist at any version.
-                NotFoundKind::ResourceMissing => return Ok(fallback_api_resource),
+                NotFoundKind::VersionMissing => {} // Try the next (older) version
+                // The version is served; the object just doesn't exist —
+                // the caller's own GET reports that.
+                NotFoundKind::ResourceMissing => return Ok(candidate),
                 NotFoundKind::Other => {
                     return Err(anyhow::anyhow!("Failed to fetch {}: {}", resource_type, e));
                 }
             },
         }
     }
-
-    // If we get here, default version didn't work and no fallback worked
-    // Return the default anyway - the error will be handled by the caller
-    Ok(api_resource)
+    // No version answered: return the newest; the caller's GET errors.
+    Ok(newest)
 }
 
 /// Returns true if an error string indicates the API version doesn't exist on this cluster.
@@ -417,17 +197,20 @@ pub fn is_forbidden_error(error: &str) -> bool {
 mod tests {
     #[test]
     fn built_in_networking_kinds_have_real_plurals() {
-        let (_, _, plural) = get_gvk_for_resource_type("NetworkPolicy").unwrap();
-        assert_eq!(plural, "networkpolicies");
-        let (_, _, plural) = get_gvk_for_resource_type("Ingress").unwrap();
-        assert_eq!(plural, "ingresses");
+        let resource = api_resource_for_kind("NetworkPolicy").unwrap();
+        assert_eq!(resource.plural, "networkpolicies");
+        assert_eq!(resource.api_version, "networking.k8s.io/v1");
+        let resource = api_resource_for_kind("ConfigMap").unwrap();
+        assert_eq!(
+            (resource.api_version.as_str(), resource.plural.as_str()),
+            ("v1", "configmaps")
+        );
     }
 
     use super::*;
 
     fn versions(kind: FluxResourceKind) -> Vec<String> {
-        get_flux_api_resources_with_fallback(kind)
-            .unwrap()
+        kind.api_resources()
             .into_iter()
             .map(|r| r.version)
             .collect()
@@ -458,15 +241,11 @@ mod tests {
             ["v1", "v1beta2", "v1beta1"]
         );
         assert_eq!(versions(FluxResourceKind::Kustomization), ["v1"]);
-        assert!(
-            fallback_versions("Deployment").is_empty(),
-            "built-ins have none"
-        );
     }
 
     #[test]
     fn the_served_version_is_the_first_whose_version_lists_the_kind() {
-        let candidates = || get_flux_api_resources_with_fallback(FluxResourceKind::Alert).unwrap();
+        let candidates = || FluxResourceKind::Alert.api_resources();
         // Flux 2.9: notification v1 exists (Receiver) but not for alerts.
         let flux_2_9 = |version: &str, plural: &str| match version {
             "v1" => plural == "receivers",
@@ -485,9 +264,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_flux_api_resources_with_fallback_for_oci_repository() {
-        let api_resources =
-            get_flux_api_resources_with_fallback(FluxResourceKind::OCIRepository).unwrap();
+    fn oci_repository_api_resources_fall_back_to_v1beta2() {
+        let api_resources = FluxResourceKind::OCIRepository.api_resources();
 
         assert_eq!(api_resources[0].group, "source.toolkit.fluxcd.io");
         assert_eq!(api_resources[0].kind, "OCIRepository");
@@ -502,9 +280,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_flux_api_resources_with_fallback_for_helm_release() {
-        let api_resources =
-            get_flux_api_resources_with_fallback(FluxResourceKind::HelmRelease).unwrap();
+    fn helm_release_api_resources_fall_back_to_v2beta2() {
+        let api_resources = FluxResourceKind::HelmRelease.api_resources();
 
         assert_eq!(api_resources[0].group, "helm.toolkit.fluxcd.io");
         assert_eq!(api_resources[0].kind, "HelmRelease");

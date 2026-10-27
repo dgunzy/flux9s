@@ -40,6 +40,17 @@ impl Gvk {
             format!("{}/{}", self.group, self.version)
         }
     }
+
+    /// The `ApiResource` for listing / reading this kind as dynamic objects.
+    pub fn api_resource(&self, plural: impl Into<String>) -> kube::core::ApiResource {
+        kube::core::ApiResource {
+            group: self.group.clone(),
+            version: self.version.clone(),
+            api_version: self.api_version(),
+            kind: self.kind.clone(),
+            plural: plural.into(),
+        }
+    }
 }
 
 impl fmt::Display for Gvk {
@@ -215,6 +226,11 @@ pub struct KindSpec {
 }
 
 impl KindSpec {
+    /// The `ApiResource` for listing / reading this kind.
+    pub fn api_resource(&self) -> kube::core::ApiResource {
+        self.gvk.api_resource(&self.names.plural)
+    }
+
     /// The generic spec for a served kind with no richer description:
     /// STATUS / MESSAGE / AGE, kstatus health, view-only.
     pub fn generic(gvk: Gvk, scope: KindScope, plural: String, short_names: Vec<String>) -> Self {
@@ -263,26 +279,19 @@ impl KindSpec {
 // ---------------------------------------------------------------------------
 
 /// The spec for a built-in Flux kind.
-fn flux_spec(kind: FluxResourceKind) -> Option<KindSpec> {
-    let entry = crate::watcher::RESOURCE_REGISTRY
-        .iter()
-        .find(|e| e.display_name == kind.as_str())?;
-    let (group, version, plural) = crate::kube::get_gvk_for_resource_type(kind.as_str()).ok()?;
-    Some(KindSpec {
+fn flux_spec(kind: FluxResourceKind) -> KindSpec {
+    let resource = kind.api_resource();
+    KindSpec {
         gvk: Gvk {
-            group,
-            version,
+            group: resource.group,
+            version: resource.version,
             kind: kind.as_str().to_string(),
         },
         scope: KindScope::Namespaced,
         names: KindNames {
             kind: kind.as_str().to_string(),
-            plural,
-            short_names: entry
-                .command_aliases
-                .iter()
-                .map(|a| a.to_string())
-                .collect(),
+            plural: resource.plural,
+            short_names: kind.aliases().iter().map(|a| a.to_string()).collect(),
         },
         family: Family::Flux(kind),
         columns: vec![Column::Builtin(BuiltinColumn::Status)],
@@ -295,7 +304,7 @@ fn flux_spec(kind: FluxResourceKind) -> Option<KindSpec> {
             edit: true,
             ..Capabilities::VIEW_ONLY
         },
-    })
+    }
 }
 
 /// The spec for a Flux-adjacent discovered CRD.
@@ -431,10 +440,8 @@ fn resolve_in(token: &str, discovered: &KindCatalog) -> Option<KindSpec> {
     if token.is_empty() {
         return None;
     }
-    if let Some(display) = crate::watcher::get_display_name_for_command(&token)
-        && let Some(kind) = FluxResourceKind::parse_optional(display)
-    {
-        return flux_spec(kind);
+    if let Some(kind) = FluxResourceKind::from_alias(&token) {
+        return Some(flux_spec(kind));
     }
     let extras = super::extra_kinds::global();
     if let Some(kind) = extras.resolve_command(&token)

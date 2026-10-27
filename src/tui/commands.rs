@@ -17,6 +17,7 @@ pub mod submenu_ids {
     pub const POD_DELETE: &str = "pod-delete";
     pub const LOG_CONTAINER: &str = "log-container";
     /// Every popup id (tests check each has a selection handler).
+    #[cfg(test)]
     pub const ALL: &[&str] = &[
         CONTEXT,
         NAMESPACE,

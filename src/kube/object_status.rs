@@ -9,6 +9,7 @@
 //!
 //! Pure functions over JSON so every rule is unit-testable without a cluster.
 
+use crate::kube::conditions::{self, Condition};
 use serde_json::Value;
 use std::fmt;
 
@@ -138,21 +139,17 @@ fn str_at<'a>(obj: &'a Value, pointer: &str) -> &'a str {
         .unwrap_or_default()
 }
 
-/// Find a status condition by type.
-fn condition<'a>(obj: &'a Value, type_: &str) -> Option<&'a Value> {
-    obj.pointer("/status/conditions")?
-        .as_array()?
-        .iter()
-        .find(|c| c.get("type").and_then(Value::as_str) == Some(type_))
+fn condition<'a>(obj: &'a Value, type_: &str) -> Option<Condition<'a>> {
+    conditions::find(obj, type_)
 }
 
 fn condition_is(obj: &Value, type_: &str, status: &str) -> bool {
-    condition(obj, type_).and_then(|c| c.get("status").and_then(Value::as_str)) == Some(status)
+    condition(obj, type_).and_then(Condition::status) == Some(status)
 }
 
 fn condition_message(obj: &Value, type_: &str) -> String {
     condition(obj, type_)
-        .and_then(|c| c.get("message").and_then(Value::as_str))
+        .and_then(Condition::message)
         .unwrap_or_default()
         .to_string()
 }
@@ -163,7 +160,7 @@ fn kind_status(kind: &str, obj: &Value) -> Option<ObjectStatus> {
     use ObjectHealth::*;
     let status = match kind {
         "Deployment" => {
-            if condition(obj, "Progressing").and_then(|c| c.get("reason").and_then(Value::as_str))
+            if condition(obj, "Progressing").and_then(Condition::reason)
                 == Some("ProgressDeadlineExceeded")
             {
                 return Some(ObjectStatus::new(
@@ -296,7 +293,7 @@ fn pod_status(obj: &Value) -> ObjectStatus {
     if let Some(reason) = waiting_reason {
         return ObjectStatus::new(Failed, reason);
     }
-    if condition_is(obj, "Ready", "True") {
+    if conditions::is_true(obj, conditions::READY) {
         ObjectStatus::new(Current, "Pod is ready")
     } else {
         ObjectStatus::new(
@@ -311,10 +308,13 @@ fn pod_status(obj: &Value) -> ObjectStatus {
 /// carries none of them.
 fn conditions_status(obj: &Value) -> Option<ObjectStatus> {
     use ObjectHealth::*;
-    if condition_is(obj, "Stalled", "True") {
-        return Some(ObjectStatus::new(Failed, condition_message(obj, "Stalled")));
+    if conditions::is_true(obj, conditions::STALLED) {
+        return Some(ObjectStatus::new(
+            Failed,
+            condition_message(obj, conditions::STALLED),
+        ));
     }
-    if condition_is(obj, "Reconciling", "True") {
+    if conditions::is_true(obj, conditions::RECONCILING) {
         return Some(ObjectStatus::new(
             InProgress,
             condition_message(obj, "Reconciling"),
@@ -322,7 +322,7 @@ fn conditions_status(obj: &Value) -> Option<ObjectStatus> {
     }
     let ready = condition(obj, "Ready")?;
     let message = condition_message(obj, "Ready");
-    Some(match ready.get("status").and_then(Value::as_str) {
+    Some(match ready.status() {
         Some("True") => ObjectStatus::new(Current, message),
         Some("False") => ObjectStatus::new(Failed, message),
         _ => ObjectStatus::new(InProgress, message),

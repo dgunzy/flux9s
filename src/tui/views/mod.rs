@@ -20,6 +20,7 @@ mod inventory;
 mod kind_list;
 mod logs;
 mod ownership;
+pub mod props;
 mod pulse;
 mod quit_confirm;
 pub mod resource_fields;

@@ -235,18 +235,8 @@ strip = true
 # that CI (.github/workflows/ci.yml), `just clippy`, and editors all see the same
 # rules — the two command lines used to carry duplicate `-A` lists that could drift.
 [lints.rust]
-dead_code = "allow"
-renamed_and_removed_lints = "allow"
 
 [lints.clippy]
-# Pre-existing allowances, moved verbatim from the old `-A` flags.
-too_many_arguments = "allow"
-items_after_test_module = "allow"
-type_complexity = "allow"
-should_implement_trait = "allow"
-collapsible_if = "allow"
-len_zero = "allow"
-assertions_on_constants = "allow"
 
 # Panic safety. Non-test code currently has zero of these; denying them keeps it
 # that way and forces any future exception to be an explicit, justified #[allow].
