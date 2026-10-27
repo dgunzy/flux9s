@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parse as resource keys; one of two key parsers rejected them
 - AGE columns agree everywhere: kind lists and the unmanaged/orphaned view
   show years (`2y`) like the Flux list, instead of `800d`
+- ArtifactGenerators can be suspended and resumed (`s` / `r`) and show
+  SUSPENDED: Flux 2.10's `flux suspend artifact generator` uses the
+  `source.extensions.fluxcd.io/reconcile` annotation, which flux9s now reads
+  and writes
+- `s` / `r` work on every kind with `spec.suspend` — Bucket, HelmChart,
+  ImageRepository, ImagePolicy, Alert, Provider, and Receiver were refused.
+  A test checks the suspend mechanism against the CRDs
+- An ArtifactGenerator's graph shows the ExternalArtifacts it generates
+  (it showed none), including ones in other namespaces (Flux 2.10)
 
 ### Changed
 - Every Flux kind is declared once (`flux_kinds!`): its API group, version,

@@ -23,3 +23,67 @@ spec:
       copy:
         - from: "@repo/apps/staging/**"
           to: "@artifact/"
+---
+# Cross-namespace artifacts (Flux 2.10): the generator lives in
+# flux-resources, its ExternalArtifact in flux-artifacts. The controller
+# checks (SubjectAccessReview) that spec.serviceAccountName may write
+# ExternalArtifacts in the target namespace.
+#
+#   ArtifactGenerator/flux-resources/cross-namespace ─► ExternalArtifact/flux-artifacts/apps-shared
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flux-artifacts
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: artifact-writer
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: artifact-writer
+  namespace: flux-artifacts
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+rules:
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["externalartifacts", "externalartifacts/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: artifact-writer
+  namespace: flux-artifacts
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: artifact-writer
+subjects:
+  - kind: ServiceAccount
+    name: artifact-writer
+    namespace: flux-resources
+---
+apiVersion: source.extensions.fluxcd.io/v1beta1
+kind: ArtifactGenerator
+metadata:
+  name: cross-namespace
+  namespace: flux-resources
+  labels: {app.kubernetes.io/managed-by: flux9s-dev}
+spec:
+  serviceAccountName: artifact-writer
+  sources:
+    - alias: repo
+      kind: GitRepository
+      name: flux-system
+  artifacts:
+    - name: apps-shared
+      namespace: flux-artifacts
+      copy:
+        - from: "@repo/apps/base/**"
+          to: "@artifact/"

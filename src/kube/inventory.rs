@@ -157,11 +157,16 @@ fn parse_inventory_entry(entry: &Value) -> Option<InventoryEntry> {
             .and_then(|ns| ns.as_str())
             .unwrap_or("")
             .to_string();
+        // ArtifactGenerator entries carry no apiVersion: a Flux kind's is
+        // known; anything else is assumed core.
         let api_version = entry
             .get("apiVersion")
             .and_then(|av| av.as_str())
-            .unwrap_or("v1")
-            .to_string();
+            .map(str::to_string)
+            .or_else(|| {
+                FluxResourceKind::parse_optional(kind).map(|k| k.api_resource().api_version)
+            })
+            .unwrap_or_else(|| "v1".to_string());
 
         return Some(InventoryEntry {
             kind: kind.to_string(),
@@ -446,6 +451,44 @@ mod tests {
         assert_eq!(groups.workloads.len(), 2);
         assert_eq!(groups.workloads[0].kind, "Deployment");
         assert_eq!(groups.workloads[1].kind, "StatefulSet");
+    }
+
+    #[test]
+    fn artifact_generator_inventory_keeps_namespaces_and_flux_api_versions() {
+        // Flux 2.10 can generate artifacts in other namespaces.
+        let ag = json!({"status": {"inventory": [
+            {"kind": "ExternalArtifact", "name": "apps-base", "namespace": "flux-resources",
+             "digest": "sha256:1", "filename": "1.tar.gz"},
+            {"kind": "ExternalArtifact", "name": "apps-shared", "namespace": "flux-artifacts",
+             "digest": "sha256:2", "filename": "2.tar.gz"}
+        ]}});
+        let entries = extract_inventory(&ag).unwrap();
+        let found: Vec<_> = entries
+            .iter()
+            .map(|e| {
+                (
+                    e.namespace.as_str(),
+                    e.name.as_str(),
+                    e.api_version.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("flux-resources", "apps-base", "source.toolkit.fluxcd.io/v1"),
+                (
+                    "flux-artifacts",
+                    "apps-shared",
+                    "source.toolkit.fluxcd.io/v1"
+                ),
+            ]
+        );
+        assert_eq!(
+            group_inventory(entries).flux.len(),
+            2,
+            "navigable Flux nodes"
+        );
     }
 
     #[test]

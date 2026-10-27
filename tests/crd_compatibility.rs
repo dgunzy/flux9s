@@ -436,3 +436,49 @@ fn test_stateless_resource_override_logic() {
     };
     assert_eq!(overridden_ready, Some(true));
 }
+
+/// `FluxResourceKind::suspend_switch` agrees with the vendored CRDs: a kind
+/// is suspended through `spec.suspend` exactly when its CRD has the field.
+/// A CRD update that adds or drops `spec.suspend` fails here.
+#[test]
+fn suspend_switches_match_the_crds() {
+    use flux9s::models::flux_resource_kind::SuspendSwitch;
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crds");
+    let mut checked = std::collections::HashSet::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+        for doc in text.split("\n---") {
+            let Ok(crd) = flux9s::yaml::from_str::<serde_json::Value>(doc) else {
+                continue;
+            };
+            if crd["kind"] != "CustomResourceDefinition" {
+                continue;
+            }
+            let kind_name = crd["spec"]["names"]["kind"].as_str().unwrap();
+            let Some(kind) = FluxResourceKind::parse_optional(kind_name) else {
+                continue;
+            };
+            let storage = crd["spec"]["versions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["storage"] == true)
+                .unwrap();
+            let has_field = storage
+                .pointer("/schema/openAPIV3Schema/properties/spec/properties/suspend")
+                .is_some();
+            assert_eq!(
+                kind.suspend_switch() == Some(SuspendSwitch::Spec),
+                has_field,
+                "{kind}: spec.suspend in CRD = {has_field}, switch = {:?}",
+                kind.suspend_switch()
+            );
+            checked.insert(kind);
+        }
+    }
+    assert_eq!(
+        checked.len(),
+        FluxResourceKind::ALL.len(),
+        "a CRD is missing: {checked:?}"
+    );
+}

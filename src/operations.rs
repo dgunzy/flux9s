@@ -135,25 +135,11 @@ impl FluxOperation for SuspendOperation {
             namespace
         );
 
-        use crate::models::FluxResourceKind;
-
+        let switch = FluxResourceKind::parse_optional(resource_type)
+            .and_then(|kind| kind.suspend_switch())
+            .with_context(|| format!("{resource_type} can't be suspended"))?;
         let api = get_resource_api(client, resource_type, namespace, name).await?;
-
-        let uses_annotation = FluxResourceKind::parse_optional(resource_type)
-            .map(|k| k.uses_annotation_suspend())
-            .unwrap_or(false);
-
-        let patch = if uses_annotation {
-            json!({
-                "metadata": {
-                    "annotations": {
-                        (FluxResourceKind::RECONCILE_ANNOTATION): "disabled"
-                    }
-                }
-            })
-        } else {
-            json!({ "spec": { "suspend": true } })
-        };
+        let patch = switch.patch(true);
 
         api.patch(name, &PatchParams::default(), &Patch::Merge(patch))
             .await
@@ -216,25 +202,11 @@ impl FluxOperation for ResumeOperation {
             namespace
         );
 
-        use crate::models::FluxResourceKind;
-
+        let switch = FluxResourceKind::parse_optional(resource_type)
+            .and_then(|kind| kind.suspend_switch())
+            .with_context(|| format!("{resource_type} can't be suspended"))?;
         let api = get_resource_api(client, resource_type, namespace, name).await?;
-
-        let uses_annotation = FluxResourceKind::parse_optional(resource_type)
-            .map(|k| k.uses_annotation_suspend())
-            .unwrap_or(false);
-
-        let patch = if uses_annotation {
-            json!({
-                "metadata": {
-                    "annotations": {
-                        (FluxResourceKind::RECONCILE_ANNOTATION): "enabled"
-                    }
-                }
-            })
-        } else {
-            json!({ "spec": { "suspend": false } })
-        };
+        let patch = switch.patch(false);
 
         api.patch(name, &PatchParams::default(), &Patch::Merge(patch))
             .await
@@ -954,9 +926,23 @@ mod tests {
         assert!(resume.is_valid_for(FluxResourceKind::ResourceSet.as_str()));
         assert!(resume.is_valid_for(FluxResourceKind::ResourceSetInputProvider.as_str()));
 
-        // Suspend/resume should not work for read-only or notification resources
+        // Every kind with `spec.suspend` (notification kinds included), and
+        // ArtifactGenerator through its reconcile annotation (Flux 2.10)
+        for kind in [
+            FluxResourceKind::Alert,
+            FluxResourceKind::Provider,
+            FluxResourceKind::Bucket,
+            FluxResourceKind::HelmChart,
+            FluxResourceKind::ImageRepository,
+            FluxResourceKind::ArtifactGenerator,
+        ] {
+            assert!(suspend.is_valid_for(kind.as_str()), "{kind}");
+            assert!(resume.is_valid_for(kind.as_str()), "{kind}");
+        }
+
+        // Nothing to suspend: reports and generated artifacts
         assert!(!suspend.is_valid_for(FluxResourceKind::FluxReport.as_str()));
-        assert!(!suspend.is_valid_for(FluxResourceKind::Alert.as_str()));
+        assert!(!suspend.is_valid_for(FluxResourceKind::ExternalArtifact.as_str()));
         assert!(!resume.is_valid_for(FluxResourceKind::FluxReport.as_str()));
 
         // Delete should work for all resources
