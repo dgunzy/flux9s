@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-10-27
+
+# Version 1.4.5 Changelog
+
+## Added
+- Artifact generation suspend and resume functionality
+
+## Changed
+- Code hygiene improvements and cleanup
+
 ### Fixed
 - `:ks`, `:hr`, `:all`, and other kind filters typed from any view (events,
   pulse, logs, YAML, describe, favorites, …) now show the Flux list; before,
