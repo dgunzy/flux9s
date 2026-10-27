@@ -109,10 +109,7 @@ async fn discover_upstream_resources(
 
     let flux_kind = FluxResourceKind::parse_optional(kind);
 
-    if matches!(
-        flux_kind,
-        Some(FluxResourceKind::Kustomization) | Some(FluxResourceKind::HelmRelease)
-    ) {
+    if flux_kind.is_some_and(|kind| kind.has_source_ref()) {
         // Use trace_object to discover upstream relationships
         // This reuses the existing trace logic
         let resource_name = obj_value
@@ -159,33 +156,33 @@ async fn discover_upstream_resources(
                             &source.namespace,
                             &source_api_resource,
                         );
-                        if let Ok(source_obj) = source_api.get(&source.name).await {
-                            if let Ok(source_value) = serde_json::to_value(&source_obj) {
-                                // Check for upstream node (external source like GitHub URL)
-                                if let Some((upstream_name, upstream_url)) =
-                                    extract_upstream(&source_value)
-                                {
-                                    let upstream_id = format!("upstream:{}", upstream_name);
-                                    if !graph.node_index.contains_key(&upstream_id) {
-                                        let upstream_node = GraphNode {
-                                            id: upstream_id.clone(),
-                                            kind: "GitHub".to_string(),
-                                            name: upstream_name,
-                                            namespace: source.namespace.clone(),
-                                            node_type: NodeType::Upstream,
-                                            ready: None,
-                                            position: None,
-                                            description: Some(upstream_url),
-                                        };
-                                        graph.add_node(upstream_node);
+                        if let Ok(source_obj) = source_api.get(&source.name).await
+                            && let Ok(source_value) = serde_json::to_value(&source_obj)
+                        {
+                            // Check for upstream node (external source like GitHub URL)
+                            if let Some((upstream_name, upstream_url)) =
+                                extract_upstream(&source_value)
+                            {
+                                let upstream_id = format!("upstream:{}", upstream_name);
+                                if !graph.node_index.contains_key(&upstream_id) {
+                                    let upstream_node = GraphNode {
+                                        id: upstream_id.clone(),
+                                        kind: "GitHub".to_string(),
+                                        name: upstream_name,
+                                        namespace: source.namespace.clone(),
+                                        node_type: NodeType::Upstream,
+                                        ready: None,
+                                        position: None,
+                                        description: Some(upstream_url),
+                                    };
+                                    graph.add_node(upstream_node);
 
-                                        // Add edge from upstream to source (top-down flow)
-                                        graph.add_edge(GraphEdge {
-                                            from: upstream_id,
-                                            to: source_id.clone(),
-                                            relationship: RelationshipType::SourcedFrom,
-                                        });
-                                    }
+                                    // Add edge from upstream to source (top-down flow)
+                                    graph.add_edge(GraphEdge {
+                                        from: upstream_id,
+                                        to: source_id.clone(),
+                                        relationship: RelationshipType::SourcedFrom,
+                                    });
                                 }
                             }
                         }
@@ -249,25 +246,24 @@ async fn discover_upstream_resources(
             if let (Some(owner_kind), Some(owner_name)) = (
                 owner_ref.get("kind").and_then(|k| k.as_str()),
                 owner_ref.get("name").and_then(|n| n.as_str()),
-            ) {
-                if is_flux_resource(owner_kind) {
-                    // This resource is managed by another Flux resource
-                    if let Some(owner_node) =
-                        fetch_flux_resource_as_graph_node(client, owner_kind, namespace, owner_name)
-                            .await?
-                    {
-                        let owner_id = owner_node.id.clone();
-                        if !graph.node_index.contains_key(&owner_id) {
-                            graph.add_node(owner_node);
-                        }
-
-                        // Add edge from owner to this resource
-                        graph.add_edge(GraphEdge {
-                            from: owner_id,
-                            to: from_node_id.to_string(),
-                            relationship: RelationshipType::ManagedBy,
-                        });
+            ) && is_flux_resource(owner_kind)
+            {
+                // This resource is managed by another Flux resource
+                if let Some(owner_node) =
+                    fetch_flux_resource_as_graph_node(client, owner_kind, namespace, owner_name)
+                        .await?
+                {
+                    let owner_id = owner_node.id.clone();
+                    if !graph.node_index.contains_key(&owner_id) {
+                        graph.add_node(owner_node);
                     }
+
+                    // Add edge from owner to this resource
+                    graph.add_edge(GraphEdge {
+                        from: owner_id,
+                        to: from_node_id.to_string(),
+                        relationship: RelationshipType::ManagedBy,
+                    });
                 }
             }
         }
@@ -953,48 +949,8 @@ fn create_graph_node_from_value(
         .unwrap_or(namespace)
         .to_string();
 
-    // Extract status
-    let ready = obj_value
-        .get("status")
-        .and_then(|s| s.get("conditions"))
-        .and_then(|c| c.as_array())
-        .and_then(|arr| {
-            arr.iter()
-                .find(|c| c.get("type").and_then(|t| t.as_str()) == Some("Ready"))
-        })
-        .and_then(|c| c.get("status").and_then(|s| s.as_str()))
-        .map(|s| s == "True");
-
-    // Extract description from spec based on resource type
-    let description = obj_value.get("spec").and_then(|spec| {
-        // For GitRepository/OCIRepository, use URL
-        if kind == "GitRepository" || kind == "OCIRepository" {
-            spec.get("url")
-                .and_then(|u| u.as_str())
-                .map(|s| s.to_string())
-        }
-        // For Kustomization, use path
-        else if kind == "Kustomization" {
-            spec.get("path")
-                .and_then(|p| p.as_str())
-                .map(|s| s.to_string())
-        }
-        // For HelmRelease, the list's CHART (name or OCI URL), else VERSION —
-        // the same extraction as the table.
-        else if kind == "HelmRelease" {
-            let fields = FluxResourceKind::HelmRelease.extract_fields(obj_value);
-            fields
-                .get(crate::models::flux_resource_kind::field_names::CHART)
-                .map(|chart| format!("chart: {chart}"))
-                .or_else(|| {
-                    fields
-                        .get(crate::models::flux_resource_kind::field_names::VERSION)
-                        .map(|version| format!("version: {version}"))
-                })
-        } else {
-            None
-        }
-    });
+    let ready = crate::kube::conditions::is_ready(obj_value);
+    let description = node_description(&kind, obj_value);
 
     Ok(GraphNode {
         id: format!("{}:{}:{}", kind, ns, name),
@@ -1006,6 +962,34 @@ fn create_graph_node_from_value(
         position: None,
         description,
     })
+}
+
+/// The one-line summary under a node: a repository's URL, a
+/// Kustomization's path, or a HelmRelease's chart (else version) — the same
+/// extraction as the list's columns.
+fn node_description(kind: &str, obj: &Value) -> Option<String> {
+    use crate::models::flux_resource_kind::field_names::{CHART, VERSION};
+    let spec_str = |field: &str| {
+        obj.pointer(&format!("/spec/{field}"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    match FluxResourceKind::parse_optional(kind)? {
+        FluxResourceKind::GitRepository | FluxResourceKind::OCIRepository => spec_str("url"),
+        FluxResourceKind::Kustomization => spec_str("path"),
+        FluxResourceKind::HelmRelease => {
+            let fields = FluxResourceKind::HelmRelease.extract_fields(obj);
+            fields
+                .get(CHART)
+                .map(|chart| format!("chart: {chart}"))
+                .or_else(|| {
+                    fields
+                        .get(VERSION)
+                        .map(|version| format!("version: {version}"))
+                })
+        }
+        _ => None,
+    }
 }
 
 /// Fetch a Flux resource and convert to graph node

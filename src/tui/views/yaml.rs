@@ -2,7 +2,7 @@
 
 use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
-use crate::watcher::ResourceState;
+use crate::tui::views::props::{Fetched, TextScroll, Watched};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -10,7 +10,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
-use std::collections::HashMap;
 
 /// Find the (0-based) indexes of lines containing the search query (case-insensitive).
 pub(crate) fn find_match_lines<S: AsRef<str>>(lines: &[S], query: &str) -> Vec<usize> {
@@ -67,15 +66,24 @@ pub(crate) fn decorate_title_with_search(title: &mut String, search: &TextSearch
 pub fn render_resource_yaml(
     f: &mut Frame,
     area: Rect,
-    selected_resource_key: &Option<String>,
-    state: &ResourceState,
-    resource_objects: &HashMap<String, serde_json::Value>,
-    yaml_fetched: Option<&serde_json::Value>,
-    yaml_loading: bool,
-    yaml_scroll_offset: &mut usize,
-    search: &mut TextSearchState,
+    watched: Watched<'_>,
+    yaml: Fetched<'_, serde_json::Value>,
+    text: TextScroll<'_>,
     theme: &Theme,
 ) {
+    let Watched {
+        key: selected_resource_key,
+        state,
+        objects: resource_objects,
+    } = watched;
+    let Fetched {
+        data: yaml_fetched,
+        loading: yaml_loading,
+    } = yaml;
+    let TextScroll {
+        offset: yaml_scroll_offset,
+        search,
+    } = text;
     let key = match selected_resource_key {
         Some(k) => k,
         None => {
@@ -145,12 +153,9 @@ pub fn render_resource_yaml(
 
     let resource = state.get(key);
     // Native objects aren't in the watched state; title them from the key.
-    let mut title = match (
-        &resource,
-        crate::tui::views::helpers::key_kind_and_name(key),
-    ) {
+    let mut title = match (&resource, crate::watcher::ResourceKey::parse(key)) {
         (Some(r), _) => format!("YAML - {} - {}", r.resource_type, r.name),
-        (None, Some((kind, name))) => format!("YAML - {kind} - {name}"),
+        (None, Some(key)) => format!("YAML - {} - {}", key.resource_type, key.name),
         (None, None) => "YAML".to_string(),
     };
 

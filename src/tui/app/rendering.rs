@@ -6,6 +6,7 @@
 use super::core::App;
 use super::state::{HealthFilter, View};
 use crate::tui::keybindings::calculate_footer_height;
+use crate::tui::views::props::{Fetched, ListCursor, TextScroll, Watched};
 use crate::tui::views::{self, *};
 use ratatui::{
     Frame,
@@ -206,19 +207,21 @@ impl App {
             render_header(
                 f,
                 chunks[0],
-                &self.state,
-                &self.controller_pods,
-                &self.context,
-                &self.namespace,
-                self.flux_filter(),
-                &self.view_state.kind_filter,
-                resources.len(),
-                health_percentage,
-                health_filter_status,
-                self.config.read_only,
+                HeaderProps {
+                    state: &self.state,
+                    controller_pods: &self.controller_pods,
+                    context: &self.context,
+                    namespace: &self.namespace,
+                    filter: self.flux_filter(),
+                    kind_filter: &self.view_state.kind_filter,
+                    filtered_count: resources.len(),
+                    health_percentage,
+                    health_filter: health_filter_status,
+                    read_only: self.config.read_only,
+                    no_icons: self.config.ui.no_icons,
+                    browsing: browsing.as_deref(),
+                },
                 &self.theme,
-                self.config.ui.no_icons,
-                browsing.as_deref(),
             );
         }
         self.render_main(f, chunks[1]);
@@ -226,18 +229,20 @@ impl App {
         render_footer(
             f,
             chunks[2],
-            self.ui_state.command_mode,
-            &self.ui_state.command_buffer,
-            self.view_state.filter_mode,
-            &self.view_state.filter,
-            self.view_state.text_search.input_mode,
-            &self.view_state.text_search.query,
-            self.ui_state.show_help,
-            self.ui_state.show_quit_confirm,
-            confirmation_message.as_deref(),
-            &self.ui_state.status_message,
+            FooterProps {
+                command_mode: self.ui_state.command_mode,
+                command_buffer: &self.ui_state.command_buffer,
+                filter_mode: self.view_state.filter_mode,
+                filter: &self.view_state.filter,
+                search_input_mode: self.view_state.text_search.input_mode,
+                search_query: &self.view_state.text_search.query,
+                show_help: self.ui_state.show_help,
+                show_quit_confirm: self.ui_state.show_quit_confirm,
+                confirmation_message: confirmation_message.as_deref(),
+                status_message: &self.ui_state.status_message,
+                nav_commands: &footer_commands,
+            },
             &self.theme,
-            &footer_commands,
         );
     }
 
@@ -352,17 +357,21 @@ impl App {
                     render_resource_list(
                         f,
                         area,
-                        &resources,
-                        self.view_state.selected_index,
-                        &mut self.view_state.scroll_offset,
-                        &self.view_state.kind_filter,
-                        &self.resource_objects,
+                        ResourceListProps {
+                            resources: &resources,
+                            kind_filter: &self.view_state.kind_filter,
+                            resource_objects: &self.resource_objects,
+                            no_icons: self.config.ui.no_icons,
+                            favorites: &self.selection_state.favorites,
+                            sort_field: self.view_state.sort_field,
+                            sort_reverse: self.view_state.sort_reverse,
+                            access_notice: access_notice.as_deref(),
+                        },
+                        ListCursor::new(
+                            self.view_state.selected_index,
+                            &mut self.view_state.scroll_offset,
+                        ),
                         &self.theme,
-                        self.config.ui.no_icons,
-                        &self.selection_state.favorites,
-                        self.view_state.sort_field,
-                        self.view_state.sort_reverse,
-                        access_notice.as_deref(),
                     );
                 }
                 View::ResourceDetail => {
@@ -379,14 +388,20 @@ impl App {
                     render_resource_describe(
                         f,
                         area,
-                        &self.selection_state.selected_resource_key,
-                        &self.state,
-                        &self.resource_objects,
-                        self.async_state.describe.result(),
-                        self.async_state.describe.is_loading(),
+                        Watched {
+                            key: &self.selection_state.selected_resource_key,
+                            state: &self.state,
+                            objects: &self.resource_objects,
+                        },
+                        Fetched::new(
+                            self.async_state.describe.result(),
+                            self.async_state.describe.is_loading(),
+                        ),
                         self.describe_manager_pending(),
-                        &mut self.view_state.describe_scroll_offset,
-                        &mut self.view_state.text_search,
+                        TextScroll::new(
+                            &mut self.view_state.describe_scroll_offset,
+                            &mut self.view_state.text_search,
+                        ),
                         &self.theme,
                     );
                 }
@@ -394,13 +409,19 @@ impl App {
                     render_resource_yaml(
                         f,
                         area,
-                        &self.selection_state.selected_resource_key,
-                        &self.state,
-                        &self.resource_objects,
-                        self.async_state.yaml.result(),
-                        self.async_state.yaml.is_loading(),
-                        &mut self.view_state.yaml_scroll_offset,
-                        &mut self.view_state.text_search,
+                        Watched {
+                            key: &self.selection_state.selected_resource_key,
+                            state: &self.state,
+                            objects: &self.resource_objects,
+                        },
+                        Fetched::new(
+                            self.async_state.yaml.result(),
+                            self.async_state.yaml.is_loading(),
+                        ),
+                        TextScroll::new(
+                            &mut self.view_state.yaml_scroll_offset,
+                            &mut self.view_state.text_search,
+                        ),
                         &self.theme,
                     );
                 }
@@ -412,14 +433,15 @@ impl App {
                     views::render_kind_list(
                         f,
                         area,
-                        request.map(|r| &r.spec),
-                        &request.and_then(|r| r.namespace.clone()),
-                        self.async_state.kind_list.result(),
-                        &rows,
-                        self.view_state.kind_list_error.as_deref(),
-                        self.async_state.kind_list.is_loading(),
-                        self.view_state.selected_index,
-                        &mut scroll_offset,
+                        KindListProps {
+                            spec: request.map(|r| &r.spec),
+                            namespace: &request.and_then(|r| r.namespace.clone()),
+                            snapshot: self.async_state.kind_list.result(),
+                            rows: &rows,
+                            error: self.view_state.kind_list_error.as_deref(),
+                            loading: self.async_state.kind_list.is_loading(),
+                        },
+                        ListCursor::new(self.view_state.selected_index, &mut scroll_offset),
                         &self.theme,
                     );
                     self.view_state.scroll_offset = scroll_offset;
@@ -431,13 +453,14 @@ impl App {
                     views::render_ownership_list(
                         f,
                         area,
-                        self.view_state.sweep_request.as_ref(),
-                        self.async_state.sweep.result(),
-                        &rows,
-                        self.async_state.sweep.is_loading(),
-                        &self.view_state.filter,
-                        self.view_state.selected_index,
-                        &mut scroll_offset,
+                        OwnershipListProps {
+                            request: self.view_state.sweep_request.as_ref(),
+                            result: self.async_state.sweep.result(),
+                            rows: &rows,
+                            loading: self.async_state.sweep.is_loading(),
+                            filter: &self.view_state.filter,
+                        },
+                        ListCursor::new(self.view_state.selected_index, &mut scroll_offset),
                         &self.theme,
                     );
                     self.view_state.scroll_offset = scroll_offset;
@@ -447,10 +470,14 @@ impl App {
                         f,
                         area,
                         &self.selection_state.selected_resource_key,
-                        self.async_state.helm_values.result(),
-                        self.async_state.helm_values.is_loading(),
-                        &mut self.view_state.helm_values_scroll_offset,
-                        &mut self.view_state.text_search,
+                        Fetched::new(
+                            self.async_state.helm_values.result(),
+                            self.async_state.helm_values.is_loading(),
+                        ),
+                        TextScroll::new(
+                            &mut self.view_state.helm_values_scroll_offset,
+                            &mut self.view_state.text_search,
+                        ),
                         &self.theme,
                     );
                 }
@@ -458,14 +485,17 @@ impl App {
                     views::trace::render_resource_trace(
                         f,
                         area,
-                        &self.selection_state.selected_resource_key,
-                        self.async_state
-                            .trace
-                            .result()
-                            .and_then(super::state::TraceResponse::traced),
-                        self.async_state.trace.is_loading(),
-                        &mut self.view_state.trace_scroll_offset,
-                        &mut self.view_state.text_search,
+                        Fetched::new(
+                            self.async_state
+                                .trace
+                                .result()
+                                .and_then(super::state::TraceResponse::traced),
+                            self.async_state.trace.is_loading(),
+                        ),
+                        TextScroll::new(
+                            &mut self.view_state.trace_scroll_offset,
+                            &mut self.view_state.text_search,
+                        ),
                         &self.theme,
                     );
                 }
@@ -474,28 +504,24 @@ impl App {
                     render_resource_list(
                         f,
                         area,
-                        &resources,
-                        self.view_state.selected_index,
-                        &mut self.view_state.scroll_offset,
-                        &self.view_state.kind_filter,
-                        &self.resource_objects,
-                        &self.theme,
-                        self.config.ui.no_icons,
-                        &self.selection_state.favorites,
-                        self.view_state.sort_field,
-                        self.view_state.sort_reverse,
-                        // Favorites is curated; an empty list there isn't an RBAC
+                        ResourceListProps { resources: &resources, kind_filter: &self.view_state.kind_filter, resource_objects: &self.resource_objects, no_icons: self.config.ui.no_icons, favorites: &self.selection_state.favorites, sort_field: self.view_state.sort_field, sort_reverse: self.view_state.sort_reverse, access_notice: // Favorites is curated; an empty list there isn't an RBAC
                         // signal, so keep the neutral empty-state.
-                        None,
+                        None },
+                        ListCursor::new(
+                            self.view_state.selected_index,
+                            &mut self.view_state.scroll_offset,
+                        ),
+                        &self.theme,
                     );
                 }
                 View::ResourceGraph => {
                     views::render_resource_graph(
                         f,
                         area,
-                        &self.selection_state.selected_resource_key,
-                        self.async_state.graph.result().map(|r| &r.graph),
-                        self.async_state.graph.is_loading(),
+                        Fetched::new(
+                            self.async_state.graph.result().map(|r| &r.graph),
+                            self.async_state.graph.is_loading(),
+                        ),
                         &mut self.view_state.graph_scroll_offset,
                         self.view_state.graph_focus_index,
                         self.view_state.graph_highlight.as_ref(),
@@ -544,11 +570,12 @@ impl App {
                     views::render_controller_logs(
                         f,
                         area,
-                        self.logs.session.as_ref(),
-                        self.logs.is_loading(),
+                        Fetched::new(self.logs.session.as_ref(), self.logs.is_loading()),
                         self.logs.follow,
-                        &mut self.view_state.log_scroll_offset,
-                        &mut self.view_state.text_search,
+                        TextScroll::new(
+                            &mut self.view_state.log_scroll_offset,
+                            &mut self.view_state.text_search,
+                        ),
                         &self.theme,
                     );
                 }
@@ -557,12 +584,16 @@ impl App {
                     views::render_kube_events(
                         f,
                         area,
-                        &events,
-                        self.kube_events.len(),
-                        self.view_state.selected_index,
-                        &mut self.view_state.scroll_offset,
-                        &self.view_state.filter,
-                        self.namespace.is_none(),
+                        EventListProps {
+                            events: &events,
+                            total_count: self.kube_events.len(),
+                            filter: &self.view_state.filter,
+                            all_namespaces: self.namespace.is_none(),
+                        },
+                        ListCursor::new(
+                            self.view_state.selected_index,
+                            &mut self.view_state.scroll_offset,
+                        ),
                         &self.theme,
                     );
                 }
@@ -585,13 +616,17 @@ impl App {
                         f,
                         area,
                         &self.view_state.inventory_rows,
-                        self.async_state
-                            .inventory_status
-                            .result()
-                            .map(Vec::as_slice),
-                        self.async_state.inventory_status.is_loading(),
-                        self.view_state.selected_index,
-                        &mut self.view_state.scroll_offset,
+                        Fetched::new(
+                            self.async_state
+                                .inventory_status
+                                .result()
+                                .map(Vec::as_slice),
+                            self.async_state.inventory_status.is_loading(),
+                        ),
+                        ListCursor::new(
+                            self.view_state.selected_index,
+                            &mut self.view_state.scroll_offset,
+                        ),
                         &self.theme,
                     );
                 }
@@ -599,11 +634,15 @@ impl App {
                     views::render_workload_detail(
                         f,
                         area,
-                        self.async_state.workload.result(),
+                        Fetched::new(
+                            self.async_state.workload.result(),
+                            self.async_state.workload.is_loading(),
+                        ),
                         self.async_state.workload_metrics.result(),
-                        self.async_state.workload.is_loading(),
-                        &mut self.view_state.workload_scroll_offset,
-                        &mut self.view_state.text_search,
+                        TextScroll::new(
+                            &mut self.view_state.workload_scroll_offset,
+                            &mut self.view_state.text_search,
+                        ),
                         &self.theme,
                     );
                 }
@@ -615,12 +654,16 @@ impl App {
                     views::render_pulse(
                         f,
                         area,
-                        &resources,
-                        flux_report.as_ref(),
-                        &self.controller_pods.get_all_pods(),
-                        self.namespace.as_deref(),
-                        &mut self.view_state.pulse_scroll_offset,
-                        &mut self.view_state.text_search,
+                        PulseProps {
+                            resources: &resources,
+                            flux_report: flux_report.as_ref(),
+                            controller_pods: &self.controller_pods.get_all_pods(),
+                            namespace: self.namespace.as_deref(),
+                        },
+                        TextScroll::new(
+                            &mut self.view_state.pulse_scroll_offset,
+                            &mut self.view_state.text_search,
+                        ),
                         &self.theme,
                     );
                 }

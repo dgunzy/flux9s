@@ -23,9 +23,24 @@ pub enum ScrollModel {
     Fixed,
 }
 
-/// View types for the application
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum View {
+/// Declares the views once, so [`View::ALL`] can't miss one (tests and
+/// any per-view table iterate it).
+macro_rules! views {
+    ($( $(#[$doc:meta])* $variant:ident, )+) => {
+        /// View types for the application
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub enum View {
+            $( $(#[$doc])* $variant, )+
+        }
+
+        impl View {
+            /// Every view.
+            pub const ALL: &'static [View] = &[$(View::$variant),+];
+        }
+    };
+}
+
+views! {
     ResourceList,
     ResourceDetail,
     ResourceDescribe,
@@ -109,7 +124,17 @@ impl View {
             View::Logs => Some(&mut vs.log_scroll_offset),
             View::WorkloadDetail => Some(&mut vs.workload_scroll_offset),
             View::Pulse => Some(&mut vs.pulse_scroll_offset),
-            _ => None,
+            View::ResourceList
+            | View::ResourceDetail
+            | View::ResourceGraph
+            | View::ResourceFavorites
+            | View::EventList
+            | View::WorkloadList
+            | View::InventoryList
+            | View::KindList
+            | View::OwnershipList
+            | View::ResourceEdit
+            | View::Help => None,
         }
     }
 
@@ -120,40 +145,113 @@ impl View {
         crate::tui::app::actions::view_layout(self)
     }
 
-    /// Whether this is a list-style view (the main resource list or favorites)
-    /// from which resources are selected and opened.
+    /// Whether this is a list of watched Flux resources (the main list or
+    /// favorites), from which resources are selected and opened.
     pub fn is_list_view(self) -> bool {
-        matches!(self, View::ResourceList | View::ResourceFavorites)
+        match self {
+            View::ResourceList | View::ResourceFavorites => true,
+            View::ResourceDetail
+            | View::ResourceDescribe
+            | View::ResourceYAML
+            | View::ResourceTrace
+            | View::ResourceGraph
+            | View::ResourceHistory
+            | View::EventList
+            | View::Logs
+            | View::WorkloadList
+            | View::WorkloadDetail
+            | View::InventoryList
+            | View::Pulse
+            | View::HelmValues
+            | View::KindList
+            | View::OwnershipList
+            | View::ResourceEdit
+            | View::Help => false,
+        }
     }
 
     /// Whether `/` opens an in-view text search (YAML/describe/trace/logs)
     /// rather than the resource-list filter.
     pub fn is_text_search_view(self) -> bool {
-        matches!(
-            self,
+        match self {
             View::ResourceYAML
-                | View::ResourceDescribe
-                | View::ResourceTrace
-                | View::Logs
-                | View::WorkloadDetail
-                | View::Pulse
-                | View::HelmValues
-        )
+            | View::ResourceDescribe
+            | View::ResourceTrace
+            | View::Logs
+            | View::WorkloadDetail
+            | View::Pulse
+            | View::HelmValues => true,
+            View::ResourceList
+            | View::ResourceDetail
+            | View::ResourceGraph
+            | View::ResourceFavorites
+            | View::ResourceHistory
+            | View::EventList
+            | View::WorkloadList
+            | View::InventoryList
+            | View::KindList
+            | View::OwnershipList
+            | View::ResourceEdit
+            | View::Help => false,
+        }
     }
 
     /// Whether this is a nested detail-style view opened from a list — i.e. one
     /// that Back/Esc should pop back to the list (or graph) rather than quit.
     pub fn is_nested_view(self) -> bool {
-        matches!(
-            self,
+        match self {
             View::ResourceDetail
-                | View::ResourceDescribe
-                | View::ResourceYAML
-                | View::ResourceTrace
-                | View::ResourceHistory
-                | View::ResourceGraph
-                | View::HelmValues
-        )
+            | View::ResourceDescribe
+            | View::ResourceYAML
+            | View::ResourceTrace
+            | View::ResourceHistory
+            | View::ResourceGraph
+            | View::HelmValues => true,
+            View::ResourceList
+            | View::ResourceFavorites
+            | View::EventList
+            | View::Logs
+            | View::WorkloadList
+            | View::WorkloadDetail
+            | View::InventoryList
+            | View::Pulse
+            | View::KindList
+            | View::OwnershipList
+            | View::ResourceEdit
+            | View::Help => false,
+        }
+    }
+
+    /// Whether the view only exists with the native-resources preview on
+    /// (kind lists, unmanaged/orphaned sweeps): `:native` off closes it.
+    pub fn needs_native(self) -> bool {
+        match self {
+            View::KindList | View::OwnershipList => true,
+            View::ResourceList
+            | View::ResourceDetail
+            | View::ResourceDescribe
+            | View::ResourceYAML
+            | View::ResourceTrace
+            | View::ResourceGraph
+            | View::ResourceFavorites
+            | View::ResourceHistory
+            | View::EventList
+            | View::Logs
+            | View::WorkloadList
+            | View::WorkloadDetail
+            | View::InventoryList
+            | View::Pulse
+            | View::HelmValues
+            | View::ResourceEdit
+            | View::Help => false,
+        }
+    }
+
+    /// Whether this view is the Flux resource list itself — where `:ks`,
+    /// `:all`, and other kind filters show their result. From any other
+    /// view, those commands return to it first.
+    pub fn is_flux_list(self) -> bool {
+        self == View::ResourceList
     }
 }
 
@@ -293,7 +391,7 @@ pub struct ViewState {
     /// `Ctrl-r`.
     pub sweep_request: Option<crate::kube::sweep::SweepRequest>,
     /// The row selected when `Ctrl-r` rescanned, to select again after.
-    pub sweep_reselect: Option<(String, String, String)>,
+    pub sweep_reselect: Option<ResourceKey>,
     /// The list `O` drilled in from: its filter, selection, and scroll,
     /// restored on the way back (the sweep shares those fields).
     pub sweep_return: Option<(String, usize, usize)>,
@@ -837,28 +935,7 @@ mod tests {
 
     #[test]
     fn every_view_footer_offers_help_and_back() {
-        let views = [
-            View::ResourceList,
-            View::ResourceDetail,
-            View::ResourceDescribe,
-            View::ResourceYAML,
-            View::ResourceTrace,
-            View::ResourceGraph,
-            View::ResourceFavorites,
-            View::ResourceHistory,
-            View::EventList,
-            View::Logs,
-            View::WorkloadList,
-            View::WorkloadDetail,
-            View::InventoryList,
-            View::Pulse,
-            View::HelmValues,
-            View::KindList,
-            View::OwnershipList,
-            View::ResourceEdit,
-            View::Help,
-        ];
-        for view in views {
+        for &view in View::ALL {
             let hints = crate::tui::app::actions::layout_hints(view.footer_layout());
             let keys: Vec<_> = hints.iter().map(|c| c.key).collect();
             assert!(keys.contains(&"?"), "{view:?} footer lacks help");
@@ -868,29 +945,8 @@ mod tests {
 
     #[test]
     fn offset_views_have_an_offset_and_only_they_do() {
-        let views = [
-            View::ResourceList,
-            View::ResourceDetail,
-            View::ResourceDescribe,
-            View::ResourceYAML,
-            View::ResourceTrace,
-            View::ResourceGraph,
-            View::ResourceFavorites,
-            View::ResourceHistory,
-            View::EventList,
-            View::Logs,
-            View::WorkloadList,
-            View::WorkloadDetail,
-            View::InventoryList,
-            View::Pulse,
-            View::HelmValues,
-            View::KindList,
-            View::OwnershipList,
-            View::ResourceEdit,
-            View::Help,
-        ];
         let mut vs = ViewState::default();
-        for view in views {
+        for &view in View::ALL {
             let has_offset = view.scroll_offset_mut(&mut vs).is_some();
             assert_eq!(
                 view.scroll_model() == ScrollModel::Offset,

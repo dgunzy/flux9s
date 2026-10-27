@@ -23,9 +23,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::kube::api::{
-    get_flux_api_resources_with_fallback, is_forbidden_error, is_version_missing_error,
-};
+use crate::kube::api::{is_forbidden_error, is_version_missing_error};
+use crate::kube::conditions;
 use crate::models::FluxResourceKind;
 
 /// Maximum interval between watch-reconnect attempts.
@@ -75,10 +74,10 @@ impl Backoff for CappedBackoff {
 /// Event emitted by resource watchers
 #[derive(Debug, Clone)]
 pub enum WatchEvent {
-    /// Resource was added or updated
-    Applied(String, String, String, serde_json::Value), // resource_type, namespace, name, object
+    /// Resource was added or updated: which one, and the object
+    Applied(ResourceKey, serde_json::Value),
     /// Resource was deleted
-    Deleted(String, String, String), // resource_type, namespace, name
+    Deleted(ResourceKey),
     /// Watch error occurred
     Error(String),
     /// A watcher started erroring and is retrying with backoff.
@@ -106,26 +105,6 @@ pub enum WatchEvent {
     /// A previously discovered CRD was deleted; the main loop deregisters
     /// the kind, stops its watcher, and purges its resources
     ExtraKindRemoved(String), // kind name
-}
-
-/// Trait for watchable Flux resources
-pub trait WatchableResource:
-    kube::Resource + Clone + Send + std::fmt::Debug + serde::Serialize + 'static
-where
-    <Self as kube::Resource>::DynamicType: Default,
-    Self: for<'de> serde::Deserialize<'de>,
-{
-    /// Get the API group for this resource
-    fn api_group() -> &'static str;
-
-    /// Get the API version for this resource
-    fn api_version() -> &'static str;
-
-    /// Get the plural name for this resource
-    fn plural() -> &'static str;
-
-    /// Get a display name for this resource type
-    fn display_name() -> &'static str;
 }
 
 /// Manages multiple resource watchers
@@ -213,160 +192,6 @@ impl ResourceWatcher {
         if events_active {
             self.watch_kube_events()?;
         }
-        Ok(())
-    }
-
-    /// Start watching a specific resource type
-    ///
-    /// Uses Api::namespaced if namespace is set, Api::all otherwise.
-    /// This is more efficient than always watching all namespaces.
-    ///
-    /// All Flux resources are namespaced, so we require NamespaceResourceScope.
-    pub fn watch<R>(&mut self) -> Result<()>
-    where
-        R: WatchableResource + kube::Resource<Scope = kube::core::NamespaceResourceScope>,
-        R::DynamicType: Default,
-    {
-        let client = self.client.clone();
-        let namespace = self.current_namespace.clone();
-        let event_tx = self.event_tx.clone();
-        let display_name = R::display_name().to_string();
-        let resource_type = display_name.clone();
-
-        let handle = tokio::spawn(async move {
-            // Use namespaced API if namespace is specified (more efficient)
-            // Otherwise use Api::all for watching all namespaces
-            // All Flux resources are namespaced, so both work
-            let api: Api<R> = match namespace {
-                Some(ref ns) => {
-                    tracing::debug!("Starting {} watcher for namespace: {}", display_name, ns);
-                    Api::namespaced(client.clone(), ns)
-                }
-                None => {
-                    tracing::debug!("Starting {} watcher for all namespaces", display_name);
-                    Api::all(client.clone())
-                }
-            };
-
-            // In kube 2.0, watcher handles initial resource loading via InitApply events
-            // We no longer need to manually list resources - the watcher does this automatically.
-            // CappedBackoff paces retries exponentially (resets on success), so a network blip
-            // or API-server restart recovers automatically without a tight error loop.
-            let mut w =
-                Box::pin(watcher(api, watcher::Config::default()).backoff(CappedBackoff::new()));
-            let mut error_count = 0u32;
-
-            while let Some(event) = w.next().await {
-                let ev = match event {
-                    Ok(ev) => ev,
-                    Err(e) => {
-                        let err_str = format!("{}", e);
-                        if is_version_missing_error(&err_str) {
-                            // CRD not installed or version not served — stop, don't retry.
-                            // Clear any degraded state: this watcher is intentionally
-                            // stopping, not reconnecting.
-                            if error_count > 0 {
-                                let _ = event_tx
-                                    .send(WatchEvent::WatcherRecovered(display_name.clone()));
-                            }
-                            tracing::info!(
-                                "{} CRD not available in cluster, stopping watcher",
-                                display_name
-                            );
-                            let _ = event_tx.send(WatchEvent::Error(format!(
-                                "{} CRD not available in cluster",
-                                display_name
-                            )));
-                            break;
-                        }
-
-                        if is_forbidden_error(&err_str) {
-                            // RBAC denies access to this resource — retrying won't help
-                            // within the session, so stop rather than flag the watch
-                            // as degraded. Clear any degraded state from earlier errors.
-                            if error_count > 0 {
-                                let _ = event_tx
-                                    .send(WatchEvent::WatcherRecovered(display_name.clone()));
-                            }
-                            tracing::info!(
-                                "{} watch forbidden by RBAC, stopping watcher: {}",
-                                display_name,
-                                e
-                            );
-                            // Persistent, kind-specific: surfaced as the contextual
-                            // "restricted" empty-state (see #210), not a transient error.
-                            let _ =
-                                event_tx.send(WatchEvent::WatcherForbidden(display_name.clone()));
-                            break;
-                        }
-
-                        error_count += 1;
-                        if error_count == 1 {
-                            // First error after healthy operation: flag as degraded
-                            let _ =
-                                event_tx.send(WatchEvent::WatcherDegraded(display_name.clone()));
-                        }
-                        // Keep watching: backoff paces the retries, so transient
-                        // outages (laptop sleep, VPN reconnect, API-server restart)
-                        // recover automatically. Only log occasionally to avoid spam.
-                        if error_count == 1 || error_count.is_multiple_of(10) {
-                            tracing::warn!(
-                                "{} watcher error ({}): {}",
-                                display_name,
-                                error_count,
-                                e
-                            );
-                            let _ = event_tx.send(WatchEvent::Error(format!(
-                                "{} watcher error ({}): {}",
-                                display_name, error_count, e
-                            )));
-                        } else {
-                            tracing::debug!(
-                                "{} watcher error ({}): {}",
-                                display_name,
-                                error_count,
-                                e
-                            );
-                        }
-                        continue;
-                    }
-                };
-
-                // Any successful event after errors means the watch recovered.
-                // Init is excluded: it fires before the HTTP request, so counting it
-                // would flap the degraded state on every retry cycle.
-                if error_count > 0 && !matches!(ev, watcher::Event::Init) {
-                    error_count = 0;
-                    let _ = event_tx.send(WatchEvent::WatcherRecovered(display_name.clone()));
-                }
-
-                match ev {
-                    // Apply events (initial sync and updates) — namespace filtering happens in TUI
-                    watcher::Event::InitApply(obj) | watcher::Event::Apply(obj) => {
-                        let name = obj.name_any();
-                        let ns = obj.namespace().unwrap_or_default();
-                        let obj_json = serde_json::to_value(&obj).unwrap_or_default();
-                        let _ = event_tx.send(WatchEvent::Applied(
-                            resource_type.clone(),
-                            ns,
-                            name,
-                            obj_json,
-                        ));
-                    }
-                    watcher::Event::Delete(obj) => {
-                        let name = obj.name_any();
-                        let ns = obj.namespace().unwrap_or_default();
-                        let _ = event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
-                    }
-                    // Watcher lifecycle events, no action needed
-                    watcher::Event::Init | watcher::Event::InitDone => {
-                        tracing::debug!("{} watcher init event", display_name);
-                    }
-                }
-            }
-        });
-
-        self.handles.push(handle);
         Ok(())
     }
 
@@ -500,14 +325,12 @@ impl ResourceWatcher {
                 match ev {
                     watcher::Event::InitApply(deployment) | watcher::Event::Apply(deployment) => {
                         // Only track Flux deployments (with app.kubernetes.io/part-of: flux label)
-                        if let Some(labels) = &deployment.metadata.labels {
-                            if labels.get("app.kubernetes.io/part-of") == Some(&"flux".to_string())
-                            {
-                                let deployment_json =
-                                    serde_json::to_value(&deployment).unwrap_or_default();
-                                let _ =
-                                    event_tx.send(WatchEvent::DeploymentApplied(deployment_json));
-                            }
+                        if let Some(labels) = &deployment.metadata.labels
+                            && labels.get("app.kubernetes.io/part-of") == Some(&"flux".to_string())
+                        {
+                            let deployment_json =
+                                serde_json::to_value(&deployment).unwrap_or_default();
+                            let _ = event_tx.send(WatchEvent::DeploymentApplied(deployment_json));
                         }
                     }
                     watcher::Event::Delete(_) => {
@@ -524,13 +347,12 @@ impl ResourceWatcher {
         Ok(())
     }
 
-    /// Watch a resource type that may be served at different API versions across Flux releases.
-    ///
-    /// Uses DynamicObject to try each version in order, stopping at the first that responds.
-    /// Used for every kind whose API was promoted; the versions tried are
-    /// the kind's real history ([`FluxResourceKind::older_api_versions`]).
-    fn watch_with_version_fallback(&mut self, resource_kind: FluxResourceKind) -> Result<()> {
-        let api_resources = get_flux_api_resources_with_fallback(resource_kind)?;
+    /// Watch one Flux kind as `DynamicObject`s (every field kept, whatever
+    /// the model knows), trying its versions newest first
+    /// ([`FluxResourceKind::api_resources`]) and staying on the first the
+    /// cluster serves. Uses `Api::namespaced` when a namespace is set.
+    fn watch_flux_kind(&mut self, resource_kind: FluxResourceKind) {
+        let api_resources = resource_kind.api_resources();
         let client = self.client.clone();
         let namespace = self.current_namespace.clone();
         let event_tx = self.event_tx.clone();
@@ -662,9 +484,7 @@ impl ResourceWatcher {
                             let ns = obj.namespace().unwrap_or_default();
                             let obj_json = serde_json::to_value(&obj).unwrap_or_default();
                             let _ = event_tx.send(WatchEvent::Applied(
-                                resource_type.clone(),
-                                ns,
-                                name,
+                                ResourceKey::new(&resource_type, ns, name),
                                 obj_json,
                             ));
                         }
@@ -672,8 +492,11 @@ impl ResourceWatcher {
                             version_working = true;
                             let name = obj.name_any();
                             let ns = obj.namespace().unwrap_or_default();
-                            let _ =
-                                event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
+                            let _ = event_tx.send(WatchEvent::Deleted(ResourceKey::new(
+                                &resource_type,
+                                ns,
+                                name,
+                            )));
                         }
                         watcher::Event::Init => {
                             // Init fires before the HTTP request — does NOT confirm the
@@ -708,62 +531,26 @@ impl ResourceWatcher {
             if degraded_sent {
                 let _ = event_tx.send(WatchEvent::WatcherRecovered(resource_type.clone()));
             }
+            tracing::info!(
+                "{} CRD not available in cluster, stopping watcher",
+                display_name
+            );
             let _ = event_tx.send(WatchEvent::Error(format!(
-                "{} watcher: no supported API version found on this cluster",
+                "{} CRD not available in cluster",
                 display_name
             )));
         });
 
         self.handles.push(handle);
-        Ok(())
     }
 
-    /// Start watching all registered Flux resources
-    ///
-    /// This function watches all Flux CRD types. To add a new resource type:
-    /// 1. Add the impl_watchable! macro in src/watcher/resource.rs
-    /// 2. Add the watch call here
-    /// 3. Add command mapping in src/tui/app.rs execute_command()
+    /// Start watching every Flux kind ([`FluxResourceKind::ALL`]), the
+    /// controller pods and deployments, and (opt-in) Flux-adjacent CRDs.
     pub fn watch_all(&mut self) -> Result<()> {
         tracing::debug!("Starting watchers for all Flux resources");
-
-        // Source Controller resources
-        // GitRepository has been at v1 since Flux 2.0 — stable, no fallback needed.
-        self.watch::<resource::GitRepository>()?;
-        // The four below reached v1 in Flux 2.3–2.6 (HelmRepository and HelmChart
-        // 2.3, Bucket 2.4, OCIRepository 2.6): fall back on older clusters.
-        self.watch_with_version_fallback(FluxResourceKind::OCIRepository)?;
-        self.watch_with_version_fallback(FluxResourceKind::HelmRepository)?;
-        self.watch_with_version_fallback(FluxResourceKind::Bucket)?;
-        self.watch_with_version_fallback(FluxResourceKind::HelmChart)?;
-        self.watch::<resource::ExternalArtifact>()?;
-        self.watch::<resource::ArtifactGenerator>()?;
-
-        // Kustomize Controller resources
-        // Kustomization has been at v1 since Flux 2.0 — stable.
-        self.watch::<resource::Kustomization>()?;
-
-        // Helm Controller resources
-        // HelmRelease graduated from v2beta2 to v2 in Flux 2.3.
-        self.watch_with_version_fallback(FluxResourceKind::HelmRelease)?;
-
-        // Image Reflector / Automation Controller resources: v1 since Flux 2.7.
-        self.watch_with_version_fallback(FluxResourceKind::ImageRepository)?;
-        self.watch_with_version_fallback(FluxResourceKind::ImagePolicy)?;
-        self.watch_with_version_fallback(FluxResourceKind::ImageUpdateAutomation)?;
-
-        // Notification Controller resources
-        // Alert and Provider graduated from v1beta3 to v1 in Flux 2.10 (Receiver,
-        // from v1beta2, in 2.0). Fall back for older clusters.
-        self.watch_with_version_fallback(FluxResourceKind::Alert)?;
-        self.watch_with_version_fallback(FluxResourceKind::Provider)?;
-        self.watch_with_version_fallback(FluxResourceKind::Receiver)?;
-
-        // Flux Operator resources
-        self.watch::<resource::ResourceSet>()?;
-        self.watch::<resource::ResourceSetInputProvider>()?;
-        self.watch::<resource::FluxReport>()?;
-        self.watch::<resource::FluxInstance>()?;
+        for kind in FluxResourceKind::ALL {
+            self.watch_flux_kind(*kind);
+        }
 
         // Flux Controller Pods (for status monitoring)
         self.watch_flux_pods()?;
@@ -1015,13 +802,7 @@ impl ResourceWatcher {
         let namespace = self.current_namespace.clone();
         let event_tx = self.event_tx.clone();
         let resource_type = extra.kind.clone();
-        let api_resource = kube::core::ApiResource {
-            group: extra.group.clone(),
-            version: extra.version.clone(),
-            api_version: format!("{}/{}", extra.group, extra.version),
-            kind: extra.kind.clone(),
-            plural: extra.plural.clone(),
-        };
+        let api_resource = extra.api_resource();
 
         let handle = tokio::spawn(async move {
             let api: Api<DynamicObject> = match namespace {
@@ -1077,9 +858,7 @@ impl ResourceWatcher {
                         let ns = obj.namespace().unwrap_or_default();
                         if let Ok(obj_json) = serde_json::to_value(&obj) {
                             let _ = event_tx.send(WatchEvent::Applied(
-                                resource_type.clone(),
-                                ns,
-                                name,
+                                ResourceKey::new(&resource_type, ns, name),
                                 obj_json,
                             ));
                         }
@@ -1087,7 +866,11 @@ impl ResourceWatcher {
                     watcher::Event::Delete(obj) => {
                         let name = obj.name_any();
                         let ns = obj.namespace().unwrap_or_default();
-                        let _ = event_tx.send(WatchEvent::Deleted(resource_type.clone(), ns, name));
+                        let _ = event_tx.send(WatchEvent::Deleted(ResourceKey::new(
+                            &resource_type,
+                            ns,
+                            name,
+                        )));
                     }
                     watcher::Event::Init | watcher::Event::InitDone => {}
                 }
@@ -1166,30 +949,17 @@ pub fn extract_reconciliation_info(
     // Extract status from conditions
     let ready_condition = status
         .get("conditions")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| {
-            arr.iter().find(|c| {
-                c.get("type")
-                    .and_then(|t| t.as_str())
-                    .map(|s| s == "Ready")
-                    .unwrap_or(false)
-            })
-        });
+        .and_then(|c| conditions::of_type(c, conditions::READY));
 
     let status_str = ready_condition
-        .and_then(|c| c.get("status").and_then(|s| s.as_str()))
-        .map(|s| if s == "True" { "Success" } else { "Failed" })
-        .unwrap_or_else(|| "Unknown");
+        .map(|c| if c.is_true() { "Success" } else { "Failed" })
+        .unwrap_or("Unknown");
 
     // Extract message
     let message = status
         .get("message")
         .and_then(|m| m.as_str())
-        .or_else(|| {
-            ready_condition
-                .and_then(|c| c.get("message"))
-                .and_then(|m| m.as_str())
-        })
+        .or_else(|| ready_condition.and_then(conditions::Condition::message))
         .map(|s| s.to_string());
 
     Some(crate::watcher::state::ReconciliationEvent {
@@ -1226,19 +996,15 @@ pub fn extract_status_fields(
 
     // Extract ready and message from status.conditions
     if let Some(status) = obj.get("status") {
-        // Look for Ready condition
-        if let Some(conditions) = status.get("conditions").and_then(|c| c.as_array()) {
-            for condition in conditions {
-                if let Some(type_val) = condition.get("type").and_then(|t| t.as_str()) {
-                    if type_val == "Ready" {
-                        if let Some(status_val) = condition.get("status").and_then(|s| s.as_str()) {
-                            ready = Some(status_val == "True");
-                        }
-                        if let Some(msg) = condition.get("message").and_then(|m| m.as_str()) {
-                            message = Some(msg.to_string());
-                        }
-                    }
-                }
+        if let Some(condition) = status
+            .get("conditions")
+            .and_then(|c| conditions::of_type(c, conditions::READY))
+        {
+            if condition.status().is_some() {
+                ready = Some(condition.is_true());
+            }
+            if let Some(msg) = condition.message() {
+                message = Some(msg.to_string());
             }
         }
 

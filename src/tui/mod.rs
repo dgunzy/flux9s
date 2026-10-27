@@ -13,7 +13,7 @@ mod theme;
 pub mod trace;
 pub mod views;
 
-pub use crate::kube::api::{get_api_resource_with_fallback, get_gvk_for_resource_type};
+pub use crate::kube::api::{api_resource_for_kind, get_api_resource_with_fallback};
 pub use app::App;
 pub use operations::*;
 pub use theme::*;
@@ -75,12 +75,7 @@ fn extract_controller_pod_info(
         })
     });
 
-    let ready = pod_json["status"]["conditions"]
-        .as_array()
-        .and_then(|arr| arr.iter().find(|c| c["type"] == "Ready"))
-        .and_then(|c| c["status"].as_str())
-        .map(|s| s == "True")
-        .unwrap_or(false);
+    let ready = crate::kube::conditions::is_ready(pod_json).unwrap_or(false);
 
     Some(crate::tui::app::state::ControllerPodInfo {
         name,
@@ -325,83 +320,79 @@ pub async fn run_tui_with_async_init(
     let run_result: Result<()> = async {
         loop {
             // Check if Kubernetes initialization is complete
-            if !kube_init_done {
-                if let Ok(result) = kube_init_rx.try_recv() {
-                    kube_init_done = true;
-                    match result {
-                        Ok((client, context, namespace, w, rx, namespace_hotkeys)) => {
-                            tracing::debug!("Kubernetes initialization complete");
-                            event_rx = Some(rx);
-                            app.set_kube_client(client.clone());
-                            app.set_watcher(w);
-                            app.set_context(context);
-                            app.set_namespace(namespace.clone());
+            if !kube_init_done && let Ok(result) = kube_init_rx.try_recv() {
+                kube_init_done = true;
+                match result {
+                    Ok((client, context, namespace, w, rx, namespace_hotkeys)) => {
+                        tracing::debug!("Kubernetes initialization complete");
+                        event_rx = Some(rx);
+                        app.set_kube_client(client.clone());
+                        app.set_watcher(w);
+                        app.set_context(context);
+                        app.set_namespace(namespace.clone());
 
-                            if !namespace_hotkeys.is_empty() {
-                                app.update_namespace_hotkeys(namespace_hotkeys);
-                                tracing::debug!(
-                                    "Discovered {} namespaces for hotkeys",
-                                    app.namespace_hotkeys().len()
-                                );
-                            }
-
-                            // Startup warnings, most important first: the
-                            // config file, the default filter, then views
-                            // (#302). All are logged; the first is shown, so
-                            // one can't overwrite another.
-                            let mut warnings: Vec<String> =
-                                config_warning.iter().cloned().collect();
-                            // The sort first: a view's own sort (from the default filter) wins.
-                            if let Some(ref sort) = config.default_sort
-                                && let Err(warning) = app.apply_default_sort(sort)
-                            {
-                                warnings.push(warning);
-                            }
-                            if let Some(ref filter) = config.default_resource_filter {
-                                match app.apply_default_filter(filter) {
-                                    Ok(()) => tracing::debug!(
-                                        "Applied default resource filter: {}",
-                                        filter
-                                    ),
-                                    Err(warning) => warnings.push(warning),
-                                }
-                            }
-                            warnings.extend(
-                                crate::tui::app::view_problems(&config.views)
-                                    .into_iter()
-                                    .map(|problem| format!("Config: {problem}")),
+                        if !namespace_hotkeys.is_empty() {
+                            app.update_namespace_hotkeys(namespace_hotkeys);
+                            tracing::debug!(
+                                "Discovered {} namespaces for hotkeys",
+                                app.namespace_hotkeys().len()
                             );
-
-                            app.set_connected();
-
-                            for warning in &warnings {
-                                tracing::warn!("{}", warning);
-                            }
-                            if let Some(first) = warnings.first() {
-                                let more = match warnings.len() {
-                                    1 => String::new(),
-                                    n => format!(" (+{} more in the log)", n - 1),
-                                };
-                                app.set_status_message((format!("{first}{more}"), true));
-                            }
-
-                            // `-c` / `--command`: after discovery starts, so a
-                            // Kubernetes kind waits for it like a typed one.
-                            // `-c q` quits, as a typed `:q` would.
-                            if let Some(command) = startup_command.take()
-                                && app.run_startup_command(&command)
-                            {
-                                break;
-                            }
-                            kube_initialized = true;
                         }
-                        Err(conn_err) => {
-                            // Keep the TUI alive and show a clear, full-screen error
-                            // instead of tearing down and exiting. The user reads the
-                            // message and quits with q / Ctrl+C.
-                            tracing::error!("Kubernetes initialization failed: {}", conn_err);
-                            app.set_connection_error(conn_err);
+
+                        // Startup warnings, most important first: the
+                        // config file, the default filter, then views
+                        // (#302). All are logged; the first is shown, so
+                        // one can't overwrite another.
+                        let mut warnings: Vec<String> = config_warning.iter().cloned().collect();
+                        // The sort first: a view's own sort (from the default filter) wins.
+                        if let Some(ref sort) = config.default_sort
+                            && let Err(warning) = app.apply_default_sort(sort)
+                        {
+                            warnings.push(warning);
                         }
+                        if let Some(ref filter) = config.default_resource_filter {
+                            match app.apply_default_filter(filter) {
+                                Ok(()) => {
+                                    tracing::debug!("Applied default resource filter: {}", filter)
+                                }
+                                Err(warning) => warnings.push(warning),
+                            }
+                        }
+                        warnings.extend(
+                            crate::tui::app::view_problems(&config.views)
+                                .into_iter()
+                                .map(|problem| format!("Config: {problem}")),
+                        );
+
+                        app.set_connected();
+
+                        for warning in &warnings {
+                            tracing::warn!("{}", warning);
+                        }
+                        if let Some(first) = warnings.first() {
+                            let more = match warnings.len() {
+                                1 => String::new(),
+                                n => format!(" (+{} more in the log)", n - 1),
+                            };
+                            app.set_status_message((format!("{first}{more}"), true));
+                        }
+
+                        // `-c` / `--command`: after discovery starts, so a
+                        // Kubernetes kind waits for it like a typed one.
+                        // `-c q` quits, as a typed `:q` would.
+                        if let Some(command) = startup_command.take()
+                            && app.run_startup_command(&command)
+                        {
+                            break;
+                        }
+                        kube_initialized = true;
+                    }
+                    Err(conn_err) => {
+                        // Keep the TUI alive and show a clear, full-screen error
+                        // instead of tearing down and exiting. The user reads the
+                        // message and quits with q / Ctrl+C.
+                        tracing::error!("Kubernetes initialization failed: {}", conn_err);
+                        app.set_connection_error(conn_err);
                     }
                 }
             }
@@ -410,243 +401,237 @@ pub async fn run_tui_with_async_init(
 
             // Dispatch queued view fetches (YAML, describe, trace, graph).
             // Each spawned task reports back through its AsyncTask channel.
-            if kube_initialized {
-                if let Some(client) = app.kube_client.clone() {
-                    if let Some((rk, tx)) = app.async_state.yaml.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            tracing::debug!("Fetching YAML for {}", rk);
-                            let result = crate::kube::objects::fetch_object(&client, &rk).await;
-                            if let Err(ref e) = result {
-                                tracing::warn!("Failed to fetch YAML for {}: {}", rk, e);
-                            }
-                            let _ = tx.send(result);
+            if kube_initialized && let Some(client) = app.kube_client.clone() {
+                if let Some((rk, tx)) = app.async_state.yaml.dispatch() {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        tracing::debug!("Fetching YAML for {}", rk);
+                        let result = crate::kube::objects::fetch_object(&client, &rk).await;
+                        if let Err(ref e) = result {
+                            tracing::warn!("Failed to fetch YAML for {}: {}", rk, e);
+                        }
+                        let _ = tx.send(result);
+                    });
+                }
+
+                if let Some((rk, tx)) = app.async_state.describe.dispatch() {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        tracing::debug!("Fetching describe data for {}", rk);
+                        let result =
+                            crate::kube::fetch::fetch_object_describe_data(&client, &rk).await;
+                        if let Err(ref e) = result {
+                            tracing::warn!("Failed to fetch describe data for {}: {}", rk, e);
+                        }
+                        let _ = tx.send(result);
+                    });
+                }
+
+                if let Some((target, tx)) = app.async_state.edit_preflight.dispatch() {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        let result = async {
+                            let object =
+                                crate::kube::objects::fetch_object(&client, &target).await?;
+                            // Each bounded by MANAGER_TIMEOUT.
+                            let manager =
+                                crate::kube::ownership::lookup_manager(&client, &object).await;
+                            let manager_suspended = match manager.manager() {
+                                Some(m) => {
+                                    crate::kube::ownership::flux_manager_suspended(&client, m).await
+                                }
+                                None => None,
+                            };
+                            Ok(crate::tui::app::state::EditPreflight {
+                                object,
+                                manager,
+                                manager_suspended,
+                            })
+                        }
+                        .await;
+                        let _ = tx.send(result);
+                    });
+                }
+
+                if let Some((object, tx)) = app.async_state.describe_manager.dispatch() {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        // Bounded by MANAGER_TIMEOUT: always answers.
+                        let managed_by =
+                            crate::kube::ownership::describe_manager(&client, &object).await;
+                        let uid = object
+                            .pointer("/metadata/uid")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let _ = tx.send(Ok(crate::tui::app::state::ManagerResolution {
+                            uid,
+                            managed_by,
+                        }));
+                    });
+                }
+
+                if let Some((entries, tx)) = app.async_state.inventory_status.dispatch() {
+                    let handle = tokio::spawn(crate::kube::live::watch_object_statuses(
+                        client.clone(),
+                        entries,
+                        tx,
+                    ));
+                    app.async_state.inventory_status.set_handle(handle);
+                }
+
+                if let Some((request, tx)) = app.async_state.sweep.dispatch()
+                    && app.config.native_resources
+                {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        // Opened before discovery finished: discover first
+                        // (sweeps only run with nativeResources on).
+                        let mut kinds = crate::models::kinds::catalog().all();
+                        if kinds.is_empty() {
+                            kinds = crate::kube::discovery::discover_kinds(&client)
+                                .await
+                                .unwrap_or_default();
+                        }
+                        let result = crate::kube::sweep::sweep(&client, request, kinds).await;
+                        let _ = tx.send(Ok(result));
+                    });
+                }
+
+                if let Some(((), tx)) = app.async_state.kind_discovery.dispatch() {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        let _ = tx.send(crate::kube::discovery::discover_kinds(&client).await);
+                    });
+                }
+
+                if let Some(((), tx)) = app.async_state.flux_namespace_discovery.dispatch() {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        // Bounded like the startup discovery.
+                        let result = tokio::time::timeout(
+                            connect_timeout,
+                            crate::kube::discover_namespaces_with_flux_resources(&client),
+                        )
+                        .await
+                        .unwrap_or_else(|_| {
+                            Err(anyhow::anyhow!("Flux namespace discovery timed out"))
                         });
-                    }
+                        let _ = tx.send(result);
+                    });
+                }
 
-                    if let Some((rk, tx)) = app.async_state.describe.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            tracing::debug!("Fetching describe data for {}", rk);
-                            let result =
-                                crate::kube::fetch::fetch_object_describe_data(&client, &rk).await;
-                            if let Err(ref e) = result {
-                                tracing::warn!("Failed to fetch describe data for {}: {}", rk, e);
-                            }
-                            let _ = tx.send(result);
-                        });
-                    }
+                if let Some(((), tx)) = app.async_state.namespace_list.dispatch() {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        let _ = tx.send(crate::kube::list_all_namespaces(&client).await);
+                    });
+                }
 
-                    if let Some((target, tx)) = app.async_state.edit_preflight.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            let result = async {
-                                let object =
-                                    crate::kube::objects::fetch_object(&client, &target).await?;
-                                // Each bounded by MANAGER_TIMEOUT.
-                                let manager =
-                                    crate::kube::ownership::lookup_manager(&client, &object).await;
-                                let manager_suspended = match manager.manager() {
-                                    Some(m) => {
-                                        crate::kube::ownership::flux_manager_suspended(&client, m)
-                                            .await
-                                    }
-                                    None => None,
-                                };
-                                Ok(crate::tui::app::state::EditPreflight {
-                                    object,
-                                    manager,
-                                    manager_suspended,
-                                })
-                            }
-                            .await;
-                            let _ = tx.send(result);
-                        });
-                    }
+                if let Some((request, tx)) = app.async_state.kind_list.dispatch() {
+                    let handle = tokio::spawn(crate::kube::kind_list::watch_kind(
+                        client.clone(),
+                        request,
+                        tx,
+                    ));
+                    app.async_state.kind_list.set_handle(handle);
+                }
 
-                    if let Some((object, tx)) = app.async_state.describe_manager.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            // Bounded by MANAGER_TIMEOUT: always answers.
-                            let managed_by =
-                                crate::kube::ownership::describe_manager(&client, &object).await;
-                            let uid = object
-                                .pointer("/metadata/uid")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or_default()
-                                .to_string();
-                            let _ = tx.send(Ok(crate::tui::app::state::ManagerResolution {
-                                uid,
-                                managed_by,
-                            }));
-                        });
-                    }
+                if let Some((request, tx)) = app.async_state.workload_metrics.dispatch() {
+                    let handle = tokio::spawn(crate::kube::metrics::watch_pod_metrics(
+                        client.clone(),
+                        request,
+                        tx,
+                    ));
+                    app.async_state.workload_metrics.set_handle(handle);
+                }
 
-                    if let Some((entries, tx)) = app.async_state.inventory_status.dispatch() {
-                        let handle = tokio::spawn(crate::kube::live::watch_object_statuses(
-                            client.clone(),
-                            entries,
-                            tx,
-                        ));
-                        app.async_state.inventory_status.set_handle(handle);
-                    }
+                if let Some((request, tx)) = app.async_state.helm_values.dispatch() {
+                    let handle = tokio::spawn(crate::kube::live::watch_helm_values(
+                        client.clone(),
+                        request.key.namespace,
+                        request.key.name,
+                        request.reveal_secrets,
+                        tx,
+                    ));
+                    app.async_state.helm_values.set_handle(handle);
+                }
 
-                    if let Some((request, tx)) = app.async_state.sweep.dispatch()
-                        && app.config.native_resources
-                    {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            // Opened before discovery finished: discover first
-                            // (sweeps only run with nativeResources on).
-                            let mut kinds = crate::models::kinds::catalog().all();
-                            if kinds.is_empty() {
-                                kinds = crate::kube::discovery::discover_kinds(&client)
-                                    .await
-                                    .unwrap_or_default();
-                            }
-                            let result = crate::kube::sweep::sweep(&client, request, kinds).await;
-                            let _ = tx.send(Ok(result));
-                        });
-                    }
+                if let Some((action, tx)) = app.async_state.object_action.dispatch() {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        tracing::debug!("Running workload action {:?}", action);
+                        let result =
+                            crate::kube::workloads::execute_object_action(&client, &action)
+                                .await
+                                .map(|()| action);
+                        if let Err(ref e) = result {
+                            tracing::warn!("Workload action failed: {:#}", e);
+                        }
+                        let _ = tx.send(result);
+                    });
+                }
 
-                    if let Some(((), tx)) = app.async_state.kind_discovery.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            let _ = tx.send(crate::kube::discovery::discover_kinds(&client).await);
-                        });
-                    }
+                if let Some((request, tx)) = app.async_state.trace.dispatch() {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        tracing::debug!("Tracing {:?}", request);
+                        let result = run_trace(&client, request).await;
+                        if let Err(ref e) = result {
+                            tracing::warn!("Trace failed: {:#}", e);
+                        }
+                        let _ = tx.send(result);
+                    });
+                }
 
-                    if let Some(((), tx)) = app.async_state.flux_namespace_discovery.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            // Bounded like the startup discovery.
-                            let result = tokio::time::timeout(
-                                connect_timeout,
-                                crate::kube::discover_namespaces_with_flux_resources(&client),
+                if let Some((request, tx)) = app.async_state.graph.dispatch() {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        let rk = &request.root;
+                        tracing::debug!("Building graph for {}", rk);
+                        let result = async {
+                            let graph = crate::trace::build_resource_graph(
+                                &client,
+                                &rk.resource_type,
+                                &rk.namespace,
+                                &rk.name,
                             )
-                            .await
-                            .unwrap_or_else(|_| {
-                                Err(anyhow::anyhow!("Flux namespace discovery timed out"))
-                            });
-                            let _ = tx.send(result);
-                        });
-                    }
+                            .await?;
+                            let highlight = match &request.highlight {
+                                Some(target) => {
+                                    crate::trace::locate_in_graph(&client, &graph, target).await
+                                }
+                                None => None,
+                            };
+                            Ok(crate::tui::app::state::GraphResult { graph, highlight })
+                        }
+                        .await;
+                        if let Err(ref e) = result {
+                            tracing::warn!("Failed to build graph for {}: {}", rk, e);
+                        }
+                        let _ = tx.send(result);
+                    });
+                }
 
-                    if let Some(((), tx)) = app.async_state.namespace_list.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            let _ = tx.send(crate::kube::list_all_namespaces(&client).await);
-                        });
-                    }
+                if let Some((rk, tx)) = app.async_state.workload.dispatch() {
+                    tracing::debug!("Watching workload {}", rk);
+                    let handle = tokio::spawn(crate::kube::live::watch_workload(
+                        client.clone(),
+                        rk.resource_type,
+                        rk.namespace,
+                        rk.name,
+                        tx,
+                    ));
+                    app.async_state.workload.set_handle(handle);
+                }
 
-                    if let Some((request, tx)) = app.async_state.kind_list.dispatch() {
-                        let handle = tokio::spawn(crate::kube::kind_list::watch_kind(
-                            client.clone(),
-                            request,
-                            tx,
-                        ));
-                        app.async_state.kind_list.set_handle(handle);
-                    }
-
-                    if let Some((request, tx)) = app.async_state.workload_metrics.dispatch() {
-                        let handle = tokio::spawn(crate::kube::metrics::watch_pod_metrics(
-                            client.clone(),
-                            request,
-                            tx,
-                        ));
-                        app.async_state.workload_metrics.set_handle(handle);
-                    }
-
-                    if let Some((request, tx)) = app.async_state.helm_values.dispatch() {
-                        let handle = tokio::spawn(crate::kube::live::watch_helm_values(
-                            client.clone(),
-                            request.key.namespace,
-                            request.key.name,
-                            request.reveal_secrets,
-                            tx,
-                        ));
-                        app.async_state.helm_values.set_handle(handle);
-                    }
-
-                    if let Some((action, tx)) = app.async_state.object_action.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            tracing::debug!("Running workload action {:?}", action);
-                            let result =
-                                crate::kube::workloads::execute_object_action(&client, &action)
-                                    .await
-                                    .map(|()| action);
-                            if let Err(ref e) = result {
-                                tracing::warn!("Workload action failed: {:#}", e);
-                            }
-                            let _ = tx.send(result);
-                        });
-                    }
-
-                    if let Some((request, tx)) = app.async_state.trace.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            tracing::debug!("Tracing {:?}", request);
-                            let result = run_trace(&client, request).await;
-                            if let Err(ref e) = result {
-                                tracing::warn!("Trace failed: {:#}", e);
-                            }
-                            let _ = tx.send(result);
-                        });
-                    }
-
-                    if let Some((request, tx)) = app.async_state.graph.dispatch() {
-                        let client = client.clone();
-                        tokio::spawn(async move {
-                            let rk = &request.root;
-                            tracing::debug!("Building graph for {}", rk);
-                            let result = async {
-                                let graph = crate::trace::build_resource_graph(
-                                    &client,
-                                    &rk.resource_type,
-                                    &rk.namespace,
-                                    &rk.name,
-                                )
-                                .await?;
-                                let highlight = match &request.highlight {
-                                    Some(target) => {
-                                        crate::trace::locate_in_graph(&client, &graph, target).await
-                                    }
-                                    None => None,
-                                };
-                                Ok(crate::tui::app::state::GraphResult { graph, highlight })
-                            }
-                            .await;
-                            if let Err(ref e) = result {
-                                tracing::warn!("Failed to build graph for {}: {}", rk, e);
-                            }
-                            let _ = tx.send(result);
-                        });
-                    }
-
-                    if let Some((rk, tx)) = app.async_state.workload.dispatch() {
-                        tracing::debug!("Watching workload {}", rk);
-                        let handle = tokio::spawn(crate::kube::live::watch_workload(
-                            client.clone(),
-                            rk.resource_type,
-                            rk.namespace,
-                            rk.name,
-                            tx,
-                        ));
-                        app.async_state.workload.set_handle(handle);
-                    }
-
-                    // Start a queued controller log stream. The task tails the
-                    // pod and follows new output until aborted (view closed)
-                    // or the stream ends.
-                    if let Some((req, tx)) = app.logs.dispatch() {
-                        let handle = tokio::spawn(crate::kube::logs::stream_pod_logs(
-                            client.clone(),
-                            req,
-                            tx,
-                        ));
-                        app.logs.set_handle(handle);
-                    }
+                // Start a queued controller log stream. The task tails the
+                // pod and follows new output until aborted (view closed)
+                // or the stream ends.
+                if let Some((req, tx)) = app.logs.dispatch() {
+                    let handle =
+                        tokio::spawn(crate::kube::logs::stream_pod_logs(client.clone(), req, tx));
+                    app.logs.set_handle(handle);
                 }
             }
 
@@ -959,18 +944,16 @@ pub async fn run_tui_with_async_init(
             }
 
             // Trigger SSA apply if edited YAML is pending
-            if kube_initialized {
-                if let Some(req) = app.trigger_edit_save() {
-                    tokio::spawn(async move {
-                        let result = crate::operations::apply_object_yaml(
-                            &req.client,
-                            &req.target,
-                            &req.yaml_to_apply,
-                        )
-                        .await;
-                        let _ = req.tx.send(result);
-                    });
-                }
+            if kube_initialized && let Some(req) = app.trigger_edit_save() {
+                tokio::spawn(async move {
+                    let result = crate::operations::apply_object_yaml(
+                        &req.client,
+                        &req.target,
+                        &req.yaml_to_apply,
+                    )
+                    .await;
+                    let _ = req.tx.send(result);
+                });
             }
 
             // Check for SSA apply results
@@ -1116,16 +1099,13 @@ pub async fn run_tui_with_async_init(
             app.check_status_message_timeout();
 
             // Handle input events (non-blocking)
-            if crossterm::event::poll(std::time::Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        if let Some(should_quit) = app.handle_key(key) {
-                            if should_quit {
-                                break;
-                            }
-                        }
-                    }
-                }
+            if crossterm::event::poll(std::time::Duration::from_millis(100))?
+                && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press
+                && let Some(should_quit) = app.handle_key(key)
+                && should_quit
+            {
+                break;
             }
 
             // Process watch events (non-blocking)
@@ -1138,8 +1118,16 @@ pub async fn run_tui_with_async_init(
                 while let Ok(event) = rx.try_recv() {
                     events_processed += 1;
                     match event {
-                        crate::watcher::WatchEvent::Applied(resource_type, ns, name, obj_json) => {
-                            let key = crate::watcher::resource_key(&ns, &name, &resource_type);
+                        crate::watcher::WatchEvent::Applied(
+                            crate::watcher::ResourceKey {
+                                resource_type,
+                                namespace: ns,
+                                name,
+                            },
+                            obj_json,
+                        ) => {
+                            let key = crate::watcher::ResourceKey::new(&resource_type, &ns, &name)
+                                .to_key_string();
 
                             // Extract reconciliation info
                             let reconciliation_event =
@@ -1188,14 +1176,13 @@ pub async fn run_tui_with_async_init(
                             };
 
                             // Add new event if reconciliation occurred
-                            if should_add_history {
-                                if let Some(event) = reconciliation_event.clone() {
-                                    history.push(event);
-                                    // Limit history size
-                                    use crate::tui::constants::MAX_RECONCILIATION_HISTORY;
-                                    if history.len() > MAX_RECONCILIATION_HISTORY {
-                                        history.remove(0); // Remove oldest
-                                    }
+                            if should_add_history && let Some(event) = reconciliation_event.clone()
+                            {
+                                history.push(event);
+                                // Limit history size
+                                use crate::tui::constants::MAX_RECONCILIATION_HISTORY;
+                                if history.len() > MAX_RECONCILIATION_HISTORY {
+                                    history.remove(0); // Remove oldest
                                 }
                             }
 
@@ -1221,8 +1208,8 @@ pub async fn run_tui_with_async_init(
                             // Store full object for detail view
                             app.resource_objects.insert(key.clone(), obj_json);
                         }
-                        crate::watcher::WatchEvent::Deleted(resource_type, ns, name) => {
-                            let key = crate::watcher::resource_key(&ns, &name, &resource_type);
+                        crate::watcher::WatchEvent::Deleted(deleted) => {
+                            let key = deleted.to_key_string();
                             app.state().remove(&key);
                             app.resource_objects.remove(&key);
                         }

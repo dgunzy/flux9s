@@ -138,10 +138,10 @@ impl LogState {
     /// Stop the stream and drop the session (called when leaving the view).
     pub fn stop(&mut self) {
         self.pending = None;
-        if let Some(session) = self.session.take() {
-            if let Some(handle) = session.handle {
-                handle.abort();
-            }
+        if let Some(session) = self.session.take()
+            && let Some(handle) = session.handle
+        {
+            handle.abort();
         }
     }
 }

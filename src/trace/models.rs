@@ -39,8 +39,7 @@ pub fn is_flux_kind(kind: &str, api_version: Option<&str>) -> bool {
         None => true,
         Some(api_version) => {
             let group = api_version.split_once('/').map_or("", |(group, _)| group);
-            crate::kube::get_gvk_for_resource_type(kind)
-                .is_ok_and(|(flux_group, _, _)| flux_group == group)
+            crate::kube::api::api_resource_for_kind(kind).is_ok_and(|flux| flux.group == group)
         }
     }
 }

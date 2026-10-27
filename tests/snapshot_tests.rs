@@ -6,9 +6,10 @@
 use flux9s::config::{Config, UiConfig};
 use flux9s::tui::Theme;
 use flux9s::tui::app::state::{ControllerPodState, SortField, TextSearchState};
+use flux9s::tui::views::props::{Fetched, ListCursor, TextScroll, Watched};
 use flux9s::tui::views::{
-    render_footer, render_header, render_resource_describe, render_resource_detail,
-    render_resource_list, render_resource_yaml,
+    FooterProps, HeaderProps, ResourceListProps, render_footer, render_header,
+    render_resource_describe, render_resource_detail, render_resource_list, render_resource_yaml,
 };
 use flux9s::watcher::{ResourceInfo, ResourceState};
 use insta::assert_snapshot;
@@ -127,19 +128,21 @@ fn test_render_header() {
             render_header(
                 frame,
                 area,
-                &state,
-                &controller_pods,
-                "test-context",
-                &None,
-                "",
-                &flux9s::models::kind_filter::KindFilter::all(),
-                3,
-                66.67,
-                None,
-                false,
+                HeaderProps {
+                    state: &state,
+                    controller_pods: &controller_pods,
+                    context: "test-context",
+                    namespace: &None,
+                    filter: "",
+                    kind_filter: &flux9s::models::kind_filter::KindFilter::all(),
+                    filtered_count: 3,
+                    health_percentage: 66.67,
+                    health_filter: None,
+                    read_only: false,
+                    no_icons: config.ui.no_icons,
+                    browsing: None,
+                },
                 &theme,
-                config.ui.no_icons,
-                None,
             );
         })
         .unwrap();
@@ -162,19 +165,21 @@ fn test_render_header_with_namespace() {
             render_header(
                 frame,
                 area,
-                &state,
-                &controller_pods,
-                "test-context",
-                &Some("flux-system".to_string()),
-                "",
-                &flux9s::models::kind_filter::KindFilter::all(),
-                2,
-                100.0,
-                None,
-                false,
+                HeaderProps {
+                    state: &state,
+                    controller_pods: &controller_pods,
+                    context: "test-context",
+                    namespace: &Some("flux-system".to_string()),
+                    filter: "",
+                    kind_filter: &flux9s::models::kind_filter::KindFilter::all(),
+                    filtered_count: 2,
+                    health_percentage: 100.0,
+                    health_filter: None,
+                    read_only: false,
+                    no_icons: config.ui.no_icons,
+                    browsing: None,
+                },
                 &theme,
-                config.ui.no_icons,
-                None,
             );
         })
         .unwrap();
@@ -197,19 +202,21 @@ fn test_render_header_with_filter() {
             render_header(
                 frame,
                 area,
-                &state,
-                &controller_pods,
-                "test-context",
-                &None,
-                "kustomization",
-                &flux9s::models::kind_filter::KindFilter::kind("Kustomization"),
-                1,
-                100.0,
-                Some("healthy"),
-                false,
+                HeaderProps {
+                    state: &state,
+                    controller_pods: &controller_pods,
+                    context: "test-context",
+                    namespace: &None,
+                    filter: "kustomization",
+                    kind_filter: &flux9s::models::kind_filter::KindFilter::kind("Kustomization"),
+                    filtered_count: 1,
+                    health_percentage: 100.0,
+                    health_filter: Some("healthy"),
+                    read_only: false,
+                    no_icons: config.ui.no_icons,
+                    browsing: None,
+                },
                 &theme,
-                config.ui.no_icons,
-                None,
             );
         })
         .unwrap();
@@ -230,18 +237,20 @@ fn test_render_footer_navigation() {
             render_footer(
                 frame,
                 area,
-                false,
-                "",
-                false,
-                "",
-                false,
-                "",
-                false,
-                false,
-                None,
-                &None,
+                FooterProps {
+                    command_mode: false,
+                    command_buffer: "",
+                    filter_mode: false,
+                    filter: "",
+                    search_input_mode: false,
+                    search_query: "",
+                    show_help: false,
+                    show_quit_confirm: false,
+                    confirmation_message: None,
+                    status_message: &None,
+                    nav_commands: &flux9s::tui::keybindings::get_navigation_commands(),
+                },
                 &theme,
-                &flux9s::tui::keybindings::get_navigation_commands(),
             );
         })
         .unwrap();
@@ -261,18 +270,20 @@ fn test_render_footer_command_mode() {
             render_footer(
                 frame,
                 area,
-                true,
-                ":kustomization",
-                false,
-                "",
-                false,
-                "",
-                false,
-                false,
-                None,
-                &None,
+                FooterProps {
+                    command_mode: true,
+                    command_buffer: ":kustomization",
+                    filter_mode: false,
+                    filter: "",
+                    search_input_mode: false,
+                    search_query: "",
+                    show_help: false,
+                    show_quit_confirm: false,
+                    confirmation_message: None,
+                    status_message: &None,
+                    nav_commands: &flux9s::tui::keybindings::get_navigation_commands(),
+                },
                 &theme,
-                &flux9s::tui::keybindings::get_navigation_commands(),
             );
         })
         .unwrap();
@@ -292,18 +303,20 @@ fn test_render_footer_filter_mode() {
             render_footer(
                 frame,
                 area,
-                false,
-                "",
-                true,
-                "my-",
-                false,
-                "",
-                false,
-                false,
-                None,
-                &None,
+                FooterProps {
+                    command_mode: false,
+                    command_buffer: "",
+                    filter_mode: true,
+                    filter: "my-",
+                    search_input_mode: false,
+                    search_query: "",
+                    show_help: false,
+                    show_quit_confirm: false,
+                    confirmation_message: None,
+                    status_message: &None,
+                    nav_commands: &flux9s::tui::keybindings::get_navigation_commands(),
+                },
                 &theme,
-                &flux9s::tui::keybindings::get_navigation_commands(),
             );
         })
         .unwrap();
@@ -336,17 +349,18 @@ fn test_render_resource_list() {
             render_resource_list(
                 frame,
                 area,
-                &resources,
-                0,
-                &mut scroll_offset,
-                &flux9s::models::kind_filter::KindFilter::all(),
-                &resource_objects,
+                ResourceListProps {
+                    resources: &resources,
+                    kind_filter: &flux9s::models::kind_filter::KindFilter::all(),
+                    resource_objects: &resource_objects,
+                    no_icons: config.ui.no_icons,
+                    favorites: &HashSet::new(),
+                    sort_field: SortField::Default,
+                    sort_reverse: false,
+                    access_notice: None,
+                },
+                ListCursor::new(0, &mut scroll_offset),
                 &theme,
-                config.ui.no_icons,
-                &HashSet::new(),
-                SortField::Default,
-                false,
-                None,
             );
         })
         .unwrap();
@@ -379,17 +393,21 @@ fn test_render_resource_list_with_selection() {
             render_resource_list(
                 frame,
                 area,
-                &resources,
-                1, // Select second item
-                &mut scroll_offset,
-                &flux9s::models::kind_filter::KindFilter::all(),
-                &resource_objects,
+                ResourceListProps {
+                    resources: &resources,
+                    kind_filter: &flux9s::models::kind_filter::KindFilter::all(),
+                    resource_objects: &resource_objects,
+                    no_icons: config.ui.no_icons,
+                    favorites: &HashSet::new(),
+                    sort_field: SortField::Default,
+                    sort_reverse: false,
+                    access_notice: None,
+                },
+                ListCursor::new(
+                    1, // Select second item
+                    &mut scroll_offset,
+                ),
                 &theme,
-                config.ui.no_icons,
-                &HashSet::new(),
-                SortField::Default,
-                false,
-                None,
             );
         })
         .unwrap();
@@ -419,17 +437,18 @@ fn test_render_resource_list_with_resource_type_filter() {
             render_resource_list(
                 frame,
                 area,
-                &resources,
-                0,
-                &mut scroll_offset,
-                &flux9s::models::kind_filter::KindFilter::kind("Kustomization"),
-                &resource_objects,
+                ResourceListProps {
+                    resources: &resources,
+                    kind_filter: &flux9s::models::kind_filter::KindFilter::kind("Kustomization"),
+                    resource_objects: &resource_objects,
+                    no_icons: config.ui.no_icons,
+                    favorites: &HashSet::new(),
+                    sort_field: SortField::Default,
+                    sort_reverse: false,
+                    access_notice: None,
+                },
+                ListCursor::new(0, &mut scroll_offset),
                 &theme,
-                config.ui.no_icons,
-                &HashSet::new(),
-                SortField::Default,
-                false,
-                None,
             );
         })
         .unwrap();
@@ -452,17 +471,18 @@ fn test_render_resource_list_empty() {
             render_resource_list(
                 frame,
                 area,
-                &[],
-                0,
-                &mut scroll_offset,
-                &flux9s::models::kind_filter::KindFilter::all(),
-                &resource_objects,
+                ResourceListProps {
+                    resources: &[],
+                    kind_filter: &flux9s::models::kind_filter::KindFilter::all(),
+                    resource_objects: &resource_objects,
+                    no_icons: config.ui.no_icons,
+                    favorites: &HashSet::new(),
+                    sort_field: SortField::Default,
+                    sort_reverse: false,
+                    access_notice: None,
+                },
+                ListCursor::new(0, &mut scroll_offset),
                 &theme,
-                config.ui.no_icons,
-                &HashSet::new(),
-                SortField::Default,
-                false,
-                None,
             );
         })
         .unwrap();
@@ -603,14 +623,14 @@ fn test_render_resource_describe_with_data() {
             render_resource_describe(
                 frame,
                 area,
-                &Some("Kustomization:flux-system:my-kustomization".to_string()),
-                &state,
-                &resource_objects,
-                Some(&describe_data),
+                Watched {
+                    key: &Some("Kustomization:flux-system:my-kustomization".to_string()),
+                    state: &state,
+                    objects: &resource_objects,
+                },
+                Fetched::new(Some(&describe_data), false),
                 false,
-                false,
-                &mut describe_scroll_offset,
-                &mut TextSearchState::default(),
+                TextScroll::new(&mut describe_scroll_offset, &mut TextSearchState::default()),
                 &theme,
             );
         })
@@ -634,13 +654,13 @@ fn test_render_resource_yaml_no_selection() {
             render_resource_yaml(
                 frame,
                 area,
-                &None,
-                &state,
-                &resource_objects,
-                None,
-                false,
-                &mut yaml_scroll_offset,
-                &mut TextSearchState::default(),
+                Watched {
+                    key: &None,
+                    state: &state,
+                    objects: &resource_objects,
+                },
+                Fetched::new(None, false),
+                TextScroll::new(&mut yaml_scroll_offset, &mut TextSearchState::default()),
                 &theme,
             );
         })
@@ -664,13 +684,13 @@ fn test_render_resource_yaml_pending() {
             render_resource_yaml(
                 frame,
                 area,
-                &Some("Kustomization:flux-system:my-kustomization".to_string()),
-                &state,
-                &resource_objects,
-                None,
-                true,
-                &mut yaml_scroll_offset,
-                &mut TextSearchState::default(),
+                Watched {
+                    key: &Some("Kustomization:flux-system:my-kustomization".to_string()),
+                    state: &state,
+                    objects: &resource_objects,
+                },
+                Fetched::new(None, true),
+                TextScroll::new(&mut yaml_scroll_offset, &mut TextSearchState::default()),
                 &theme,
             );
         })
@@ -720,13 +740,13 @@ fn test_render_resource_yaml_with_data() {
             render_resource_yaml(
                 frame,
                 area,
-                &Some("Kustomization:flux-system:my-kustomization".to_string()),
-                &state,
-                &resource_objects,
-                Some(&resource_json),
-                false,
-                &mut yaml_scroll_offset,
-                &mut TextSearchState::default(),
+                Watched {
+                    key: &Some("Kustomization:flux-system:my-kustomization".to_string()),
+                    state: &state,
+                    objects: &resource_objects,
+                },
+                Fetched::new(Some(&resource_json), false),
+                TextScroll::new(&mut yaml_scroll_offset, &mut TextSearchState::default()),
                 &theme,
             );
         })
@@ -747,18 +767,20 @@ fn test_render_footer_connection_error() {
             render_footer(
                 frame,
                 area,
-                false,
-                "",
-                false,
-                "",
-                false,
-                "",
-                false,
-                false,
-                None,
-                &None,
+                FooterProps {
+                    command_mode: false,
+                    command_buffer: "",
+                    filter_mode: false,
+                    filter: "",
+                    search_input_mode: false,
+                    search_query: "",
+                    show_help: false,
+                    show_quit_confirm: false,
+                    confirmation_message: None,
+                    status_message: &None,
+                    nav_commands: &flux9s::tui::keybindings::get_connection_error_commands(),
+                },
                 &theme,
-                &flux9s::tui::keybindings::get_connection_error_commands(),
             );
         })
         .unwrap();

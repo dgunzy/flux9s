@@ -136,11 +136,14 @@ impl App {
                 .get_by_keybinding(pending.operation_key)
                 .and_then(|operation| {
                     self.state
-                        .get(&crate::watcher::resource_key(
-                            &pending.namespace,
-                            &pending.name,
-                            &pending.resource_type,
-                        ))
+                        .get(
+                            &crate::watcher::ResourceKey::new(
+                                &pending.resource_type,
+                                &pending.namespace,
+                                &pending.name,
+                            )
+                            .to_key_string(),
+                        )
                         .map(|resource| operation.confirmation_message(&resource))
                 })
                 .unwrap_or_else(|| "Resource not found".to_string()),

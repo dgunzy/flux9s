@@ -10,24 +10,37 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
+/// What the footer shows: the command / filter / search line, or the status and key hints.
+pub struct FooterProps<'a> {
+    pub command_mode: bool,
+    pub command_buffer: &'a str,
+    pub filter_mode: bool,
+    pub filter: &'a str,
+    pub search_input_mode: bool,
+    pub search_query: &'a str,
+    pub show_help: bool,
+    pub show_quit_confirm: bool,
+    pub confirmation_message: Option<&'a str>,
+    pub status_message: &'a Option<(String, bool)>,
+    pub nav_commands: &'a [NavigationCommand],
+}
+
 /// Render the footer based on current application state
 /// Returns the number of lines used (for dynamic height calculation)
-pub fn render_footer(
-    f: &mut Frame,
-    area: Rect,
-    command_mode: bool,
-    command_buffer: &str,
-    filter_mode: bool,
-    filter: &str,
-    search_input_mode: bool,
-    search_query: &str,
-    show_help: bool,
-    show_quit_confirm: bool,
-    confirmation_message: Option<&str>,
-    status_message: &Option<(String, bool)>,
-    theme: &Theme,
-    nav_commands: &[NavigationCommand],
-) -> usize {
+pub fn render_footer(f: &mut Frame, area: Rect, props: FooterProps<'_>, theme: &Theme) -> usize {
+    let FooterProps {
+        command_mode,
+        command_buffer,
+        filter_mode,
+        filter,
+        search_input_mode,
+        search_query,
+        show_help,
+        show_quit_confirm,
+        confirmation_message,
+        status_message,
+        nav_commands,
+    } = props;
     if command_mode {
         return render_command_footer(f, area, command_buffer, theme);
     }

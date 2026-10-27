@@ -1,9 +1,8 @@
 //! Describe view rendering
 
-use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
+use crate::tui::views::props::{Fetched, TextScroll, Watched};
 use crate::tui::views::yaml::{apply_text_search, decorate_title_with_search, find_match_lines};
-use crate::watcher::ResourceState;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -12,7 +11,6 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 use serde_json::Value;
-use std::collections::HashMap;
 
 fn scalar_to_string(value: &Value) -> String {
     match value {
@@ -294,16 +292,25 @@ fn build_describe_lines(
 pub fn render_resource_describe(
     f: &mut Frame,
     area: Rect,
-    selected_resource_key: &Option<String>,
-    state: &ResourceState,
-    resource_objects: &HashMap<String, serde_json::Value>,
-    describe_fetched: Option<&crate::kube::fetch::DescribeData>,
-    describe_loading: bool,
+    watched: Watched<'_>,
+    describe: Fetched<'_, crate::kube::fetch::DescribeData>,
     managed_by_pending: bool,
-    describe_scroll_offset: &mut usize,
-    search: &mut TextSearchState,
+    text: TextScroll<'_>,
     theme: &Theme,
 ) {
+    let Watched {
+        key: selected_resource_key,
+        state,
+        objects: resource_objects,
+    } = watched;
+    let Fetched {
+        data: describe_fetched,
+        loading: describe_loading,
+    } = describe;
+    let TextScroll {
+        offset: describe_scroll_offset,
+        search,
+    } = text;
     let key = match selected_resource_key {
         Some(k) => k,
         None => {
@@ -356,12 +363,9 @@ pub fn render_resource_describe(
     let resource = state.get(key);
     // Native objects (#262/#267) aren't in the watched state; title them
     // from the selected key so the view still says what it's showing.
-    let mut title = match (
-        &resource,
-        crate::tui::views::helpers::key_kind_and_name(key),
-    ) {
+    let mut title = match (&resource, crate::watcher::ResourceKey::parse(key)) {
         (Some(resource), _) => format!("Describe - {} - {}", resource.resource_type, resource.name),
-        (None, Some((kind, name))) => format!("Describe - {kind} - {name}"),
+        (None, Some(key)) => format!("Describe - {} - {}", key.resource_type, key.name),
         (None, None) => "Describe".to_string(),
     };
 
@@ -425,6 +429,9 @@ pub fn render_resource_describe(
 mod tests {
     use super::*;
     use crate::kube::events::KubeEventInfo;
+    use crate::tui::app::state::TextSearchState;
+    use crate::watcher::ResourceState;
+    use std::collections::HashMap;
 
     fn line_text(line: &Line<'_>) -> String {
         line.spans
@@ -557,14 +564,14 @@ mod tests {
                     render_resource_describe(
                         f,
                         f.area(),
-                        &Some("Pod:apps:web-abc".to_string()),
-                        &ResourceState::new(),
-                        &HashMap::new(),
-                        Some(&data),
-                        false,
+                        Watched {
+                            key: &Some("Pod:apps:web-abc".to_string()),
+                            state: &ResourceState::new(),
+                            objects: &HashMap::new(),
+                        },
+                        Fetched::new(Some(&data), false),
                         pending,
-                        &mut 0,
-                        &mut TextSearchState::default(),
+                        TextScroll::new(&mut 0, &mut TextSearchState::default()),
                         &Theme::default(),
                     )
                 })

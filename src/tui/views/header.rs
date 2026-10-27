@@ -12,26 +12,38 @@ use ratatui::{
 };
 use std::collections::HashMap;
 
+/// What the header shows. `browsing` is set while browsing a non-Flux kind (#267): it replaces the Flux resource summary, keeping the Flux total as the anchor.
+pub struct HeaderProps<'a> {
+    pub state: &'a ResourceState,
+    pub controller_pods: &'a ControllerPodState,
+    pub context: &'a str,
+    pub namespace: &'a Option<String>,
+    pub filter: &'a str,
+    pub kind_filter: &'a crate::models::kind_filter::KindFilter,
+    pub filtered_count: usize,
+    pub health_percentage: f64,
+    pub health_filter: Option<&'a str>,
+    pub read_only: bool,
+    pub no_icons: bool,
+    pub browsing: Option<&'a str>,
+}
+
 /// Render the main header with context, namespace, totals, and resource counts
-pub fn render_header(
-    f: &mut Frame,
-    area: Rect,
-    state: &ResourceState,
-    controller_pods: &ControllerPodState,
-    context: &str,
-    namespace: &Option<String>,
-    filter: &str,
-    kind_filter: &crate::models::kind_filter::KindFilter,
-    filtered_count: usize,       // Count of resources after filtering
-    health_percentage: f64,      // Health percentage (0-100)
-    health_filter: Option<&str>, // Health filter status ("healthy", "unhealthy", "suspended", or None)
-    read_only: bool,             // Readonly mode status
-    theme: &Theme,
-    no_icons: bool,
-    // Set while browsing a non-Flux kind (#267): replaces the Flux resource
-    // summary with what's being browsed, keeping the Flux total as the anchor.
-    browsing: Option<&str>,
-) {
+pub fn render_header(f: &mut Frame, area: Rect, props: HeaderProps<'_>, theme: &Theme) {
+    let HeaderProps {
+        state,
+        controller_pods,
+        context,
+        namespace,
+        filter,
+        kind_filter,
+        filtered_count,
+        health_percentage,
+        health_filter,
+        read_only,
+        no_icons,
+        browsing,
+    } = props;
     // Split header into left (info), middle (controller status), and right (ASCII art)
     let header_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -473,19 +485,21 @@ mod tests {
                 render_header(
                     f,
                     f.area(),
-                    &ResourceState::default(),
-                    &ControllerPodState::default(),
-                    "ctx",
-                    &Some("apps".to_string()),
-                    "",
-                    kind_filter,
-                    0,
-                    100.0,
-                    None,
-                    false,
+                    HeaderProps {
+                        state: &ResourceState::default(),
+                        controller_pods: &ControllerPodState::default(),
+                        context: "ctx",
+                        namespace: &Some("apps".to_string()),
+                        filter: "",
+                        kind_filter,
+                        filtered_count: 0,
+                        health_percentage: 100.0,
+                        health_filter: None,
+                        read_only: false,
+                        no_icons: false,
+                        browsing,
+                    },
                     &Theme::default(),
-                    false,
-                    browsing,
                 )
             })
             .unwrap();

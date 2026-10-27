@@ -332,14 +332,7 @@ async fn labeled_crd_discovers_and_lists_instances() {
 
     // Instances list through the derived ApiResource — the same construction
     // the dynamic watcher and y/d fetches use
-    let (group, version, plural) = extra.gvk();
-    let api_resource = kube::core::ApiResource {
-        api_version: format!("{}/{}", group, version),
-        group,
-        version,
-        kind: extra.kind.clone(),
-        plural,
-    };
+    let api_resource = extra.api_resource();
     let widgets: kube::Api<DynamicObject> =
         kube::Api::namespaced_with(client, "flux-resources", &api_resource);
     let list = eventually("widget fixtures", 60, || {
@@ -951,4 +944,76 @@ async fn lookups_by_name_and_namespace_discovery_fall_back_on_older_flux() {
         discovered.iter().any(|ns| ns == "flux-resources"),
         "{discovered:?}"
     );
+}
+
+/// The kinds `ResourceWatcher::watch_all` reports on a cluster within the
+/// deadline — every kind is watched as `DynamicObject`s at the first
+/// version the cluster serves.
+async fn watched_kinds(context: &str, expected: &[&str]) -> std::collections::BTreeSet<String> {
+    use flux9s::watcher::{ResourceWatcher, WatchEvent};
+    let client = client_for(context).await;
+    let (mut watcher, mut events) =
+        ResourceWatcher::new(client, None, "flux-system".to_string(), false);
+    watcher
+        .watch_all()
+        .unwrap_or_else(|e| panic!("watchers start: {e:#}"));
+    let mut seen = std::collections::BTreeSet::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while !expected.iter().all(|kind| seen.contains(*kind)) {
+        match tokio::time::timeout_at(deadline, events.recv()).await {
+            Ok(Some(WatchEvent::Applied(key, obj))) => {
+                assert_eq!(
+                    obj["kind"],
+                    key.resource_type.as_str(),
+                    "the event carries the object"
+                );
+                seen.insert(key.resource_type);
+            }
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => break,
+        }
+    }
+    watcher.stop();
+    seen
+}
+
+/// Flux 2.10: every kind is read at its current version.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+async fn watch_all_reports_every_kind_on_flux_2_10() {
+    let expected = [
+        "GitRepository",
+        "OCIRepository",
+        "HelmRepository",
+        "HelmChart",
+        "Kustomization",
+        "HelmRelease",
+        "ImagePolicy",
+        "Alert",
+        "Provider",
+        "Receiver",
+    ];
+    let seen = watched_kinds(&simple_context(), &expected).await;
+    for kind in expected {
+        assert!(seen.contains(kind), "{kind} not watched; saw {seen:?}");
+    }
+}
+
+/// Flux 2.2: the promoted kinds are read at their older versions
+/// (HelmRelease v2beta2, OCIRepository / HelmRepository / HelmChart v1beta2).
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-legacy dev cluster (Flux 2.2)"]
+async fn watch_all_falls_back_on_older_flux() {
+    let expected = [
+        "GitRepository",
+        "OCIRepository",
+        "HelmRepository",
+        "HelmChart",
+        "Kustomization",
+        "HelmRelease",
+    ];
+    let seen = watched_kinds(&legacy_context(), &expected).await;
+    for kind in expected {
+        assert!(seen.contains(kind), "{kind} not watched; saw {seen:?}");
+    }
 }

@@ -6,7 +6,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use flux9s::tui::App;
 use flux9s::tui::app::state::View;
-use flux9s::watcher::{ResourceInfo, ResourceState, resource_key};
+use flux9s::watcher::{ResourceInfo, ResourceState};
 use std::collections::HashMap;
 
 fn make_key(code: KeyCode) -> KeyEvent {
@@ -63,7 +63,8 @@ fn add_test_resource(app: &mut App) {
         reconciliation_history: vec![],
     };
     app.state().upsert(
-        resource_key(&resource.namespace, &resource.name, &resource.resource_type),
+        flux9s::ResourceKey::new(&resource.resource_type, &resource.namespace, &resource.name)
+            .to_key_string(),
         resource,
     );
 }

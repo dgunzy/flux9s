@@ -9,7 +9,7 @@ use crate::models::kind_filter::KindFilter;
 use crate::tui::Theme;
 use crate::tui::app::state::{HealthFilter, NavEntry};
 use crate::watcher::ResourceKey;
-use crate::watcher::{ResourceInfo, ResourceState, resource_key};
+use crate::watcher::{ResourceInfo, ResourceState};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use std::collections::HashMap;
 
@@ -80,7 +80,12 @@ fn add_resource(app: &mut App) {
         reconciliation_history: vec![],
     };
     app.state.upsert(
-        resource_key(&resource.namespace, &resource.name, &resource.resource_type),
+        crate::watcher::ResourceKey::new(
+            &resource.resource_type,
+            &resource.namespace,
+            &resource.name,
+        )
+        .to_key_string(),
         resource,
     );
 }
@@ -101,7 +106,12 @@ fn add_helm_release(app: &mut App) {
         reconciliation_history: vec![],
     };
     app.state.upsert(
-        resource_key(&resource.namespace, &resource.name, &resource.resource_type),
+        crate::watcher::ResourceKey::new(
+            &resource.resource_type,
+            &resource.namespace,
+            &resource.name,
+        )
+        .to_key_string(),
         resource,
     );
 }
@@ -281,11 +291,12 @@ fn table_command_suspended_filters_to_suspended_resources() {
         reconciliation_history: vec![],
     };
     app.state.upsert(
-        resource_key(
+        crate::watcher::ResourceKey::new(
+            &suspended.resource_type,
             &suspended.namespace,
             &suspended.name,
-            &suspended.resource_type,
-        ),
+        )
+        .to_key_string(),
         suspended,
     );
     app.ui_state.command_buffer = "suspended".to_string();
@@ -2200,7 +2211,10 @@ fn kind_typed_during_discovery_is_held_not_rejected() {
     app.ui_state.command_buffer = "zzznotakind".to_string();
     app.execute_command();
 
-    assert_eq!(app.pending_kind_command.as_deref(), Some("zzznotakind"));
+    assert_eq!(
+        app.pending_kind_command.as_ref().map(|p| p.token.as_str()),
+        Some("zzznotakind")
+    );
     let (message, is_error) = app.ui_state.status_message.clone().unwrap();
     assert!(!is_error && message.contains("opens when ready"));
 
@@ -2774,7 +2788,8 @@ fn discover_command_toggles_discovery_and_purges_kinds() {
         plural: "discovertoggletests".to_string(),
         short_names: vec![],
     });
-    let key = resource_key("default", "widget", "DiscoverToggleTest");
+    let key =
+        crate::watcher::ResourceKey::new("DiscoverToggleTest", "default", "widget").to_key_string();
     app.state.upsert(
         key.clone(),
         ResourceInfo {
@@ -2860,14 +2875,10 @@ fn discovered_kind_commands_resolve_only_when_registered() {
     assert!(matches.contains(&"zephyrtests".to_string()));
 
     // GVK resolution works for read-only fetches (y/d)
-    let gvk = crate::kube::get_gvk_for_resource_type("ZephyrTest").unwrap();
+    let resource = crate::kube::api::api_resource_for_kind("ZephyrTest").unwrap();
     assert_eq!(
-        gvk,
-        (
-            "example.com".to_string(),
-            "v1".to_string(),
-            "zephyrtests".to_string()
-        )
+        (resource.api_version.as_str(), resource.plural.as_str()),
+        ("example.com/v1", "zephyrtests")
     );
 
     // Discovered kinds stay view-only: no operation considers them valid
@@ -2884,7 +2895,7 @@ fn discovered_kind_commands_resolve_only_when_registered() {
     // Cleanup the process-global registry
     global().remove("ZephyrTest");
     assert!(
-        crate::kube::get_gvk_for_resource_type("ZephyrTest").is_err(),
+        crate::kube::api::api_resource_for_kind("ZephyrTest").is_err(),
         "removal restores the unknown-kind error"
     );
 }
@@ -3242,7 +3253,7 @@ fn preflight(manager: crate::kube::ownership::ManagerLookup) -> super::state::Ed
 
 fn flux_ks(name: &str) -> crate::kube::ownership::Manager {
     crate::kube::ownership::Manager::Flux {
-        kind: "Kustomization".into(),
+        kind: crate::models::FluxResourceKind::Kustomization,
         namespace: "flux-system".into(),
         name: name.into(),
     }
@@ -3411,11 +3422,10 @@ fn a_late_preflight_after_leaving_the_edit_is_ignored() {
 }
 
 #[test]
-fn annotate_actions_build_a_metadata_patch() {
+fn patch_actions_fill_in_now() {
     use super::actions::{ActionSpec, Write};
-    let spec = ActionSpec::Annotate {
-        key: "example.com/reconcile-at",
-        value: "{{now}}",
+    let spec = ActionSpec::Patch {
+        patch: r#"{"metadata":{"annotations":{"example.com/reconcile-at":"{{now}}"}}}"#,
         write: Write {
             verb: "Reconcile",
             done: "Requested reconcile of",
@@ -3792,7 +3802,8 @@ fn trace_command_searches_all_namespaces_without_n() {
         .unwrap();
     other.namespace = "team".into();
     app.state.upsert(
-        resource_key("team", "my-kustomization", "Kustomization"),
+        crate::watcher::ResourceKey::new("Kustomization", "team", "my-kustomization")
+            .to_key_string(),
         other,
     );
     assert_eq!(trace_command(&mut app, "trace ks/my-kustomization"), None);
@@ -3978,8 +3989,10 @@ fn add_flux(app: &mut App, kind: &str, name: &str) {
         .unwrap_or_else(|| panic!("add_resource first"));
     resource.resource_type = kind.to_string();
     resource.name = name.to_string();
-    app.state
-        .upsert(resource_key("flux-system", name, kind), resource);
+    app.state.upsert(
+        crate::watcher::ResourceKey::new(kind, "flux-system", name).to_key_string(),
+        resource,
+    );
 }
 
 fn run(app: &mut App, cmd: &str) {
@@ -4331,7 +4344,10 @@ fn n_with_a_kubernetes_kind_during_discovery_waits_for_it() {
     app.namespace = Some("flux-system".into());
     app.request_kind_discovery();
     run(&mut app, "deploy -n prod");
-    assert_eq!(app.pending_kind_command.as_deref(), Some("deploy"));
+    assert_eq!(
+        app.pending_kind_command.as_ref().map(|p| p.token.as_str()),
+        Some("deploy")
+    );
     assert_eq!(app.namespace.as_deref(), Some("prod"));
 }
 
@@ -4346,8 +4362,10 @@ fn a_kind_set_puts_its_kinds_first_across_namespaces() {
     hr.resource_type = "HelmRelease".into();
     hr.name = "podinfo".into();
     hr.namespace = "apps".into(); // sorts before flux-system
-    app.state
-        .upsert(resource_key("apps", "podinfo", "HelmRelease"), hr);
+    app.state.upsert(
+        crate::watcher::ResourceKey::new("HelmRelease", "apps", "podinfo").to_key_string(),
+        hr,
+    );
     app.namespace = None;
 
     run(&mut app, "ks,hr");
@@ -4528,7 +4546,7 @@ fn app_with_sweep_rows() -> App {
     app.namespace = Some("apps".into());
     run(&mut app, "orphaned");
     let ks = |name: &str| Manager::Flux {
-        kind: "Kustomization".into(),
+        kind: crate::models::FluxResourceKind::Kustomization,
         namespace: "flux-system".into(),
         name: name.into(),
     };
@@ -4685,4 +4703,57 @@ fn flux_kind_commands_and_all_leave_the_sweep_for_the_flux_list() {
             ":{command} releases the sweep"
         );
     }
+}
+
+/// `:ks` / `:all` show the Flux list from every view — not only the ones
+/// someone remembered to list (the `:ks`-from-`:unmanaged` bug).
+#[test]
+fn kind_filters_show_the_flux_list_from_every_view() {
+    for &view in View::ALL {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = view;
+        run(&mut app, "ks");
+        assert_eq!(
+            app.view_state.current_view,
+            View::ResourceList,
+            ":ks from {view:?}"
+        );
+        assert_eq!(
+            app.view_state.kind_filter.single(),
+            Some("Kustomization"),
+            "{view:?}"
+        );
+
+        app.view_state.current_view = view;
+        run(&mut app, "all");
+        assert_eq!(
+            app.view_state.current_view,
+            View::ResourceList,
+            ":all from {view:?}"
+        );
+        assert!(app.view_state.kind_filter.is_all(), "{view:?}");
+    }
+}
+
+/// A kind typed during discovery opens when it lands only if the user is
+/// still on the view they typed it in — from any view, not just lists.
+#[test]
+fn a_held_kind_opens_only_where_it_was_typed() {
+    for &view in View::ALL {
+        let mut app = create_test_app(false);
+        app.view_state.current_view = view;
+        app.hold_kind_command("zzznotakind");
+        assert_eq!(
+            app.pending_kind_command.as_ref().map(|p| p.view),
+            Some(view)
+        );
+    }
+
+    let mut app = create_test_app(false);
+    app.view_state.current_view = View::EventList;
+    app.hold_kind_command("zzznotakind");
+    app.view_state.current_view = View::Pulse;
+    app.on_kind_discovery_complete();
+    assert!(app.pending_kind_command.is_none());
+    assert_eq!(app.view_state.current_view, View::Pulse, "not yanked away");
 }

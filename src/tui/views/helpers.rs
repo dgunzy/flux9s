@@ -51,17 +51,6 @@ pub fn render_loading_state(f: &mut Frame, area: Rect, title: &str, message: &st
     f.render_widget(paragraph, area);
 }
 
-/// `(kind, name)` from a `kind:namespace:name` selection key, for view
-/// titles. Unlike `ResourceKey::parse` it keeps `:` inside names (native
-/// objects such as `system:controller:...` ClusterRoles) and never logs.
-pub fn key_kind_and_name(key: &str) -> Option<(&str, &str)> {
-    let mut parts = key.splitn(3, ':');
-    let kind = parts.next().filter(|k| !k.is_empty())?;
-    let _namespace = parts.next()?;
-    let name = parts.next().filter(|n| !n.is_empty())?;
-    Some((kind, name))
-}
-
 /// Clean a JSON object by removing Kubernetes-managed fields that add noise in text views.
 pub fn clean_resource_json(obj: &serde_json::Value) -> serde_json::Value {
     match obj {
@@ -156,22 +145,10 @@ pub fn create_themed_block<'a>(title: &'a str, theme: &Theme) -> Block<'a> {
         .border_style(Style::default().fg(theme.text_label))
 }
 
-/// Format a resource age (creation timestamp) as a compact k9s-style duration.
-///
-/// Uses the largest applicable unit: `42s`, `5m`, `3h`, `12d`, `2y`.
-/// Returns `-` when the timestamp is unknown.
+/// A resource age (creation timestamp) as a compact k9s-style duration
+/// ([`crate::age::since`]); `-` when unknown.
 pub fn format_age(age: Option<chrono::DateTime<chrono::Utc>>) -> String {
-    let Some(created) = age else {
-        return "-".to_string();
-    };
-    let seconds = (chrono::Utc::now() - created).num_seconds().max(0);
-    match seconds {
-        s if s < 60 => format!("{}s", s),
-        s if s < 60 * 60 => format!("{}m", s / 60),
-        s if s < 24 * 60 * 60 => format!("{}h", s / (60 * 60)),
-        s if s < 365 * 24 * 60 * 60 => format!("{}d", s / (24 * 60 * 60)),
-        s => format!("{}y", s / (365 * 24 * 60 * 60)),
-    }
+    crate::age::since(age)
 }
 
 #[cfg(test)]
@@ -247,18 +224,5 @@ mod tests {
     fn test_format_age_future_timestamp_clamps_to_zero() {
         // Clock skew between client and API server should not render negative ages
         assert_eq!(format_age(Some(Utc::now() + Duration::seconds(30))), "0s");
-    }
-
-    #[test]
-    fn key_kind_and_name_keeps_colons_in_names() {
-        assert_eq!(
-            key_kind_and_name("Deployment:apps:web"),
-            Some(("Deployment", "web"))
-        );
-        assert_eq!(
-            key_kind_and_name("ClusterRole::system:controller:job-controller"),
-            Some(("ClusterRole", "system:controller:job-controller"))
-        );
-        assert_eq!(key_kind_and_name("garbage"), None);
     }
 }

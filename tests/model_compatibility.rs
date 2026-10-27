@@ -3,11 +3,8 @@
 //! These tests ensure that generated models compile correctly and can be used.
 //! When CRDs are updated, these tests will catch compilation errors.
 
-use flux9s::watcher::{
-    Alert, Bucket, ExternalArtifact, GitRepository, HelmChart, HelmRelease, HelmRepository,
-    ImagePolicy, ImageRepository, ImageUpdateAutomation, Kustomization, OciRepository, Provider,
-    Receiver, ResourceSetInputProvider, WatchableResource,
-};
+use flux9s::models::FluxResourceKind;
+use flux9s::watcher::{GitRepository, HelmRelease, Kustomization, ResourceSetInputProvider};
 use serde_json::json;
 
 #[test]
@@ -22,71 +19,147 @@ fn test_generated_models_compile() {
     // If we get here, the models compiled successfully - the test passes
 }
 
+/// Every Flux kind's group / current version / plural, read from the
+/// generated model. A CRD update that moves a kind's version fails here:
+/// update this table and add the old version to `older_api_versions`, so
+/// clusters still serving it keep working.
 #[test]
-fn test_watchable_resource_trait_implementations() {
-    // Test that all resource types implement WatchableResource trait
-
-    // Test API group/version/plural methods exist and return strings
-    assert_eq!(GitRepository::api_group(), "source.toolkit.fluxcd.io");
-    assert_eq!(GitRepository::api_version(), "v1");
-    assert_eq!(GitRepository::plural(), "gitrepositories");
-    assert_eq!(GitRepository::display_name(), "GitRepository");
-
-    assert_eq!(Kustomization::api_group(), "kustomize.toolkit.fluxcd.io");
-    assert_eq!(Kustomization::api_version(), "v1");
-    assert_eq!(Kustomization::plural(), "kustomizations");
-    assert_eq!(Kustomization::display_name(), "Kustomization");
-
-    assert_eq!(HelmRelease::api_group(), "helm.toolkit.fluxcd.io");
-    assert_eq!(HelmRelease::api_version(), "v2");
-    assert_eq!(HelmRelease::plural(), "helmreleases");
-    assert_eq!(HelmRelease::display_name(), "HelmRelease");
-}
-
-#[test]
-fn test_resource_type_api_consistency() {
-    // Test that API groups/versions match expected Flux patterns
-
-    // Source controller resources should all use source.toolkit.fluxcd.io/v1
-    assert_eq!(GitRepository::api_group(), "source.toolkit.fluxcd.io");
-    assert_eq!(GitRepository::api_version(), "v1");
-    assert_eq!(OciRepository::api_group(), "source.toolkit.fluxcd.io");
-    assert_eq!(OciRepository::api_version(), "v1");
-    assert_eq!(HelmRepository::api_group(), "source.toolkit.fluxcd.io");
-    assert_eq!(HelmRepository::api_version(), "v1");
-    assert_eq!(Bucket::api_group(), "source.toolkit.fluxcd.io");
-    assert_eq!(Bucket::api_version(), "v1");
-    assert_eq!(HelmChart::api_group(), "source.toolkit.fluxcd.io");
-    assert_eq!(HelmChart::api_version(), "v1");
-    assert_eq!(ExternalArtifact::api_group(), "source.toolkit.fluxcd.io");
-    assert_eq!(ExternalArtifact::api_version(), "v1");
-
-    // Kustomize controller
-    assert_eq!(Kustomization::api_group(), "kustomize.toolkit.fluxcd.io");
-    assert_eq!(Kustomization::api_version(), "v1");
-
-    // Helm controller
-    assert_eq!(HelmRelease::api_group(), "helm.toolkit.fluxcd.io");
-    assert_eq!(HelmRelease::api_version(), "v2");
-
-    // Image reflector/automation controllers
-    assert_eq!(ImageRepository::api_group(), "image.toolkit.fluxcd.io");
-    assert_eq!(ImageRepository::api_version(), "v1");
-    assert_eq!(ImagePolicy::api_group(), "image.toolkit.fluxcd.io");
-    assert_eq!(ImagePolicy::api_version(), "v1");
+fn every_kind_reads_its_api_from_the_generated_model() {
+    let expected = [
+        (
+            FluxResourceKind::GitRepository,
+            "source.toolkit.fluxcd.io",
+            "v1",
+            "gitrepositories",
+        ),
+        (
+            FluxResourceKind::OCIRepository,
+            "source.toolkit.fluxcd.io",
+            "v1",
+            "ocirepositories",
+        ),
+        (
+            FluxResourceKind::HelmRepository,
+            "source.toolkit.fluxcd.io",
+            "v1",
+            "helmrepositories",
+        ),
+        (
+            FluxResourceKind::Bucket,
+            "source.toolkit.fluxcd.io",
+            "v1",
+            "buckets",
+        ),
+        (
+            FluxResourceKind::HelmChart,
+            "source.toolkit.fluxcd.io",
+            "v1",
+            "helmcharts",
+        ),
+        (
+            FluxResourceKind::ExternalArtifact,
+            "source.toolkit.fluxcd.io",
+            "v1",
+            "externalartifacts",
+        ),
+        (
+            FluxResourceKind::ArtifactGenerator,
+            "source.extensions.fluxcd.io",
+            "v1beta1",
+            "artifactgenerators",
+        ),
+        (
+            FluxResourceKind::Kustomization,
+            "kustomize.toolkit.fluxcd.io",
+            "v1",
+            "kustomizations",
+        ),
+        (
+            FluxResourceKind::HelmRelease,
+            "helm.toolkit.fluxcd.io",
+            "v2",
+            "helmreleases",
+        ),
+        (
+            FluxResourceKind::ImageRepository,
+            "image.toolkit.fluxcd.io",
+            "v1",
+            "imagerepositories",
+        ),
+        (
+            FluxResourceKind::ImagePolicy,
+            "image.toolkit.fluxcd.io",
+            "v1",
+            "imagepolicies",
+        ),
+        (
+            FluxResourceKind::ImageUpdateAutomation,
+            "image.toolkit.fluxcd.io",
+            "v1",
+            "imageupdateautomations",
+        ),
+        (
+            FluxResourceKind::Alert,
+            "notification.toolkit.fluxcd.io",
+            "v1",
+            "alerts",
+        ),
+        (
+            FluxResourceKind::Provider,
+            "notification.toolkit.fluxcd.io",
+            "v1",
+            "providers",
+        ),
+        (
+            FluxResourceKind::Receiver,
+            "notification.toolkit.fluxcd.io",
+            "v1",
+            "receivers",
+        ),
+        (
+            FluxResourceKind::ResourceSet,
+            "fluxcd.controlplane.io",
+            "v1",
+            "resourcesets",
+        ),
+        (
+            FluxResourceKind::ResourceSetInputProvider,
+            "fluxcd.controlplane.io",
+            "v1",
+            "resourcesetinputproviders",
+        ),
+        (
+            FluxResourceKind::FluxReport,
+            "fluxcd.controlplane.io",
+            "v1",
+            "fluxreports",
+        ),
+        (
+            FluxResourceKind::FluxInstance,
+            "fluxcd.controlplane.io",
+            "v1",
+            "fluxinstances",
+        ),
+    ];
     assert_eq!(
-        ImageUpdateAutomation::api_group(),
-        "image.toolkit.fluxcd.io"
+        expected.len(),
+        FluxResourceKind::ALL.len(),
+        "a kind is missing here"
     );
-    assert_eq!(ImageUpdateAutomation::api_version(), "v1");
-
-    // Notification controller
-    assert_eq!(Alert::api_group(), "notification.toolkit.fluxcd.io");
-    assert_eq!(Alert::api_version(), "v1");
-    assert_eq!(Provider::api_group(), "notification.toolkit.fluxcd.io");
-    assert_eq!(Provider::api_version(), "v1");
-    assert_eq!(Receiver::api_group(), "notification.toolkit.fluxcd.io");
-    assert_eq!(Receiver::api_version(), "v1");
+    for (kind, group, version, plural) in expected {
+        let resource = kind.api_resource();
+        assert_eq!(
+            (
+                resource.group.as_str(),
+                resource.version.as_str(),
+                resource.plural.as_str()
+            ),
+            (group, version, plural),
+            "{kind}"
+        );
+        assert_eq!(resource.kind, kind.as_str(), "variant names the CRD kind");
+        assert_eq!(resource.api_version, format!("{group}/{version}"));
+    }
 }
 
 #[test]

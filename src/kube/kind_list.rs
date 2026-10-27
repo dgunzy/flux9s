@@ -21,7 +21,6 @@ use futures::{FutureExt, StreamExt};
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::Api;
 use kube::core::DynamicObject;
-use kube::discovery::ApiResource;
 use kube::runtime::{WatchStreamExt, watcher};
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
@@ -110,7 +109,7 @@ impl FluxProbe {
                 .collect::<serde_json::Map<_, _>>()
                 .into()
         };
-        let prune = "kustomize.toolkit.fluxcd.io/prune";
+        let prune = crate::models::flux_resource_kind::labels::PRUNE;
         Some(Self {
             manager,
             owner,
@@ -312,17 +311,6 @@ pub fn eval_path(obj: &Value, path: &str) -> String {
 // Rows
 // ---------------------------------------------------------------------------
 
-/// Compact age (`45s`, `12m`, `3h`, `20d`).
-fn format_age(elapsed: chrono::Duration) -> String {
-    let secs = elapsed.num_seconds().max(0);
-    match secs {
-        s if s < 60 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86_400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86_400),
-    }
-}
-
 /// Build a row. `obj` must carry `apiVersion`/`kind` — watched objects don't,
 /// so [`watch_kind`] stamps them first (kind-specific health keys on it).
 pub fn kind_row(
@@ -366,9 +354,9 @@ pub fn kind_row(
             Column::Builtin(BuiltinColumn::Message) => {
                 sanitize_cell(status.message.lines().next().unwrap_or_default())
             }
-            Column::Builtin(BuiltinColumn::Age) => {
-                created.map(|t| format_age(now - t)).unwrap_or_default()
-            }
+            Column::Builtin(BuiltinColumn::Age) => created
+                .map(|t| crate::age::compact(now - t))
+                .unwrap_or_default(),
             Column::Builtin(BuiltinColumn::ManagedBy) => sanitize_cell(&managed_text),
             Column::JsonPath { path, .. } => sanitize_cell(&eval_path(obj, path)),
         })
@@ -418,16 +406,6 @@ pub fn printer_columns(crd: &CustomResourceDefinition, version: &str) -> Option<
     columns.push(Column::Builtin(BuiltinColumn::ManagedBy));
     columns.push(Column::Builtin(BuiltinColumn::Age));
     (columns.len() > 3).then_some(columns)
-}
-
-fn api_resource(spec: &KindSpec) -> ApiResource {
-    ApiResource {
-        group: spec.gvk.group.clone(),
-        version: spec.gvk.version.clone(),
-        api_version: spec.gvk.api_version(),
-        kind: spec.gvk.kind.clone(),
-        plural: spec.names.plural.clone(),
-    }
 }
 
 /// Printer columns for a CRD-backed kind, if it has any and we can read the
@@ -546,7 +524,7 @@ impl KindStore {
                 if let Some(created) = row.created {
                     for &i in &age_cells {
                         if let Some(cell) = row.cells.get_mut(i) {
-                            *cell = format_age(now - created);
+                            *cell = crate::age::compact(now - created);
                         }
                     }
                 }
@@ -664,7 +642,7 @@ async fn watch_kind_with(
     let columns = crd_columns(&client, spec)
         .await
         .unwrap_or_else(|| spec.columns.clone());
-    let resource = api_resource(spec);
+    let resource = spec.api_resource();
     let api: Api<DynamicObject> = match (&request.namespace, spec.is_namespaced()) {
         (Some(ns), true) => Api::namespaced_with(client.clone(), ns, &resource),
         _ => Api::all_with(client.clone(), &resource),
@@ -929,14 +907,6 @@ mod tests {
         assert!(printer_columns(&crd, "v2").is_none());
     }
 
-    #[test]
-    fn ages_are_compact() {
-        assert_eq!(format_age(chrono::Duration::seconds(45)), "45s");
-        assert_eq!(format_age(chrono::Duration::seconds(125)), "2m");
-        assert_eq!(format_age(chrono::Duration::hours(5)), "5h");
-        assert_eq!(format_age(chrono::Duration::days(20)), "20d");
-    }
-
     fn dynamic(ns: &str, name: &str, ready: i64) -> DynamicObject {
         serde_json::from_value(json!({
             "metadata": {"name": name, "namespace": ns, "creationTimestamp": "2026-09-29T09:00:00Z"},
@@ -1126,7 +1096,7 @@ mod tests {
         owners.seed(
             "rs-1",
             Resolved::Manager(Manager::Flux {
-                kind: "Kustomization".into(),
+                kind: crate::models::FluxResourceKind::Kustomization,
                 namespace: "flux-system".into(),
                 name: "apps".into(),
             }),

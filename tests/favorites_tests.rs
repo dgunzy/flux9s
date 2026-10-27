@@ -1,7 +1,6 @@
 //! Tests for favorites functionality
 
 use flux9s::config::Config;
-use flux9s::watcher::resource_key;
 
 #[test]
 fn test_config_favorites_default() {
@@ -62,7 +61,7 @@ fn test_config_favorites_empty_skipped() {
 
 #[test]
 fn test_resource_key_format() {
-    let key = resource_key("flux-system", "my-app", "Kustomization");
+    let key = flux9s::ResourceKey::new("Kustomization", "flux-system", "my-app").to_key_string();
     assert_eq!(key, "Kustomization:flux-system:my-app");
 }
 

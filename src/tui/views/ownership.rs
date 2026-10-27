@@ -6,6 +6,7 @@ use crate::kube::kind_list::sanitize_cell;
 use crate::kube::standing::Standing;
 use crate::kube::sweep::{SweepRequest, SweepResult, SweepRow, describe_request};
 use crate::tui::theme::Theme;
+use crate::tui::views::props::ListCursor;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -13,19 +14,34 @@ use ratatui::{
     widgets::{Cell, Row, Table},
 };
 
+/// What the unmanaged / orphaned list shows: the sweep asked for, its result and filtered rows.
+pub struct OwnershipListProps<'a> {
+    pub request: Option<&'a SweepRequest>,
+    pub result: Option<&'a SweepResult>,
+    pub rows: &'a [&'a SweepRow],
+    pub loading: bool,
+    pub filter: &'a str,
+}
+
 /// Render the ownership list.
 pub fn render_ownership_list(
     f: &mut Frame,
     area: Rect,
-    request: Option<&SweepRequest>,
-    result: Option<&SweepResult>,
-    rows: &[&SweepRow],
-    loading: bool,
-    filter: &str,
-    selected_index: usize,
-    scroll_offset: &mut usize,
+    props: OwnershipListProps<'_>,
+    cursor: ListCursor<'_>,
     theme: &Theme,
 ) {
+    let OwnershipListProps {
+        request,
+        result,
+        rows,
+        loading,
+        filter,
+    } = props;
+    let ListCursor {
+        selected: selected_index,
+        offset: scroll_offset,
+    } = cursor;
     let what = request.map_or_else(|| "Ownership".to_string(), describe_request);
     let Some(result) = result else {
         let message = if loading {
@@ -92,7 +108,11 @@ pub fn render_ownership_list(
                     sanitize_cell(&row.namespace)
                 }),
                 Cell::from(sanitize_cell(&row.name)),
-                Cell::from(row.created.map(|t| age(now - t)).unwrap_or_default()),
+                Cell::from(
+                    row.created
+                        .map(|t| crate::age::compact(now - t))
+                        .unwrap_or_default(),
+                ),
                 Cell::from(sanitize_cell(&row.standing.detail())),
             ])
             .style(if selected {
@@ -180,17 +200,6 @@ fn standing_style(standing: &Standing, theme: &Theme) -> Style {
     }
 }
 
-/// Compact age (`45s`, `12m`, `3h`, `20d`).
-fn age(elapsed: chrono::Duration) -> String {
-    let secs = elapsed.num_seconds().max(0);
-    match secs {
-        s if s < 60 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86_400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86_400),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,13 +236,14 @@ mod tests {
                 render_ownership_list(
                     f,
                     f.area(),
-                    Some(&request),
-                    result,
-                    &rows,
-                    loading,
-                    "",
-                    0,
-                    &mut offset,
+                    OwnershipListProps {
+                        request: Some(&request),
+                        result,
+                        rows: &rows,
+                        loading,
+                        filter: "",
+                    },
+                    ListCursor::new(0, &mut offset),
                     &Theme::default(),
                 );
             })
@@ -251,7 +261,7 @@ mod tests {
     #[test]
     fn rows_show_standing_and_why() {
         let ks = Manager::Flux {
-            kind: "Kustomization".into(),
+            kind: crate::models::FluxResourceKind::Kustomization,
             namespace: "flux-system".into(),
             name: "apps".into(),
         };

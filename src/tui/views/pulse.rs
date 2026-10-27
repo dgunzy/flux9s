@@ -6,7 +6,6 @@
 //! Everything renders from data flux9s already holds — no fetch needed.
 
 use crate::tui::app::state::ControllerPodInfo;
-use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
 use crate::tui::views::yaml::{apply_text_search, decorate_title_with_search, find_match_lines};
 use crate::watcher::ResourceInfo;
@@ -268,19 +267,32 @@ fn build_pulse_lines(
     lines
 }
 
+/// What the pulse dashboard summarises.
+pub struct PulseProps<'a> {
+    pub resources: &'a [ResourceInfo],
+    pub flux_report: Option<&'a serde_json::Value>,
+    pub controller_pods: &'a [ControllerPodInfo],
+    pub namespace: Option<&'a str>,
+}
+
 /// Render the pulse dashboard (scrollable, searchable text view).
-#[allow(clippy::too_many_arguments)]
 pub fn render_pulse(
     f: &mut Frame,
     area: Rect,
-    resources: &[ResourceInfo],
-    flux_report: Option<&serde_json::Value>,
-    controller_pods: &[ControllerPodInfo],
-    namespace: Option<&str>,
-    scroll_offset: &mut usize,
-    search: &mut TextSearchState,
+    props: PulseProps<'_>,
+    text: crate::tui::views::props::TextScroll<'_>,
     theme: &Theme,
 ) {
+    let PulseProps {
+        resources,
+        flux_report,
+        controller_pods,
+        namespace,
+    } = props;
+    let crate::tui::views::props::TextScroll {
+        offset: scroll_offset,
+        search,
+    } = text;
     let mut title = "Pulse".to_string();
     let all_lines = build_pulse_lines(resources, flux_report, controller_pods, namespace, theme);
     let visible_height = (area.height as usize).saturating_sub(2);

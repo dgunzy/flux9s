@@ -2,6 +2,7 @@
 
 use crate::tui::app::state::SortField;
 use crate::tui::theme::Theme;
+use crate::tui::views::props::ListCursor;
 use crate::tui::views::{extract_resource_specific_fields, get_resource_type_columns};
 use crate::watcher::ResourceInfo;
 use ratatui::{
@@ -30,24 +31,40 @@ fn decorate_header(col: &str, sort_field: SortField, sort_reverse: bool, no_icon
     }
 }
 
+/// What the Flux list (or favorites) shows. `access_notice` is the contextual RBAC notice shown in place of the default empty-state message when the list is empty because a kind is restricted (see `App::access_notice`).
+pub struct ResourceListProps<'a> {
+    pub resources: &'a [ResourceInfo],
+    pub kind_filter: &'a crate::models::kind_filter::KindFilter,
+    pub resource_objects: &'a HashMap<String, serde_json::Value>,
+    pub no_icons: bool,
+    pub favorites: &'a HashSet<String>,
+    pub sort_field: SortField,
+    pub sort_reverse: bool,
+    pub access_notice: Option<&'a str>,
+}
+
 /// Render the resource list table
 pub fn render_resource_list(
     f: &mut Frame,
     area: Rect,
-    resources: &[ResourceInfo],
-    selected_index: usize,
-    scroll_offset: &mut usize,
-    kind_filter: &crate::models::kind_filter::KindFilter,
-    resource_objects: &HashMap<String, serde_json::Value>,
+    props: ResourceListProps<'_>,
+    cursor: ListCursor<'_>,
     theme: &Theme,
-    no_icons: bool,
-    favorites: &HashSet<String>,
-    sort_field: SortField,
-    sort_reverse: bool,
-    // Contextual RBAC notice shown in place of the default empty-state message
-    // when the list is empty because a kind is restricted (see App::access_notice).
-    access_notice: Option<&str>,
 ) {
+    let ResourceListProps {
+        resources,
+        kind_filter,
+        resource_objects,
+        no_icons,
+        favorites,
+        sort_field,
+        sort_reverse,
+        access_notice,
+    } = props;
+    let ListCursor {
+        selected: selected_index,
+        offset: scroll_offset,
+    } = cursor;
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling
 
@@ -128,7 +145,9 @@ pub fn render_resource_list(
         .map(|r| {
             let fields = resource_type
                 .and_then(|kind| {
-                    let key = crate::watcher::resource_key(&r.namespace, &r.name, &r.resource_type);
+                    let key =
+                        crate::watcher::ResourceKey::new(&r.resource_type, &r.namespace, &r.name)
+                            .to_key_string();
                     resource_objects
                         .get(&key)
                         .map(|obj| extract_resource_specific_fields(kind, obj))
@@ -215,11 +234,10 @@ pub fn render_resource_list(
         .map(|(idx, r)| {
             let actual_idx = *scroll_offset + idx;
             let row_texts = &texts[actual_idx];
-            let favorite = favorites.contains(&crate::watcher::resource_key(
-                &r.namespace,
-                &r.name,
-                &r.resource_type,
-            ));
+            let favorite = favorites.contains(
+                &crate::watcher::ResourceKey::new(&r.resource_type, &r.namespace, &r.name)
+                    .to_key_string(),
+            );
             let cells: Vec<Cell> = columns
                 .iter()
                 .zip(row_texts)
@@ -285,7 +303,8 @@ fn cell_text(
             .to_string(),
         "NAMESPACE" => r.namespace.clone(),
         "NAME" => {
-            let key = crate::watcher::resource_key(&r.namespace, &r.name, &r.resource_type);
+            let key = crate::watcher::ResourceKey::new(&r.resource_type, &r.namespace, &r.name)
+                .to_key_string();
             if favorites.contains(&key) {
                 format!("★ {}", r.name)
             } else {
@@ -431,17 +450,18 @@ mod tests {
                 render_resource_list(
                     f,
                     f.area(),
-                    resources,
-                    0,
-                    &mut 0,
-                    filter,
-                    &HashMap::new(),
+                    ResourceListProps {
+                        resources,
+                        kind_filter: filter,
+                        resource_objects: &HashMap::new(),
+                        no_icons: false,
+                        favorites: &HashSet::new(),
+                        sort_field: SortField::Default,
+                        sort_reverse: false,
+                        access_notice: None,
+                    },
+                    ListCursor::new(0, &mut 0),
                     &Theme::default(),
-                    false,
-                    &HashSet::new(),
-                    SortField::Default,
-                    false,
-                    None,
                 )
             })
             .unwrap();
@@ -553,17 +573,18 @@ mod tests {
                 render_resource_list(
                     f,
                     f.area(),
-                    resources,
-                    selected,
-                    &mut offset,
-                    &KindFilter::all(),
-                    &HashMap::new(),
+                    ResourceListProps {
+                        resources,
+                        kind_filter: &KindFilter::all(),
+                        resource_objects: &HashMap::new(),
+                        no_icons: false,
+                        favorites: &HashSet::new(),
+                        sort_field: SortField::Default,
+                        sort_reverse: false,
+                        access_notice: None,
+                    },
+                    ListCursor::new(selected, &mut offset),
                     &Theme::default(),
-                    false,
-                    &HashSet::new(),
-                    SortField::Default,
-                    false,
-                    None,
                 )
             })
             .unwrap();

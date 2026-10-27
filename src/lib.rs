@@ -30,6 +30,7 @@
 //! # }
 //! ```
 
+pub mod age;
 /// Argument handling for the `flux9s` binary.
 ///
 /// Lives in the library rather than the binary so it is compiled, linted, and
@@ -62,7 +63,7 @@ pub use operations::{FluxOperation, OperationRegistry};
 
 // Re-export kube utilities
 pub use kube::{
-    fetch_resource, fetch_resource_yaml, get_api_resource_with_fallback, get_gvk_for_resource_type,
+    api_resource_for_kind, fetch_resource, fetch_resource_yaml, get_api_resource_with_fallback,
 };
 
 // Re-export trace types
@@ -73,8 +74,8 @@ pub use trace::{
 
 // Re-export watcher types
 pub use watcher::{
-    ResourceInfo, ResourceKey, ResourceState, ResourceWatcher, WatchEvent, WatchableResource,
-    extract_status_fields, get_all_commands, resource_key,
+    ResourceInfo, ResourceKey, ResourceState, ResourceWatcher, WatchEvent, extract_status_fields,
+    get_all_commands,
 };
 
 // Re-export resource field functions

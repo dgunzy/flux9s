@@ -8,6 +8,7 @@ use crate::kube::kind_list::{KindListSnapshot, KindRow};
 use crate::kube::object_status::ObjectHealth;
 use crate::models::kinds::{BuiltinColumn, Column, KindSpec};
 use crate::tui::theme::Theme;
+use crate::tui::views::props::ListCursor;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -45,20 +46,36 @@ fn width(header: &str, values: impl Iterator<Item = usize>, cap: usize) -> u16 {
     u16::try_from(widest.min(cap)).unwrap_or(u16::MAX)
 }
 
+/// What a kind list shows: the kind, its namespace scope, the live snapshot and its filtered rows, and any error.
+pub struct KindListProps<'a> {
+    pub spec: Option<&'a KindSpec>,
+    pub namespace: &'a Option<String>,
+    pub snapshot: Option<&'a KindListSnapshot>,
+    pub rows: &'a [&'a KindRow],
+    pub error: Option<&'a str>,
+    pub loading: bool,
+}
+
 /// Render the kind list.
 pub fn render_kind_list(
     f: &mut Frame,
     area: Rect,
-    spec: Option<&KindSpec>,
-    namespace: &Option<String>,
-    snapshot: Option<&KindListSnapshot>,
-    rows: &[&KindRow],
-    error: Option<&str>,
-    loading: bool,
-    selected_index: usize,
-    scroll_offset: &mut usize,
+    props: KindListProps<'_>,
+    cursor: ListCursor<'_>,
     theme: &Theme,
 ) {
+    let KindListProps {
+        spec,
+        namespace,
+        snapshot,
+        rows,
+        error,
+        loading,
+    } = props;
+    let ListCursor {
+        selected: selected_index,
+        offset: scroll_offset,
+    } = cursor;
     let Some(spec) = spec else {
         crate::tui::views::helpers::render_empty_state(
             f,
@@ -253,14 +270,15 @@ mod tests {
                 render_kind_list(
                     f,
                     f.area(),
-                    Some(spec),
-                    &namespace.map(String::from),
-                    Some(&snapshot),
-                    &refs,
-                    error,
-                    false,
-                    0,
-                    &mut scroll,
+                    KindListProps {
+                        spec: Some(spec),
+                        namespace: &namespace.map(String::from),
+                        snapshot: Some(&snapshot),
+                        rows: &refs,
+                        error,
+                        loading: false,
+                    },
+                    ListCursor::new(0, &mut scroll),
                     &Theme::default(),
                 )
             })
@@ -342,14 +360,15 @@ mod tests {
                 render_kind_list(
                     f,
                     f.area(),
-                    Some(&s),
-                    &None,
-                    Some(&snapshot),
-                    &refs,
-                    None,
-                    false,
-                    0,
-                    &mut scroll,
+                    KindListProps {
+                        spec: Some(&s),
+                        namespace: &None,
+                        snapshot: Some(&snapshot),
+                        rows: &refs,
+                        error: None,
+                        loading: false,
+                    },
+                    ListCursor::new(0, &mut scroll),
                     &Theme::default(),
                 )
             })

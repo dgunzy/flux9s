@@ -31,8 +31,10 @@ use kube::core::DynamicObject;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::kube::conditions;
 use crate::kube::ownership::{Manager, Ownership, ownership};
 use crate::models::FluxResourceKind;
+use crate::models::flux_resource_kind::labels;
 use crate::watcher::ResourceKey;
 
 /// Objects younger than this are never judged "not in inventory": Flux
@@ -62,15 +64,15 @@ pub fn group_of(api_version: &str) -> &str {
     api_version.split_once('/').map_or("", |(group, _)| group)
 }
 
-/// `HelmRelease.status.helmChart` as `(kind, namespace, name)`: `<ns>/<name>`
-/// for a generated HelmChart, or `<kind>/<ns>/<name>` (Flux 2.10+, for a
+/// The source `HelmRelease.status.helmChart` names: `<ns>/<name>` for a
+/// generated HelmChart, or `<kind>/<ns>/<name>` (Flux 2.10+, for a
 /// generated OCIRepository).
-pub fn generated_chart_source(reference: &str, default_ns: &str) -> (String, String, String) {
-    let helm_chart = FluxResourceKind::HelmChart.as_str().to_string();
+pub fn generated_chart_source(reference: &str, default_ns: &str) -> ResourceKey {
+    let helm_chart = FluxResourceKind::HelmChart.as_str();
     match reference.splitn(3, '/').collect::<Vec<_>>().as_slice() {
-        [kind, ns, name] => (kind.to_string(), ns.to_string(), name.to_string()),
-        [ns, name] => (helm_chart, ns.to_string(), name.to_string()),
-        _ => (helm_chart, default_ns.to_string(), reference.to_string()),
+        [kind, ns, name] => ResourceKey::new(*kind, *ns, *name),
+        [ns, name] => ResourceKey::new(helm_chart, *ns, *name),
+        _ => ResourceKey::new(helm_chart, default_ns, reference),
     }
 }
 
@@ -89,9 +91,9 @@ pub struct OwnerSnapshot {
     pub settled: bool,
     /// `spec.prune` (Kustomization).
     pub prune: Option<bool>,
-    /// The source a HelmRelease generated for its chart (`status.helmChart`)
-    /// as `(kind, namespace, name)`: Flux labels it, but no inventory lists it.
-    pub generated: Option<(String, String, String)>,
+    /// The source a HelmRelease generated for its chart (`status.helmChart`):
+    /// Flux labels it, but no inventory lists it.
+    pub generated: Option<ResourceKey>,
 }
 
 impl OwnerSnapshot {
@@ -107,15 +109,6 @@ impl OwnerSnapshot {
                 .map(str::to_string)
                 .collect()
         });
-        let condition = |kind: &str| {
-            owner
-                .pointer("/status/conditions")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .find(|c| c.get("type").and_then(Value::as_str) == Some(kind))
-        };
-        let status = |kind: &str| condition(kind).and_then(|c| c.get("status")?.as_str());
         let generation = owner
             .pointer("/metadata/generation")
             .and_then(Value::as_i64);
@@ -124,7 +117,7 @@ impl OwnerSnapshot {
         // be current where present.
         let observed = [
             owner.pointer("/status/observedGeneration"),
-            condition("Ready").and_then(|c| c.get("observedGeneration")),
+            conditions::find(owner, conditions::READY).and_then(|c| c.get("observedGeneration")),
         ];
         let current = match generation {
             Some(generation) => observed
@@ -134,8 +127,9 @@ impl OwnerSnapshot {
                 .all(|observed| observed >= generation),
             None => true,
         };
-        let settled =
-            status("Ready") == Some("True") && status("Reconciling") != Some("True") && current;
+        let settled = conditions::is_true(owner, conditions::READY)
+            && !conditions::is_true(owner, conditions::RECONCILING)
+            && current;
         let namespace = owner
             .pointer("/metadata/namespace")
             .and_then(Value::as_str)
@@ -204,12 +198,10 @@ fn label<'a>(obj: &'a Value, key: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
 }
 
-const PRUNE_DISABLED: &str = "kustomize.toolkit.fluxcd.io/prune";
-
 /// Whether an object opted out of Flux garbage collection.
 fn prune_disabled(obj: &Value) -> bool {
-    annotation(obj, PRUNE_DISABLED) == Some("disabled")
-        || label(obj, PRUNE_DISABLED) == Some("disabled")
+    annotation(obj, labels::PRUNE) == Some("disabled")
+        || label(obj, labels::PRUNE) == Some("disabled")
 }
 
 /// Whether `obj` is younger than [`ORPHAN_GRACE`] at `now`.
@@ -251,7 +243,7 @@ pub fn orphan_reason(
     if snapshot
         .generated
         .as_ref()
-        .is_some_and(|(k, ns, n)| k == kind && ns == namespace && n == name)
+        .is_some_and(|g| g.resource_type == kind && g.namespace == namespace && g.name == name)
     {
         return None;
     }
@@ -387,8 +379,8 @@ pub fn flux_owner(obj: &Value) -> Option<(Manager, ResourceKey)> {
         return None;
     };
     if let Manager::Flux { kind, .. } = &manager
-        && kind == FluxResourceKind::FluxInstance.as_str()
-        && label(obj, "fluxcd.controlplane.io/name").is_none()
+        && *kind == FluxResourceKind::FluxInstance
+        && label(obj, labels::OPERATOR_NAME).is_none()
     {
         return None;
     }
@@ -784,7 +776,7 @@ mod tests {
         }));
         assert_eq!(
             hr.generated,
-            Some(("OCIRepository".into(), "apps".into(), "podinfo".into()))
+            Some(ResourceKey::new("OCIRepository", "apps", "podinfo"))
         );
         assert_eq!(
             hr.inventory,
@@ -795,7 +787,7 @@ mod tests {
 
     #[test]
     fn generated_chart_source_names_its_kind_since_flux_2_10() {
-        let owned = |k: &str, ns: &str, n: &str| (k.to_string(), ns.to_string(), n.to_string());
+        let owned = |k: &str, ns: &str, n: &str| ResourceKey::new(k, ns, n);
         assert_eq!(
             generated_chart_source("flux-system/apps-podinfo", "default"),
             owned("HelmChart", "flux-system", "apps-podinfo")
@@ -945,7 +937,7 @@ mod tests {
         assert_eq!(orphan_reason(&hook, "batch", "Job", &dropped, now()), None);
 
         let mut hr = owner(&["apps_web_apps_Deployment"], true);
-        hr.generated = Some(("HelmChart".into(), "apps".into(), "apps-web".into()));
+        hr.generated = Some(ResourceKey::new("HelmChart", "apps", "apps-web"));
         let chart = ks_labelled("apps-web", json!({}));
         assert_eq!(
             orphan_reason(

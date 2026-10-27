@@ -3,8 +3,8 @@
 //! These tests ensure that when Flux CRDs are updated, the code remains compatible.
 //! They test status field extraction, resource type detection, and model compatibility.
 
+use flux9s::extract_status_fields;
 use flux9s::models::FluxResourceKind;
-use flux9s::{extract_status_fields, resource_key};
 use serde_json::json;
 
 #[test]
@@ -388,15 +388,16 @@ fn test_extract_status_fields_fluxinstance_annotation_defaults_false() {
 #[test]
 fn test_resource_key_format() {
     // Ensure resource key format is consistent
-    let key = resource_key("default", "my-resource", "Kustomization");
+    let key = flux9s::ResourceKey::new("Kustomization", "default", "my-resource").to_key_string();
     assert_eq!(key, "Kustomization:default:my-resource");
 
     // Test with different formats
-    let key2 = resource_key("flux-system", "flux-system", "GitRepository");
+    let key2 =
+        flux9s::ResourceKey::new("GitRepository", "flux-system", "flux-system").to_key_string();
     assert_eq!(key2, "GitRepository:flux-system:flux-system");
 
     // Test that keys are unique
-    let key3 = resource_key("default", "my-resource", "GitRepository");
+    let key3 = flux9s::ResourceKey::new("GitRepository", "default", "my-resource").to_key_string();
     assert_ne!(key, key3); // Different resource types should produce different keys
 }
 

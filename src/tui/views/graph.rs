@@ -5,6 +5,7 @@
 
 use crate::trace::{NodeType, RelationshipType, ResourceGraph};
 use crate::tui::theme::Theme;
+use crate::tui::views::props::Fetched;
 use crate::watcher::ResourceKey;
 use ratatui::{
     Frame,
@@ -18,14 +19,16 @@ use ratatui::{
 pub fn render_resource_graph(
     f: &mut Frame,
     area: Rect,
-    _selected_resource_key: &Option<String>,
-    graph_result: Option<&ResourceGraph>,
-    graph_loading: bool,
+    graph: Fetched<'_, ResourceGraph>,
     scroll_offset: &mut usize,  // Line-based scroll offset (like YAML view)
     focus_index: Option<usize>, // Index of the keyboard-focused node, if any
     highlight: Option<&ResourceKey>, // Object to mark inside its group (#266)
     theme: &Theme,
 ) {
+    let Fetched {
+        data: graph_result,
+        loading: graph_loading,
+    } = graph;
     let outer_block = crate::tui::views::helpers::create_themed_block("Resource Graph", theme);
 
     // Show loading if pending OR if no result yet (prevents flashing "no data" message)
@@ -177,12 +180,11 @@ fn fanout_routes(graph: &ResourceGraph, area_width: u16, scroll_offset: u16) -> 
                 .node_index
                 .get(&edge.to)
                 .and_then(|&i| graph.nodes.get(i))
+                && let Some((cx, cy)) = child.position
             {
-                if let Some((cx, cy)) = child.position {
-                    let center = cx + child.render_width(area_width) / 2;
-                    children.push((center, cy.saturating_sub(scroll_offset)));
-                    relationship.get_or_insert(edge.relationship);
-                }
+                let center = cx + child.render_width(area_width) / 2;
+                children.push((center, cy.saturating_sub(scroll_offset)));
+                relationship.get_or_insert(edge.relationship);
             }
         }
 
@@ -248,10 +250,8 @@ fn render_graph_nodes_and_edges(
                 render_node_text(
                     f,
                     area,
-                    x,
-                    y,
+                    ratatui::layout::Position::new(x, y.saturating_sub(scroll_offset_u16)),
                     node,
-                    scroll_offset_u16,
                     is_focused,
                     highlight,
                     theme,
@@ -403,24 +403,20 @@ fn render_fanout(
     }
 }
 
-/// Render node text content
+/// Render node text content at `at`: the node's layout position with the
+/// line scroll already applied (no horizontal scrolling).
 fn render_node_text(
     f: &mut Frame,
     area: Rect,
-    x: u16,
-    y: u16,
+    at: ratatui::layout::Position,
     node: &crate::trace::GraphNode,
-    scroll_offset: u16, // Line-based scroll offset
-    is_focused: bool,   // Whether this node has keyboard focus
+    is_focused: bool, // Whether this node has keyboard focus
     highlight: Option<&ResourceKey>,
     theme: &Theme,
 ) {
     // The object `g` was pressed on, marked inside its group (#266).
     let highlight_style = theme.graph_highlight_style();
-    // Adjust Y position for scroll offset (like YAML view)
-    // scroll_offset is already u16 (converted at call site)
-    let adjusted_y = y.saturating_sub(scroll_offset);
-    let adjusted_x = x; // No horizontal scrolling
+    let (adjusted_x, adjusted_y) = (at.x, at.y);
 
     // Calculate node area with dynamic sizing
     let (node_width, node_height) =

@@ -1,8 +1,8 @@
 //! Trace view rendering
 
-use crate::tui::app::state::TextSearchState;
 use crate::tui::theme::Theme;
 use crate::tui::trace::{TraceNode, TraceResult};
+use crate::tui::views::props::{Fetched, TextScroll};
 use crate::tui::views::text::{wrapped, wrapped_height};
 use crate::tui::views::yaml::decorate_title_with_search;
 use ratatui::{
@@ -95,13 +95,18 @@ impl TraceBlock {
 pub fn render_resource_trace(
     f: &mut Frame,
     area: Rect,
-    _selected_resource_key: &Option<String>,
-    trace_result: Option<&TraceResult>,
-    trace_loading: bool,
-    scroll_offset: &mut usize,
-    search: &mut TextSearchState,
+    trace: Fetched<'_, TraceResult>,
+    text: TextScroll<'_>,
     theme: &Theme,
 ) {
+    let Fetched {
+        data: trace_result,
+        loading: trace_loading,
+    } = trace;
+    let TextScroll {
+        offset: scroll_offset,
+        search,
+    } = text;
     if trace_loading {
         crate::tui::views::helpers::render_loading_state(
             f,
@@ -387,6 +392,7 @@ fn render_arrow(buf: &mut Buffer, area: Rect, relationship: &str, theme: &Theme)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::app::state::TextSearchState;
     use ratatui::{Terminal, backend::TestBackend};
 
     fn node(kind: &str, name: &str) -> TraceNode {
@@ -502,11 +508,8 @@ mod tests {
                 render_resource_trace(
                     f,
                     f.area(),
-                    &None,
-                    Some(result),
-                    false,
-                    &mut offset,
-                    &mut TextSearchState::default(),
+                    Fetched::new(Some(result), false),
+                    TextScroll::new(&mut offset, &mut TextSearchState::default()),
                     &Theme::default(),
                 )
             })
@@ -595,11 +598,8 @@ mod tests {
                 render_resource_trace(
                     f,
                     f.area(),
-                    &None,
-                    Some(&result),
-                    false,
-                    &mut 0,
-                    &mut TextSearchState::default(),
+                    Fetched::new(Some(&result), false),
+                    TextScroll::new(&mut 0, &mut TextSearchState::default()),
                     &Theme::default(),
                 )
             })
@@ -623,11 +623,8 @@ mod tests {
                 render_resource_trace(
                     f,
                     f.area(),
-                    &None,
-                    Some(&result),
-                    false,
-                    &mut 0,
-                    &mut TextSearchState::default(),
+                    Fetched::new(Some(&result), false),
+                    TextScroll::new(&mut 0, &mut TextSearchState::default()),
                     &Theme::default(),
                 )
             })

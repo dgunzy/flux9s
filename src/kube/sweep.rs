@@ -15,11 +15,11 @@ use futures::StreamExt;
 use kube::Api;
 use kube::api::ListParams;
 use kube::core::DynamicObject;
-use kube::discovery::ApiResource;
 use serde_json::Value;
 
 use crate::kube::standing::{self, FluxOwners, OwnershipConfig, Standing};
 use crate::models::FluxResourceKind;
+use crate::models::flux_resource_kind::labels;
 use crate::models::kinds::KindSpec;
 use crate::watcher::ResourceKey;
 
@@ -86,18 +86,17 @@ impl SweepScope {
         let SweepScope::OrphansOf(owner) = self else {
             return None;
         };
-        let prefix = match FluxResourceKind::parse_optional(&owner.resource_type)? {
-            FluxResourceKind::Kustomization => "kustomize.toolkit.fluxcd.io",
-            FluxResourceKind::HelmRelease => "helm.toolkit.fluxcd.io",
-            FluxResourceKind::ResourceSet => "resourceset.fluxcd.controlplane.io",
-            FluxResourceKind::FluxInstance => {
-                return Some(format!(
-                    "app.kubernetes.io/managed-by=flux-operator,fluxcd.controlplane.io/name={}",
-                    owner.name
-                ));
-            }
-            _ => return None,
-        };
+        let kind = FluxResourceKind::parse_optional(&owner.resource_type)?;
+        if kind == FluxResourceKind::FluxInstance {
+            return Some(format!(
+                "{}={},{}={}",
+                labels::MANAGED_BY,
+                labels::FLUX_OPERATOR,
+                labels::OPERATOR_NAME,
+                owner.name
+            ));
+        }
+        let prefix = kind.owner_label_prefix()?;
         Some(format!(
             "{prefix}/name={},{prefix}/namespace={}",
             owner.name, owner.namespace
@@ -105,17 +104,9 @@ impl SweepScope {
     }
 }
 
-/// Whether a Flux kind can leave orphans (it labels what it applies).
+/// Whether a kind can leave orphans ([`FluxResourceKind::can_orphan`]).
 pub fn can_orphan(kind: &str) -> bool {
-    matches!(
-        FluxResourceKind::parse_optional(kind),
-        Some(
-            FluxResourceKind::Kustomization
-                | FluxResourceKind::HelmRelease
-                | FluxResourceKind::ResourceSet
-                | FluxResourceKind::FluxInstance
-        )
-    )
+    FluxResourceKind::parse_optional(kind).is_some_and(|kind| kind.can_orphan())
 }
 
 /// A sweep to run.
@@ -209,21 +200,25 @@ struct Listed {
     meta: Value,
 }
 
+/// One kind's objects (metadata only).
+struct KindObjects {
+    items: Vec<Value>,
+    /// More than [`MAX_OBJECTS_PER_KIND`]: the rest weren't read.
+    truncated: bool,
+}
+
+/// A kind that couldn't be listed, by plural (for the report).
+type Unreadable = String;
+
 /// List one kind's objects (metadata only), page by page, up to
-/// [`MAX_OBJECTS_PER_KIND`]. `Err` carries the plural for the report.
+/// [`MAX_OBJECTS_PER_KIND`].
 async fn list_kind(
     client: &kube::Client,
     spec: &KindSpec,
     namespace: Option<&str>,
     selector: Option<&str>,
-) -> Result<(Vec<Value>, bool), String> {
-    let resource = ApiResource {
-        group: spec.gvk.group.clone(),
-        version: spec.gvk.version.clone(),
-        api_version: spec.gvk.api_version(),
-        kind: spec.gvk.kind.clone(),
-        plural: spec.names.plural.clone(),
-    };
+) -> Result<KindObjects, Unreadable> {
+    let resource = spec.api_resource();
     let api: Api<DynamicObject> = match (namespace, spec.is_namespaced()) {
         (Some(ns), true) => Api::namespaced_with(client.clone(), ns, &resource),
         _ => Api::all_with(client.clone(), &resource),
@@ -249,8 +244,18 @@ async fn list_kind(
                 Some(token) if !token.is_empty() && objects.len() < MAX_OBJECTS_PER_KIND => {
                     params.continue_token = Some(token);
                 }
-                Some(token) if !token.is_empty() => return Ok((objects, true)),
-                _ => return Ok((objects, false)),
+                Some(token) if !token.is_empty() => {
+                    return Ok(KindObjects {
+                        items: objects,
+                        truncated: true,
+                    });
+                }
+                _ => {
+                    return Ok(KindObjects {
+                        items: objects,
+                        truncated: false,
+                    });
+                }
             }
         }
     };
@@ -278,7 +283,7 @@ pub async fn sweep(
         ..SweepResult::default()
     };
 
-    let listed: Vec<(KindSpec, Result<(Vec<Value>, bool), String>)> = futures::stream::iter(kinds)
+    let listed: Vec<(KindSpec, Result<KindObjects, Unreadable>)> = futures::stream::iter(kinds)
         .map(|spec| {
             let namespace = namespace.clone();
             let selector = selector.clone();
@@ -295,7 +300,7 @@ pub async fn sweep(
     let mut objects = Vec::new();
     for (spec, outcome) in listed {
         match outcome {
-            Ok((items, truncated)) => {
+            Ok(KindObjects { items, truncated }) => {
                 result.truncated |= truncated;
                 objects.extend(items.into_iter().map(|meta| Listed {
                     spec: spec.clone(),
@@ -425,7 +430,7 @@ mod tests {
     #[test]
     fn scopes_choose_what_to_show() {
         let flux = Manager::Flux {
-            kind: "Kustomization".into(),
+            kind: crate::models::FluxResourceKind::Kustomization,
             namespace: "flux-system".into(),
             name: "apps".into(),
         };

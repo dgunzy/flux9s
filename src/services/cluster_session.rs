@@ -13,7 +13,7 @@ use crate::constants::MAX_RECONCILIATION_HISTORY;
 use crate::models::FluxResourceKind;
 use crate::watcher::{
     ResourceInfo, ResourceState, ResourceWatcher, WatchEvent, extract_annotations, extract_labels,
-    extract_reconciliation_info, extract_status_fields, resource_key,
+    extract_reconciliation_info, extract_status_fields,
 };
 
 /// A headless session connected to a single Kubernetes cluster.
@@ -232,8 +232,16 @@ impl ClusterSession {
     /// TUI-specific for controller status display).
     pub fn apply_event(&self, event: WatchEvent) {
         match event {
-            WatchEvent::Applied(resource_type, ns, name, obj_json) => {
-                let key = resource_key(&ns, &name, &resource_type);
+            WatchEvent::Applied(
+                crate::watcher::ResourceKey {
+                    resource_type,
+                    namespace: ns,
+                    name,
+                },
+                obj_json,
+            ) => {
+                let key =
+                    crate::watcher::ResourceKey::new(&resource_type, &ns, &name).to_key_string();
 
                 let reconciliation_event = extract_reconciliation_info(&obj_json);
 
@@ -273,12 +281,10 @@ impl ClusterSession {
                     Vec::new()
                 };
 
-                if should_add_history {
-                    if let Some(event) = reconciliation_event.clone() {
-                        history.push(event);
-                        if history.len() > MAX_RECONCILIATION_HISTORY {
-                            history.remove(0);
-                        }
+                if should_add_history && let Some(event) = reconciliation_event.clone() {
+                    history.push(event);
+                    if history.len() > MAX_RECONCILIATION_HISTORY {
+                        history.remove(0);
                     }
                 }
 
@@ -300,8 +306,8 @@ impl ClusterSession {
                     },
                 );
             }
-            WatchEvent::Deleted(resource_type, ns, name) => {
-                let key = resource_key(&ns, &name, &resource_type);
+            WatchEvent::Deleted(deleted) => {
+                let key = deleted.to_key_string();
                 self.state.remove(&key);
             }
             // Pod/Deployment events are TUI-specific (controller status bar)

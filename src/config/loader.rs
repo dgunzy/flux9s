@@ -39,13 +39,13 @@ impl ConfigLoader {
             }
 
             // Load context-specific config if context is provided
-            if let Some(context_name) = context {
-                if let Ok(context_yaml) = Self::load_yaml_file(&paths::cluster_config_path(
+            if let Some(context_name) = context
+                && let Ok(context_yaml) = Self::load_yaml_file(&paths::cluster_config_path(
                     cluster_name,
                     Some(context_name),
-                )) {
-                    Self::merge_yaml(&mut merged_yaml, context_yaml);
-                }
+                ))
+            {
+                Self::merge_yaml(&mut merged_yaml, context_yaml);
             }
         }
 
@@ -102,10 +102,10 @@ impl ConfigLoader {
                         continue;
                     }
                     // Special case for sequence fields: if empty, inherit from base
-                    if let serde_json::Value::Array(ref seq) = v {
-                        if seq.is_empty() {
-                            continue;
-                        }
+                    if let serde_json::Value::Array(ref seq) = v
+                        && seq.is_empty()
+                    {
+                        continue;
                     }
                     // Special case for options: skip if null
                     if v.is_null() {
@@ -176,10 +176,10 @@ impl ConfigLoader {
         }
 
         // FLUX9S_READ_ONLY override
-        if let Ok(read_only) = std::env::var("FLUX9S_READ_ONLY") {
-            if let Ok(val) = read_only.parse::<bool>() {
-                config.read_only = val;
-            }
+        if let Ok(read_only) = std::env::var("FLUX9S_READ_ONLY")
+            && let Ok(val) = read_only.parse::<bool>()
+        {
+            config.read_only = val;
         }
 
         // FLUX9S_DEFAULT_NAMESPACE override
@@ -188,19 +188,18 @@ impl ConfigLoader {
         }
 
         // FLUX9S_DEFAULT_RESOURCE_FILTER override
-        if let Ok(filter) = std::env::var("FLUX9S_DEFAULT_RESOURCE_FILTER") {
-            if !filter.is_empty() {
-                config.default_resource_filter = Some(filter);
-            }
+        if let Ok(filter) = std::env::var("FLUX9S_DEFAULT_RESOURCE_FILTER")
+            && !filter.is_empty()
+        {
+            config.default_resource_filter = Some(filter);
         }
 
         // FLUX9S_CONNECT_TIMEOUT override
-        if let Ok(timeout) = std::env::var(crate::kube::health::CONNECT_TIMEOUT_ENV) {
-            if let Ok(seconds) = timeout.parse::<u64>() {
-                if seconds > 0 {
-                    config.connect_timeout_seconds = seconds;
-                }
-            }
+        if let Ok(timeout) = std::env::var(crate::kube::health::CONNECT_TIMEOUT_ENV)
+            && let Ok(seconds) = timeout.parse::<u64>()
+            && seconds > 0
+        {
+            config.connect_timeout_seconds = seconds;
         }
 
         config

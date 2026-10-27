@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `:ks`, `:hr`, `:all`, and other kind filters typed from any view (events,
+  pulse, logs, YAML, describe, favorites, …) now show the Flux list; before,
+  only the kind list and the unmanaged/orphaned view returned to it
+- A `:<kind>` typed while kinds are still being discovered opens when they
+  land if you're still on the view you typed it in — it was dropped unless
+  that was a list view
+- `:helmrepo` opens HelmRepositories (one alias table had it, the other
+  didn't)
+- Objects whose names contain `:` (e.g. `system:controller:…` ClusterRoles)
+  parse as resource keys; one of two key parsers rejected them
+- AGE columns agree everywhere: kind lists and the unmanaged/orphaned view
+  show years (`2y`) like the Flux list, instead of `800d`
+
+### Changed
+- Every Flux kind is declared once (`flux_kinds!`): its API group, version,
+  and plural are read from the generated model instead of three hand-kept
+  tables, and command aliases from one list. Every kind is watched the same
+  way (dynamic objects, falling back through the kind's older versions), so
+  fields the generated model doesn't know are kept
+- Library: `WatchableResource` and `RESOURCE_REGISTRY` are removed; use
+  `FluxResourceKind::api_resource()` / `aliases()` / `ALL`.
+  `get_gvk_for_resource_type` is now `api_resource_for_kind` (returns an
+  `ApiResource`), `resource_key(ns, name, kind)` is
+  `ResourceKey::new(kind, ns, name).to_key_string()`, and
+  `WatchEvent::Applied` / `Deleted` carry a `ResourceKey`
+- Every lint is on: the crate-wide `dead_code`, `too_many_arguments`,
+  `collapsible_if`, and `type_complexity` allowances are gone (views take
+  grouped props; dead code removed)
+
 ## [1.4.4] - 2026-10-26
 
 # Version 1.4.4 Changelog

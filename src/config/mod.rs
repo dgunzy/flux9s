@@ -173,9 +173,9 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
                     value,
                 )
                 .map_err(|e| {
-                    let valid: Vec<_> = crate::watcher::RESOURCE_REGISTRY
+                    let valid: Vec<_> = crate::models::FluxResourceKind::ALL
                         .iter()
-                        .map(|e| e.display_name)
+                        .map(|kind| kind.as_str())
                         .collect();
                     anyhow::anyhow!(
                         "{e}. Give Flux kinds (e.g. ks,hr) or a view name. Valid kinds: {}",

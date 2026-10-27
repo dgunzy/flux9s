@@ -12,6 +12,7 @@
 //! to prevent proxy issues with corporate environments.
 
 pub mod api;
+pub mod conditions;
 pub mod discovery;
 pub mod events;
 pub mod fetch;
@@ -29,7 +30,7 @@ pub mod standing;
 pub mod sweep;
 pub mod workloads;
 
-pub use api::{get_api_resource_with_fallback, get_gvk_for_resource_type};
+pub use api::{api_resource_for_kind, get_api_resource_with_fallback};
 pub use fetch::{fetch_resource, fetch_resource_yaml};
 pub use health::{
     ConnectionError, ConnectionErrorKind, check_connectivity, detect_cluster_server,
@@ -418,11 +419,11 @@ pub async fn create_client_from_kubeconfig_path(kubeconfig_path: &Path) -> Resul
         cluster_url_str
     );
 
-    if let Ok(url) = Url::parse(&cluster_url_str) {
-        if let Some(host) = url.host_str() {
-            tracing::debug!("Detected cluster host: {}", host);
-            ensure_no_proxy_bypass(host);
-        }
+    if let Ok(url) = Url::parse(&cluster_url_str)
+        && let Some(host) = url.host_str()
+    {
+        tracing::debug!("Detected cluster host: {}", host);
+        ensure_no_proxy_bypass(host);
     }
 
     let client = Client::try_from(config)?;
@@ -460,11 +461,11 @@ pub async fn create_client_for_context(context_name: &str) -> Result<Client> {
         cluster_url_str
     );
 
-    if let Ok(url) = Url::parse(&cluster_url_str) {
-        if let Some(host) = url.host_str() {
-            tracing::debug!("Detected cluster host: {}", host);
-            ensure_no_proxy_bypass(host);
-        }
+    if let Ok(url) = Url::parse(&cluster_url_str)
+        && let Some(host) = url.host_str()
+    {
+        tracing::debug!("Detected cluster host: {}", host);
+        ensure_no_proxy_bypass(host);
     }
 
     let client = Client::try_from(config)?;
@@ -538,7 +539,7 @@ pub async fn list_all_namespaces(client: &Client) -> Result<Vec<String>> {
 }
 
 pub async fn discover_namespaces_with_flux_resources(client: &Client) -> Result<Vec<String>> {
-    use crate::kube::api::{get_flux_api_resources_with_fallback, is_version_missing_error};
+    use crate::kube::api::is_version_missing_error;
     use crate::models::FluxResourceKind;
     use kube::api::{Api, ListParams};
     use kube::core::DynamicObject;
@@ -551,10 +552,7 @@ pub async fn discover_namespaces_with_flux_resources(client: &Client) -> Result<
     // flux9s knows first, then the kind's older versions), metadata only.
     // Kinds that aren't installed, or can't be listed, are skipped.
     for kind in FluxResourceKind::all() {
-        let Ok(candidates) = get_flux_api_resources_with_fallback(*kind) else {
-            continue;
-        };
-        for api_resource in candidates {
+        for api_resource in kind.api_resources() {
             let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
             match api.list_metadata(&ListParams::default()).await {
                 Ok(list) => {
@@ -828,22 +826,21 @@ mod tests {
     #[tokio::test]
     async fn test_create_client_for_context_validates_context_exists() {
         // Test that create_client_for_context validates context exists before creating client
-        if let Ok(contexts) = list_contexts() {
-            if !contexts.is_empty() {
-                // Try to create client with a context that doesn't exist
-                let invalid_result =
-                    create_client_for_context("definitely-does-not-exist-xyz").await;
-                assert!(invalid_result.is_err());
-                // Convert error to string to check message
-                if let Err(e) = invalid_result {
-                    let error_msg = e.to_string();
-                    // Error should list available contexts
-                    assert!(
-                        error_msg.contains("Available contexts") || error_msg.contains("not found"),
-                        "Error should mention available contexts: {}",
-                        error_msg
-                    );
-                }
+        if let Ok(contexts) = list_contexts()
+            && !contexts.is_empty()
+        {
+            // Try to create client with a context that doesn't exist
+            let invalid_result = create_client_for_context("definitely-does-not-exist-xyz").await;
+            assert!(invalid_result.is_err());
+            // Convert error to string to check message
+            if let Err(e) = invalid_result {
+                let error_msg = e.to_string();
+                // Error should list available contexts
+                assert!(
+                    error_msg.contains("Available contexts") || error_msg.contains("not found"),
+                    "Error should mention available contexts: {}",
+                    error_msg
+                );
             }
         }
     }
