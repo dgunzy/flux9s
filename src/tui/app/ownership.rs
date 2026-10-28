@@ -6,21 +6,18 @@
 
 use super::core::App;
 use super::state::View;
-use crate::kube::sweep::{self, SweepRequest, SweepRow, SweepScope};
+use crate::kube::sweep::{self, SweepRequest, SweepRow, SweepScope, SweepShow};
 use crate::tui::commands;
 use crate::watcher::ResourceKey;
 
 impl App {
-    /// `:unmanaged [all] [-n <ns> | -A]`.
+    /// `:unmanaged [-n <ns> | -A]` (`all` still accepted).
     pub(super) fn cmd_unmanaged(&mut self, cmd: &str) {
         match commands::parse_sweep_args(cmd) {
-            Ok(args) if args.target.is_none() => self.start_sweep(
-                SweepScope::Unmanaged {
-                    include_other: args.include_other,
-                },
-                args.namespace,
-                false,
-            ),
+            // `all` is accepted for compatibility: everything is the default.
+            Ok(args) if args.target.is_none() => {
+                self.start_sweep(SweepScope::NotFlux, SweepShow::All, args.namespace, false)
+            }
             Ok(_) => self.set_status_message((
                 ":orphaned <kind>/<name> lists what one Flux object left behind".to_string(),
                 true,
@@ -43,7 +40,12 @@ impl App {
             }
         };
         let Some((kind_token, name)) = args.target else {
-            self.start_sweep(SweepScope::Orphaned, args.namespace, false);
+            self.start_sweep(
+                SweepScope::NotFlux,
+                SweepShow::Orphaned,
+                args.namespace,
+                false,
+            );
             return;
         };
         let kind = crate::models::kinds::resolve(&kind_token)
@@ -70,6 +72,7 @@ impl App {
         };
         self.start_sweep(
             SweepScope::OrphansOf(ResourceKey::new(kind, namespace, name)),
+            SweepShow::Orphaned,
             None,
             false,
         );
@@ -100,7 +103,7 @@ impl App {
     pub(super) fn orphans_of_selected(&mut self) {
         match self.view_target() {
             Some(key) if sweep::can_orphan(&key.resource_type) => {
-                self.start_sweep(SweepScope::OrphansOf(key), None, true);
+                self.start_sweep(SweepScope::OrphansOf(key), SweepShow::Orphaned, None, true);
             }
             Some(key) => self.set_status_message((
                 format!(
@@ -126,12 +129,38 @@ impl App {
         }
     }
 
+    /// `o` / `u` / `a`: switch which standings the list shows — no
+    /// rescan, the sweep already has them. The cursor stays on the same
+    /// object when it's still shown.
+    pub(super) fn set_sweep_show(&mut self, show: SweepShow) {
+        if self.view_state.sweep_show == show {
+            return;
+        }
+        let selected = self
+            .selected_sweep_row()
+            .map(|row| ResourceKey::new(&row.kind, &row.namespace, &row.name));
+        self.view_state.sweep_show = show;
+        self.reselect_sweep_row(selected);
+    }
+
+    /// Whether `o` / `u` / `a` apply: on the sweep list, for a whole-cluster
+    /// sweep — a per-object one only has that object's orphans.
+    pub(crate) fn sweep_can_switch_show(&self) -> bool {
+        self.view_state.current_view == View::OwnershipList
+            && self
+                .view_state
+                .sweep_request
+                .as_ref()
+                .is_some_and(|request| request.scope == SweepScope::NotFlux)
+    }
+
     /// Start a sweep and show its list. `namespace`: `Some(None)` for every
     /// namespace, `None` for the current one. `drill_in` opens it on top of
     /// the current view (Back returns); otherwise it's a top-level switch.
     fn start_sweep(
         &mut self,
         scope: SweepScope,
+        show: SweepShow,
         namespace: Option<Option<String>>,
         drill_in: bool,
     ) {
@@ -161,6 +190,7 @@ impl App {
             self.navigate_root(View::OwnershipList);
         }
         self.view_state.sweep_request = Some(request.clone());
+        self.view_state.sweep_show = show;
         self.view_state.sweep_reselect = None;
         self.async_state.sweep.request(request);
         self.view_state.filter.clear();
@@ -179,6 +209,12 @@ impl App {
         if self.view_state.current_view != View::OwnershipList {
             return;
         }
+        self.reselect_sweep_row(selected);
+    }
+
+    /// Put the cursor on `selected` if the list shows it, else keep it in
+    /// range.
+    fn reselect_sweep_row(&mut self, selected: Option<ResourceKey>) {
         let rows = self.filtered_sweep_rows();
         let index = selected
             .and_then(|key| {
@@ -223,6 +259,7 @@ impl App {
             .result()
             .into_iter()
             .flat_map(|result| result.rows.iter())
+            .filter(|row| self.view_state.sweep_show.shows(&row.standing))
             .filter(move |row| {
                 filter.is_empty()
                     || [

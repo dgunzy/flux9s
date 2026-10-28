@@ -404,7 +404,7 @@ pub fn parse_trace_args(cmd: &str) -> Result<TraceArgs, String> {
     Ok(TraceArgs { target, namespace })
 }
 
-/// `:unmanaged [all] [-n <ns> | -A]` (#274).
+/// `:unmanaged [-n <ns> | -A]` (#274; `all` is still accepted).
 pub fn is_unmanaged_command(cmd: &str) -> bool {
     cmd.split_whitespace()
         .next()
@@ -420,7 +420,7 @@ pub fn is_orphaned_command(cmd: &str) -> bool {
 
 /// `:unmanaged` / `:orphaned` usage, shown for malformed arguments.
 pub const SWEEP_USAGE: &str =
-    "Usage: :unmanaged [all] [-n <ns> | -A] · :orphaned [<kind>/<name>] [-n <ns> | -A]";
+    "Usage: :unmanaged [-n <ns> | -A] · :orphaned [<kind>/<name>] [-n <ns> | -A]";
 
 /// Parsed `:unmanaged` / `:orphaned` arguments.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

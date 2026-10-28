@@ -18,6 +18,7 @@
 
 use super::core::App;
 use super::state::View;
+use crate::kube::sweep::SweepShow;
 use crate::models::kinds::Capabilities;
 use crate::tui::keybindings::NavigationCommand;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -137,6 +138,9 @@ pub(crate) enum ActionId {
     NativeTrace,
     Orphans,
     Rescan,
+    SweepOrphaned,
+    SweepUnmanaged,
+    SweepAll,
     NativeGraph,
     JumpToManager,
     Trace,
@@ -671,6 +675,51 @@ pub(crate) const ACTIONS: &[Action] = &[
         )),
         sets_status: false,
     },
+    // What a whole-cluster sweep shows — switched in place, no rescan.
+    Action {
+        id: ActionId::SweepOrphaned,
+        keys: &[key('o')],
+        when: App::sweep_can_switch_show,
+        spec: ActionSpec::Builtin(|app, _| {
+            app.set_sweep_show(SweepShow::Orphaned);
+            None
+        }),
+        footer: Some(("o", "Orphaned")),
+        help: Some((HelpColumn::Navigation, "<o>", "Show orphans only (sweeps)")),
+        sets_status: false,
+    },
+    Action {
+        id: ActionId::SweepUnmanaged,
+        keys: &[key('u')],
+        when: App::sweep_can_switch_show,
+        spec: ActionSpec::Builtin(|app, _| {
+            app.set_sweep_show(SweepShow::Unmanaged);
+            None
+        }),
+        footer: Some(("u", "Unmanaged")),
+        help: Some((
+            HelpColumn::Navigation,
+            "<u>",
+            "Show unmanaged objects (sweeps)",
+        )),
+        sets_status: false,
+    },
+    Action {
+        id: ActionId::SweepAll,
+        keys: &[key('a')],
+        when: App::sweep_can_switch_show,
+        spec: ActionSpec::Builtin(|app, _| {
+            app.set_sweep_show(SweepShow::All);
+            None
+        }),
+        footer: Some(("a", "All")),
+        help: Some((
+            HelpColumn::Navigation,
+            "<a>",
+            "Show everything Flux doesn't manage (sweeps)",
+        )),
+        sets_status: false,
+    },
     // Inventory objects aren't watched: Enter describes them.
     Action {
         id: ActionId::InventoryDescribe,
@@ -1119,6 +1168,9 @@ const OWNERSHIP_LAYOUT: &[FooterItem] = &[
     Act(A::NativeTrace),
     Act(A::JumpToManager),
     Relabel(A::FilterOrSearch, "Filter"),
+    Act(A::SweepOrphaned),
+    Act(A::SweepUnmanaged),
+    Act(A::SweepAll),
     Act(A::Rescan),
     TAIL[0],
     TAIL[1],

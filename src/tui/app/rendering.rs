@@ -456,6 +456,7 @@ impl App {
                         OwnershipListProps {
                             request: self.view_state.sweep_request.as_ref(),
                             result: self.async_state.sweep.result(),
+                            show: self.view_state.sweep_show,
                             rows: &rows,
                             loading: self.async_state.sweep.is_loading(),
                             filter: &self.view_state.filter,

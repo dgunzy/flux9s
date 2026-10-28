@@ -61,10 +61,10 @@ pub(super) const COMMAND_TABLE: &[CommandSpec] = &[
     CommandSpec {
         matches: commands::is_unmanaged_command,
         run: App::cmd_unmanaged,
-        help: &[
-            (":unmanaged [-n ns|-A]", "What Flux doesn't manage"),
-            (":unmanaged all", "…and what other tools manage"),
-        ],
+        help: &[(
+            ":unmanaged [-n ns|-A]",
+            "What Flux doesn't manage (o/u/a in it)",
+        )],
     },
     CommandSpec {
         matches: commands::is_orphaned_command,

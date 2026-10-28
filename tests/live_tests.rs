@@ -709,14 +709,7 @@ async fn sweeps_find_unmanaged_and_orphaned_objects() {
     let unmanaged = eventually("ownership fixtures classified", 240, || {
         let (client, kinds) = (client.clone(), kinds.clone());
         async move {
-            let result = sweep(
-                &client,
-                request(SweepScope::Unmanaged {
-                    include_other: false,
-                }),
-                kinds,
-            )
-            .await;
+            let result = sweep(&client, request(SweepScope::NotFlux), kinds).await;
             let left = result
                 .rows
                 .iter()
@@ -751,13 +744,44 @@ async fn sweeps_find_unmanaged_and_orphaned_objects() {
             }
         ))
     ));
-    for hidden in ["kube-root-ca.crt", "default", "podinfo"] {
+    // Orphans come first, whatever their namespace or kind.
+    let first_other = unmanaged
+        .rows
+        .iter()
+        .position(|r| !matches!(r.standing, Standing::Orphaned(..)))
+        .unwrap_or(unmanaged.rows.len());
+    assert!(
+        unmanaged.rows[first_other..]
+            .iter()
+            .all(|r| !matches!(r.standing, Standing::Orphaned(..))),
+        "orphans sort first"
+    );
+    // Kubernetes' own (kube-root-ca.crt, the default ServiceAccount) and
+    // Flux-managed (the HelmRelease's podinfo Deployment and Service). The
+    // hand-applied `podinfo` HelmChart fixture is labelled
+    // `managed-by: flux9s-dev`, so it rightly shows as another tool's.
+    for (kind, hidden) in [
+        ("ConfigMap", "kube-root-ca.crt"),
+        ("ServiceAccount", "default"),
+        ("Deployment", "podinfo"),
+        ("Service", "podinfo"),
+    ] {
+        let found = unmanaged
+            .rows
+            .iter()
+            .find(|r| r.kind == kind && r.name == hidden);
         assert!(
-            unmanaged.rows.iter().all(|r| r.name != hidden),
-            "{hidden} is Kubernetes' own or Flux-managed: {:?}",
-            unmanaged.rows.iter().find(|r| r.name == hidden)
+            found.is_none(),
+            "{kind} {hidden} is Kubernetes' own or Flux-managed: {found:?}"
         );
     }
+    assert!(
+        unmanaged
+            .rows
+            .iter()
+            .any(|r| r.kind == "HelmChart" && matches!(r.standing, Standing::Other(_))),
+        "other tools' objects are in the default view"
+    );
     assert!(
         unmanaged
             .rows

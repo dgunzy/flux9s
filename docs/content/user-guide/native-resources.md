@@ -90,13 +90,22 @@ What Flux doesn't manage, and what it left behind:
 
 | Command / key | Shows |
 | --- | --- |
-| `:unmanaged` | Objects in the namespace nothing manages, and orphaned ones |
-| `:unmanaged all` | …plus those another tool manages (Argo CD, Helm, `app.kubernetes.io/managed-by`) |
+| `:unmanaged` | Everything in the namespace Flux doesn't manage: orphaned objects, unmanaged ones, and those another tool manages (Argo CD, Helm, `app.kubernetes.io/managed-by`) |
 | `:orphaned` | Only orphaned objects |
 | `O` on a Kustomization, HelmRelease, ResourceSet, or FluxInstance | What that Flux object left behind, in every namespace (also `:orphaned ks/apps`) |
 
 Add `-n <namespace>` or `-A` (all namespaces, plus cluster-scoped kinds) to
-the commands. Each row says where the object stands and why:
+the commands. `:unmanaged` and `:orphaned` run the same sweep and differ only
+in what they show first. In the list, switch instantly, without rescanning:
+
+| Key | Shows |
+| --- | --- |
+| `a` | Everything Flux doesn't manage (what `:unmanaged` opens on) |
+| `o` | Orphaned objects only — what Flux left behind |
+| `u` | Unmanaged objects only — nothing manages them |
+
+The title counts each (`3 orphaned · 41 unmanaged hidden · 12 other hidden`),
+and orphans sort first. Each row says where the object stands and why:
 
 - **Orphaned** — its Flux labels name a Kustomization / HelmRelease /
   ResourceSet / FluxInstance that **no longer exists**, or that **no longer
@@ -106,7 +115,7 @@ the commands. Each row says where the object stands and why:
 - **Unmanaged** — no Flux, Argo CD, or Helm marks and no owner. DETAIL says
   who created it, from its `managedFields` (`created by kubectl`,
   `created by Terraform`, …).
-- **Other** (with `all`) — the tool that does manage it.
+- **Other** — the tool that does manage it.
 
 `Enter`/`d` describes the object (Managed By says `orphaned — …` there too),
 `y` shows its YAML, and `t` / `m` go to the Flux object an orphan names, while

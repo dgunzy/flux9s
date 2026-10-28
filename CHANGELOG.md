@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Unmanaged / orphaned lists switch what they show in place: `a`
+  everything Flux doesn't manage, `o` orphans only, `u` unmanaged only — no
+  rescan. The title counts each standing (`3 orphaned · 41 unmanaged hidden
+  · 12 other hidden`), orphans sort first, and an empty list says how many
+  are hidden
+
+### Changed
+- `:unmanaged` shows everything Flux doesn't manage, including objects
+  other tools manage (what `:unmanaged all` showed; `all` is still
+  accepted)
+
 ## [1.4.5] - 2026-10-27
 
 # Version 1.4.5 Changelog

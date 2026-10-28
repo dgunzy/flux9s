@@ -392,6 +392,8 @@ pub struct ViewState {
     pub sweep_request: Option<crate::kube::sweep::SweepRequest>,
     /// The row selected when `Ctrl-r` rescanned, to select again after.
     pub sweep_reselect: Option<ResourceKey>,
+    /// Which standings the sweep list shows (`o` / `u` / `a`).
+    pub sweep_show: crate::kube::sweep::SweepShow,
     /// The list `O` drilled in from: its filter, selection, and scroll,
     /// restored on the way back (the sweep shares those fields).
     pub sweep_return: Option<(String, usize, usize)>,
@@ -453,6 +455,7 @@ impl Default for ViewState {
             logs_replace_workload: false,
             sweep_request: None,
             sweep_reselect: None,
+            sweep_show: Default::default(),
             sweep_return: None,
             kind_list_error: None,
             log_scroll_offset: 0,
