@@ -4445,7 +4445,7 @@ fn sweeps_need_the_native_preview() {
 
 #[test]
 fn unmanaged_sweeps_the_current_namespace_or_the_one_given() {
-    use crate::kube::sweep::SweepScope;
+    use crate::kube::sweep::{SweepScope, SweepShow};
     let mut app = create_test_app(false);
     app.config.native_resources = true;
     app.namespace = Some("apps".into());
@@ -4453,27 +4453,24 @@ fn unmanaged_sweeps_the_current_namespace_or_the_one_given() {
     run(&mut app, "unmanaged");
     assert_eq!(app.view_state.current_view, View::OwnershipList);
     let request = sweep_request(&app);
+    assert_eq!(request.scope, SweepScope::NotFlux);
     assert_eq!(
-        request.scope,
-        SweepScope::Unmanaged {
-            include_other: false
-        }
+        app.view_state.sweep_show,
+        SweepShow::All,
+        "everything Flux doesn't manage"
     );
     assert_eq!(request.namespace.as_deref(), Some("apps"));
 
     run(&mut app, "unmanaged all -A");
     let request = sweep_request(&app);
-    assert_eq!(
-        request.scope,
-        SweepScope::Unmanaged {
-            include_other: true
-        }
-    );
+    assert_eq!(request.scope, SweepScope::NotFlux);
+    assert_eq!(app.view_state.sweep_show, SweepShow::All);
     assert_eq!(request.namespace, None, "-A sweeps every namespace");
 
     run(&mut app, "orphaned -n team-a");
     let request = sweep_request(&app);
-    assert_eq!(request.scope, SweepScope::Orphaned);
+    assert_eq!(request.scope, SweepScope::NotFlux);
+    assert_eq!(app.view_state.sweep_show, SweepShow::Orphaned);
     assert_eq!(request.namespace.as_deref(), Some("team-a"));
 }
 
@@ -4540,7 +4537,7 @@ fn o_drills_into_a_flux_objects_orphans_and_back_returns() {
 fn app_with_sweep_rows() -> App {
     use crate::kube::ownership::Manager;
     use crate::kube::standing::{OrphanReason, Standing};
-    use crate::kube::sweep::{SweepResult, SweepRow, SweepScope};
+    use crate::kube::sweep::{SweepResult, SweepRow, SweepScope, SweepShow};
     let mut app = create_test_app(false);
     app.config.native_resources = true;
     app.namespace = Some("apps".into());
@@ -4580,8 +4577,9 @@ fn app_with_sweep_rows() -> App {
     });
     assert_eq!(
         app.view_state.sweep_request.as_ref().unwrap().scope,
-        SweepScope::Orphaned
+        SweepScope::NotFlux
     );
+    assert_eq!(app.view_state.sweep_show, SweepShow::Orphaned);
     app
 }
 
@@ -4642,7 +4640,7 @@ fn leaving_the_sweep_for_another_list_drops_it() {
 
 #[test]
 fn a_new_sweep_from_a_sweeps_describe_view_keeps_its_request() {
-    use crate::kube::sweep::SweepScope;
+    use crate::kube::sweep::{SweepScope, SweepShow};
     let mut app = app_with_sweep_rows();
     app.handle_key(make_key(KeyCode::Enter));
     assert_eq!(app.view_state.current_view, View::ResourceDescribe);
@@ -4651,11 +4649,10 @@ fn a_new_sweep_from_a_sweeps_describe_view_keeps_its_request() {
     assert_eq!(app.view_state.current_view, View::OwnershipList);
     assert_eq!(
         sweep_request(&app).scope,
-        SweepScope::Unmanaged {
-            include_other: false
-        },
+        SweepScope::NotFlux,
         "leaving the old sweep must not drop the new one"
     );
+    assert_eq!(app.view_state.sweep_show, SweepShow::All);
 }
 
 #[test]
@@ -4756,4 +4753,99 @@ fn a_held_kind_opens_only_where_it_was_typed() {
     app.on_kind_discovery_complete();
     assert!(app.pending_kind_command.is_none());
     assert_eq!(app.view_state.current_view, View::Pulse, "not yanked away");
+}
+
+/// `o` / `u` / `a` switch what a `:unmanaged` sweep shows in place — no
+/// rescan — and keep the cursor on the same object when it's still shown.
+#[test]
+fn sweep_keys_switch_standings_without_rescanning() {
+    use crate::kube::ownership::Manager;
+    use crate::kube::standing::{OrphanReason, Standing};
+    use crate::kube::sweep::{SweepResult, SweepRow, SweepShow};
+    let mut app = create_test_app(false);
+    app.config.native_resources = true;
+    app.namespace = Some("apps".into());
+    run(&mut app, "unmanaged");
+    let row = |name: &str, standing| SweepRow {
+        api_version: "v1".into(),
+        kind: "ConfigMap".into(),
+        namespace: "apps".into(),
+        name: name.into(),
+        standing,
+        created: None,
+    };
+    let ks = Manager::Flux {
+        kind: crate::models::FluxResourceKind::Kustomization,
+        namespace: "flux-system".into(),
+        name: "apps".into(),
+    };
+    app.async_state.sweep.dispatch();
+    app.on_sweep_result(SweepResult {
+        rows: vec![
+            row("left", Standing::Orphaned(ks, OrphanReason::OwnerGone)),
+            row("notes", Standing::Unmanaged { created_by: None }),
+            row("argo", Standing::Other(Manager::ArgoCd { app: "x".into() })),
+        ],
+        kinds_scanned: 1,
+        ..SweepResult::default()
+    });
+    let names = |app: &App| -> Vec<String> {
+        app.filtered_sweep_rows()
+            .iter()
+            .map(|r| r.name.clone())
+            .collect()
+    };
+    assert_eq!(
+        names(&app),
+        ["left", "notes", "argo"],
+        ":unmanaged starts on everything Flux doesn't manage, orphans first"
+    );
+
+    app.handle_key(make_key(KeyCode::Char('j'))); // on "notes"
+    app.handle_key(make_key(KeyCode::Char('u')));
+    assert_eq!(app.view_state.sweep_show, SweepShow::Unmanaged);
+    assert_eq!(names(&app), ["notes"], "u: unmanaged only, no orphans");
+    assert_eq!(
+        app.selected_sweep_row().unwrap().name,
+        "notes",
+        "cursor follows the object"
+    );
+    assert!(
+        app.async_state.sweep.pending().is_none(),
+        "no rescan queued"
+    );
+
+    app.handle_key(make_key(KeyCode::Char('o')));
+    assert_eq!(names(&app), ["left"], "o: orphans only");
+    assert_eq!(
+        app.selected_sweep_row().unwrap().name,
+        "left",
+        "hidden: back in range"
+    );
+
+    app.handle_key(make_key(KeyCode::Char('a')));
+    assert_eq!(names(&app), ["left", "notes", "argo"]);
+    assert_eq!(app.selected_sweep_row().unwrap().name, "left");
+
+    // Not on the sweep list (describe opened from it): the keys aren't its.
+    app.handle_key(make_key(KeyCode::Enter));
+    assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+    assert!(!app.sweep_can_switch_show());
+}
+
+/// One object's orphans (`O`, `:orphaned <kind>/<name>`) have nothing else
+/// to show: `o` / `u` / `a` don't apply.
+#[test]
+fn per_object_sweeps_have_no_standing_keys() {
+    let mut app = create_test_app(false);
+    app.config.native_resources = true;
+    add_resource(&mut app); // Kustomization flux-system/my-kustomization
+    run(&mut app, "orphaned ks/my-kustomization");
+    assert_eq!(app.view_state.current_view, View::OwnershipList);
+    assert!(!app.sweep_can_switch_show());
+    let footer: Vec<_> = app.footer_commands().iter().map(|c| c.key).collect();
+    assert!(
+        !footer.contains(&"o") && footer.contains(&"Ctrl-r"),
+        "{footer:?}"
+    );
 }

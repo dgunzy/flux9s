@@ -60,23 +60,21 @@ const SKIPPED_KINDS: &[(&str, &str)] = &[
 /// What a sweep looks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SweepScope {
-    /// Objects Flux doesn't manage: unmanaged and orphaned, plus those
-    /// another tool manages when `include_other`.
-    Unmanaged { include_other: bool },
-    /// Objects Flux labelled but left behind.
-    Orphaned,
+    /// Every object Flux doesn't manage: orphaned, unmanaged, and managed
+    /// by another tool. Which of them the list shows is a [`SweepShow`],
+    /// switched without rescanning.
+    NotFlux,
     /// What one Flux object (Kustomization, HelmRelease, ResourceSet,
     /// FluxInstance) left behind, across all namespaces.
     OrphansOf(ResourceKey),
 }
 
 impl SweepScope {
-    fn shows(&self, standing: &Standing) -> bool {
-        match (self, standing) {
-            (_, Standing::Orphaned(..)) => true,
-            (SweepScope::Unmanaged { .. }, Standing::Unmanaged { .. }) => true,
-            (SweepScope::Unmanaged { include_other }, Standing::Other(_)) => *include_other,
-            _ => false,
+    /// Whether a sweep keeps a row of this standing.
+    fn keeps(&self, standing: &Standing) -> bool {
+        match self {
+            SweepScope::NotFlux => SweepShow::All.shows(standing),
+            SweepScope::OrphansOf(_) => SweepShow::Orphaned.shows(standing),
         }
     }
 
@@ -101,6 +99,50 @@ impl SweepScope {
             "{prefix}/name={},{prefix}/namespace={}",
             owner.name, owner.namespace
         ))
+    }
+}
+
+/// Which rows of a [`SweepScope::NotFlux`] sweep the list shows — what
+/// `:orphaned` and `:unmanaged` start with, and `o` /
+/// `u` / `a` switch between.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SweepShow {
+    /// Objects Flux labelled but left behind.
+    Orphaned,
+    /// Objects nothing manages.
+    Unmanaged,
+    /// Everything Flux doesn't manage: orphaned, unmanaged, and objects
+    /// another tool (Argo CD, Helm, …) manages. What `:unmanaged` opens on.
+    #[default]
+    All,
+}
+
+impl SweepShow {
+    pub fn shows(self, standing: &Standing) -> bool {
+        match standing {
+            Standing::Orphaned(..) => self != SweepShow::Unmanaged,
+            Standing::Unmanaged { .. } => self != SweepShow::Orphaned,
+            Standing::Other(_) => self == SweepShow::All,
+            Standing::Flux(_) | Standing::System(_) => false,
+        }
+    }
+}
+
+/// Rows of a sweep by standing (orphaned / unmanaged / other).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StandingCounts {
+    pub orphaned: usize,
+    pub unmanaged: usize,
+    pub other: usize,
+}
+
+/// Orphans first: they're what needs attention.
+fn rank(standing: &Standing) -> u8 {
+    match standing {
+        Standing::Orphaned(..) => 0,
+        Standing::Unmanaged { .. } => 1,
+        Standing::Other(_) => 2,
+        Standing::Flux(_) | Standing::System(_) => 3,
     }
 }
 
@@ -143,15 +185,14 @@ impl SweepRow {
 }
 
 /// A one-line description of what a sweep shows, for its title.
-pub fn describe_request(request: &SweepRequest) -> String {
+pub fn describe_request(request: &SweepRequest, show: SweepShow) -> String {
     let what = match &request.scope {
-        SweepScope::Unmanaged {
-            include_other: false,
-        } => "Not managed by Flux".to_string(),
-        SweepScope::Unmanaged {
-            include_other: true,
-        } => "Not managed by Flux (incl. other tools)".to_string(),
-        SweepScope::Orphaned => "Left behind by Flux".to_string(),
+        SweepScope::NotFlux => match show {
+            SweepShow::Orphaned => "Left behind by Flux",
+            SweepShow::Unmanaged => "Managed by nothing",
+            SweepShow::All => "Not managed by Flux",
+        }
+        .to_string(),
         SweepScope::OrphansOf(owner) => {
             return format!(
                 "Left behind by {} {}/{}",
@@ -175,6 +216,22 @@ pub struct SweepResult {
     pub unreadable: Vec<String>,
     /// Whether a cap cut the sweep short.
     pub truncated: bool,
+}
+
+impl SweepResult {
+    /// Rows by standing, whatever the list shows.
+    pub fn counts(&self) -> StandingCounts {
+        let mut counts = StandingCounts::default();
+        for row in &self.rows {
+            match row.standing {
+                Standing::Orphaned(..) => counts.orphaned += 1,
+                Standing::Unmanaged { .. } => counts.unmanaged += 1,
+                Standing::Other(_) => counts.other += 1,
+                Standing::Flux(_) | Standing::System(_) => {}
+            }
+        }
+        counts
+    }
 }
 
 fn skipped(spec: &KindSpec) -> bool {
@@ -346,6 +403,11 @@ pub async fn sweep(
     let now = chrono::Utc::now();
     for object in objects {
         let spec = &object.spec;
+        // Helm's release storage (revision Secrets) belongs to its release,
+        // which is what's listed; the kind lists still label it Helm.
+        if standing::helm_storage_release(&object.meta, &spec.gvk.group, &spec.gvk.kind).is_some() {
+            continue;
+        }
         let Some(standing) = standing::assess(
             &object.meta,
             &spec.gvk.group,
@@ -355,12 +417,8 @@ pub async fn sweep(
         ) else {
             continue;
         };
-        if !request.scope.shows(&standing) {
+        if !request.scope.keeps(&standing) {
             continue;
-        }
-        if result.rows.len() == MAX_ROWS {
-            result.truncated = true;
-            break;
         }
         let meta = &object.meta;
         let text = |field: &str| {
@@ -378,9 +436,19 @@ pub async fn sweep(
             standing,
         });
     }
-    result
-        .rows
-        .sort_by(|a, b| (&a.namespace, &a.kind, &a.name).cmp(&(&b.namespace, &b.kind, &b.name)));
+    // Orphans first; the cap drops other tools' objects before orphans.
+    result.rows.sort_by(|a, b| {
+        (rank(&a.standing), &a.namespace, &a.kind, &a.name).cmp(&(
+            rank(&b.standing),
+            &b.namespace,
+            &b.kind,
+            &b.name,
+        ))
+    });
+    if result.rows.len() > MAX_ROWS {
+        result.rows.truncate(MAX_ROWS);
+        result.truncated = true;
+    }
     result
 }
 
@@ -438,16 +506,21 @@ mod tests {
         let unmanaged = Standing::Unmanaged { created_by: None };
         let other = Standing::Other(Manager::ArgoCd { app: "x".into() });
         let managed = Standing::Flux(flux);
-        let plain = SweepScope::Unmanaged {
-            include_other: false,
-        };
-        let all = SweepScope::Unmanaged {
-            include_other: true,
-        };
-        assert!(plain.shows(&unmanaged) && plain.shows(&orphan) && !plain.shows(&other));
-        assert!(all.shows(&other) && !all.shows(&managed));
-        assert!(SweepScope::Orphaned.shows(&orphan) && !SweepScope::Orphaned.shows(&unmanaged));
-        assert!(!plain.shows(&Standing::System("x")));
+        let plain = SweepShow::Unmanaged;
+        let all = SweepShow::All;
+        // Each key shows one standing; `a` everything Flux doesn't manage.
+        assert!(plain.shows(&unmanaged) && !plain.shows(&orphan) && !plain.shows(&other));
+        assert!(all.shows(&other) && all.shows(&orphan) && all.shows(&unmanaged));
+        assert!(!all.shows(&managed));
+        assert!(SweepShow::Orphaned.shows(&orphan) && !SweepShow::Orphaned.shows(&unmanaged));
+        assert!(!all.shows(&Standing::System("x")));
+        // A sweep keeps everything any show needs; per-owner ones only orphans.
+        assert!(SweepScope::NotFlux.keeps(&other) && !SweepScope::NotFlux.keeps(&managed));
+        let per_owner =
+            SweepScope::OrphansOf(ResourceKey::new("Kustomization", "flux-system", "apps"));
+        assert!(per_owner.keeps(&orphan) && !per_owner.keeps(&unmanaged));
+        // Orphans sort first.
+        assert!(rank(&orphan) < rank(&unmanaged) && rank(&unmanaged) < rank(&other));
     }
 
     #[test]
