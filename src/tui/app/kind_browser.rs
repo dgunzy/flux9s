@@ -216,8 +216,13 @@ impl App {
             .map_or(Capabilities::VIEW_ONLY, |r| r.spec.caps)
     }
 
-    /// The selected row's kind, namespace, and name.
+    /// The selected Kubernetes row's kind, namespace, and name: in a kind
+    /// list, or a mixed Flux list (#304).
     pub(super) fn selected_kind_object(&self) -> Option<ResourceKey> {
+        if self.view_state.current_view == View::ResourceList {
+            let (spec, row) = self.selected_native_row()?;
+            return Some(ResourceKey::new(&spec.gvk.kind, &row.namespace, &row.name));
+        }
         let kind = &self.async_state.kind_list.key()?.spec.gvk.kind;
         let rows = self.filtered_kind_rows();
         let row = rows.get(self.view_state.selected_index)?;
@@ -227,7 +232,10 @@ impl App {
     /// Enter on a kind row: workload kinds open the shared workload detail
     /// view (the same one the graph drill-down uses); others are described.
     pub(crate) fn kind_enter_selected(&mut self) {
-        if !self.kind_list_caps().workload_detail {
+        if !self
+            .selected_native_caps()
+            .is_some_and(|c| c.workload_detail)
+        {
             self.open_describe_view();
             return;
         }
@@ -242,7 +250,10 @@ impl App {
         let Some(key) = self.selected_kind_object() else {
             return;
         };
-        if self.kind_list_caps().workload_detail {
+        if self
+            .selected_native_caps()
+            .is_some_and(|c| c.workload_detail)
+        {
             self.open_workload_detail(key.resource_type, key.namespace, key.name, true);
         } else {
             self.open_pod_logs(&key.namespace, &key.name);
@@ -275,12 +286,29 @@ impl App {
     /// Skipped if the user has since moved to another view — it would yank
     /// them out of it.
     pub(crate) fn on_kind_discovery_complete(&mut self) {
-        // Only now are the cluster's kind names known (#302).
+        // Only now are the cluster's kind names known (#302), and a mixed
+        // Flux list's Kubernetes kinds resolve (#304).
         self.warn_views_shadowing_discovered_kinds();
+        // A startup filter or view was parsed before the kinds were known.
+        if self
+            .view_state
+            .kind_filter
+            .adopt_discovered(crate::models::kinds::resolve)
+        {
+            self.invalidate_layout_cache();
+        }
+        self.sync_mixed_watch();
         let Some(PendingKindCommand { token, view }) = self.pending_kind_command.take() else {
             return;
         };
         let still_there = self.view_state.current_view == view;
+        // A kind set (`ks,widgets`) is parsed again now the kinds are known.
+        if token.contains(',') {
+            if still_there {
+                self.cmd_kind_set(&token);
+            }
+            return;
+        }
         match crate::models::kinds::resolve(&token) {
             Some(spec) if still_there && spec.family == crate::models::kinds::Family::Native => {
                 self.open_kind_list(spec);

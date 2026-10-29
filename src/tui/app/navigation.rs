@@ -100,6 +100,8 @@ impl App {
                 .push(NavEntry::View(View::ResourceList));
         }
         self.view_state.current_view = view;
+        self.sync_mixed_watch();
+        self.restore_mixed_selection();
         self.invalidate_layout_cache();
     }
 
@@ -134,6 +136,8 @@ impl App {
             }
             NavEntry::View(view) => self.view_state.current_view = view,
         }
+        self.sync_mixed_watch();
+        self.restore_mixed_selection();
         self.invalidate_layout_cache();
         true
     }
@@ -169,7 +173,15 @@ impl App {
     /// `to`. Exhaustive on purpose: a new view must decide what it releases.
     pub(crate) fn leave_view(&mut self, view: View, to: View) {
         match view {
-            View::ResourceList | View::Help => {}
+            // Its mixed-in kinds' watch (#304) runs while it's on screen or
+            // under a view opened from it; another top-level view stops it.
+            View::ResourceList => {
+                if to != View::ResourceList {
+                    self.async_state.mixed.clear();
+                    self.view_state.mixed_reselect = None;
+                }
+            }
+            View::Help => {}
             View::ResourceDetail
             | View::ResourceDescribe
             | View::ResourceYAML

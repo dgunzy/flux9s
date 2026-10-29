@@ -528,6 +528,15 @@ pub async fn run_tui_with_async_init(
                     });
                 }
 
+                if let Some((request, tx)) = app.async_state.mixed.dispatch() {
+                    let handle = tokio::spawn(crate::kube::kind_list::watch_kinds(
+                        client.clone(),
+                        request,
+                        tx,
+                    ));
+                    app.async_state.mixed.set_handle(handle);
+                }
+
                 if let Some((request, tx)) = app.async_state.kind_list.dispatch() {
                     let handle = tokio::spawn(crate::kube::kind_list::watch_kind(
                         client.clone(),
@@ -744,6 +753,9 @@ pub async fn run_tui_with_async_init(
                 }
             }
 
+            if let Some(Ok(snapshot)) = app.async_state.mixed.poll() {
+                app.on_mixed_snapshot(snapshot);
+            }
             if let Some(result) = app.async_state.kind_list.poll() {
                 match result {
                     Ok(snapshot) => app.on_kind_list_snapshot(snapshot),
@@ -1189,6 +1201,7 @@ pub async fn run_tui_with_async_init(
                             app.state().upsert(
                                 key.clone(),
                                 crate::watcher::ResourceInfo {
+                                    api_group: None,
                                     name,
                                     namespace: ns,
                                     resource_type,

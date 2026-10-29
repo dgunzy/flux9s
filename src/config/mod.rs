@@ -182,7 +182,7 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
                         valid.join(", ")
                     )
                 })?;
-                Some(filter.kinds().join(","))
+                Some(filter.all_kinds().collect::<Vec<_>>().join(","))
             };
         }
         "defaultSort" => {
@@ -318,11 +318,9 @@ mod tests {
         );
         set_config_value(&mut config, "views.apps.kinds", "hr").unwrap();
         assert_eq!(config.views["apps"].kinds, ["hr"]);
-        let err = set_config_value(&mut config, "views.mixed", "ks,deploy").unwrap_err();
-        assert!(
-            err.to_string().contains("'deploy' is a Kubernetes kind"),
-            "{err}"
-        );
+        // Kubernetes kinds mix in (#304).
+        set_config_value(&mut config, "views.mixed", "ks,deploy").unwrap();
+        assert_eq!(config.views["mixed"].kinds, ["ks", "deploy"]);
 
         // defaultResourceFilter: kinds stored as display names, views by name.
         set_config_value(&mut config, "defaultResourceFilter", "ks,hr").unwrap();
@@ -343,7 +341,12 @@ mod tests {
             Some("Kustomization,RuntimeOnlyKind")
         );
         set_config_value(&mut config, "views.extra", "ks,RuntimeOnlyKind").unwrap();
-        assert!(set_config_value(&mut config, "defaultResourceFilter", "ks,deploy").is_err());
+        set_config_value(&mut config, "defaultResourceFilter", "ks,deploy").unwrap();
+        assert_eq!(
+            config.default_resource_filter.as_deref(),
+            Some("Kustomization,deploy"),
+            "a Kubernetes kind mixes in (#304)"
+        );
 
         set_config_value(&mut config, "views.apps", "").unwrap();
         assert!(!config.views.contains_key("apps"));

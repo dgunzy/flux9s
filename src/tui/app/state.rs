@@ -392,6 +392,9 @@ pub struct ViewState {
     pub sweep_request: Option<crate::kube::sweep::SweepRequest>,
     /// The row selected when `Ctrl-r` rescanned, to select again after.
     pub sweep_reselect: Option<ResourceKey>,
+    /// The Flux list's selected row when a mixed-in kind's update (#304)
+    /// arrived while another view was on top, restored on the way back.
+    pub mixed_reselect: Option<crate::tui::app::mixed::RowId>,
     /// Which standings the sweep list shows (`o` / `u` / `a`).
     pub sweep_show: crate::kube::sweep::SweepShow,
     /// The list `O` drilled in from: its filter, selection, and scroll,
@@ -455,6 +458,7 @@ impl Default for ViewState {
             logs_replace_workload: false,
             sweep_request: None,
             sweep_reselect: None,
+            mixed_reselect: None,
             sweep_show: Default::default(),
             sweep_return: None,
             kind_list_error: None,
@@ -676,6 +680,9 @@ pub struct AsyncOperationState {
     /// Live list for the `:<kind>` browser (#267).
     pub kind_list:
         LiveTask<crate::kube::kind_list::KindListRequest, crate::kube::kind_list::KindListSnapshot>,
+    /// Kubernetes kinds mixed into the Flux list (#304).
+    pub mixed:
+        LiveTask<crate::kube::kind_list::MixedRequest, crate::kube::kind_list::MixedSnapshot>,
     /// Unmanaged / orphaned sweep backing the ownership list (#274).
     pub sweep: AsyncTask<crate::kube::sweep::SweepRequest, crate::kube::sweep::SweepResult>,
     /// API discovery feeding the kind registry, run on connect (#267).
@@ -728,6 +735,7 @@ impl AsyncOperationState {
         self.helm_values.clear();
         self.workload_metrics.clear();
         self.kind_list.clear();
+        self.mixed.clear();
         self.sweep.clear();
         self.kind_discovery.clear();
         self.namespace_list.clear();

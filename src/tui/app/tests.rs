@@ -66,6 +66,7 @@ fn create_test_app(read_only: bool) -> App {
 
 fn add_resource(app: &mut App) {
     let resource = ResourceInfo {
+        api_group: None,
         name: "my-kustomization".to_string(),
         namespace: "flux-system".to_string(),
         resource_type: "Kustomization".to_string(),
@@ -92,6 +93,7 @@ fn add_resource(app: &mut App) {
 
 fn add_helm_release(app: &mut App) {
     let resource = ResourceInfo {
+        api_group: None,
         name: "podinfo".to_string(),
         namespace: "apps".to_string(),
         resource_type: "HelmRelease".to_string(),
@@ -277,6 +279,7 @@ fn table_command_suspended_filters_to_suspended_resources() {
     let mut app = create_test_app(false);
     add_resource(&mut app);
     let suspended = ResourceInfo {
+        api_group: None,
         name: "paused".to_string(),
         namespace: "flux-system".to_string(),
         resource_type: "Kustomization".to_string(),
@@ -1408,9 +1411,12 @@ fn with_rows(app: &mut App, rows: &[(&str, &str)]) {
             rows: rows
                 .iter()
                 .map(|(ns, name)| crate::kube::kind_list::KindRow {
+                    labels: Default::default(),
+                    annotations: Default::default(),
                     namespace: ns.to_string(),
                     name: name.to_string(),
                     health: crate::kube::object_status::ObjectHealth::Current,
+                    message: String::new(),
                     cells: vec![],
                     created: None,
                     ownership: crate::kube::ownership::Ownership::Unmanaged,
@@ -1609,9 +1615,12 @@ fn live_updates_keep_the_cursor_on_the_same_object() {
 
     // A new object sorts above the cursor.
     let row = |name: &str| crate::kube::kind_list::KindRow {
+        labels: Default::default(),
+        annotations: Default::default(),
         namespace: "apps".into(),
         name: name.into(),
         health: crate::kube::object_status::ObjectHealth::Current,
+        message: String::new(),
         cells: vec![],
         created: None,
         ownership: crate::kube::ownership::Ownership::Unmanaged,
@@ -2793,6 +2802,7 @@ fn discover_command_toggles_discovery_and_purges_kinds() {
     app.state.upsert(
         key.clone(),
         ResourceInfo {
+            api_group: None,
             name: "widget".to_string(),
             namespace: "default".to_string(),
             resource_type: "DiscoverToggleTest".to_string(),
@@ -3520,9 +3530,12 @@ fn deploy_list(app: &mut App, rows: &[(&str, crate::kube::ownership::Ownership)]
         rows: rows
             .iter()
             .map(|(name, ownership)| crate::kube::kind_list::KindRow {
+                labels: Default::default(),
+                annotations: Default::default(),
                 namespace: "apps".into(),
                 name: name.to_string(),
                 health: crate::kube::object_status::ObjectHealth::Current,
+                message: String::new(),
                 cells: vec![],
                 created: None,
                 ownership: ownership.clone(),
@@ -4025,14 +4038,14 @@ fn a_kind_set_shows_several_flux_kinds_at_once() {
     );
     assert_eq!(listed_kinds(&app), ["HelmRelease", "Kustomization"]);
 
-    // Spaces are fine; Kubernetes and unknown kinds are refused, and the
-    // list keeps what it showed.
+    // Spaces are fine; unknown kinds are refused, and the list keeps what
+    // it showed.
     run(&mut app, "hr, gitrepo");
     assert_eq!(listed_kinds(&app), ["GitRepository", "HelmRelease"]);
-    run(&mut app, "ks,deploy");
+    run(&mut app, "ks,bogus");
     let (message, is_error) = app.ui_state.status_message.clone().unwrap();
     assert!(
-        is_error && message.contains("'deploy' is a Kubernetes kind"),
+        is_error && message.contains("Unknown kind 'bogus'"),
         "{message}"
     );
     assert_eq!(listed_kinds(&app), ["GitRepository", "HelmRelease"]);
@@ -4074,12 +4087,12 @@ fn flux9s_commands_win_over_views_and_broken_views_say_why() {
 
     app.view_state.current_view = View::ResourceList;
     run(&mut app, "mixed");
-    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
-    assert!(
-        is_error && message.starts_with("View 'mixed': 'deploy'"),
-        "{message}"
+    assert_eq!(app.view_state.kind_filter.view(), Some("mixed"));
+    assert_eq!(
+        app.view_state.kind_filter.native_kinds()[0].token,
+        "deploy",
+        "Kubernetes kinds mix in"
     );
-    assert!(app.view_state.kind_filter.is_all());
 }
 
 #[test]
@@ -4112,9 +4125,9 @@ fn default_filter_takes_kinds_or_a_view() {
     app.apply_default_filter("RuntimeOnlyKind").unwrap();
     assert_eq!(app.view_state.kind_filter.single(), Some("RuntimeOnlyKind"));
     app.apply_default_filter("apps").unwrap();
-    let err = app.apply_default_filter("deploy").unwrap_err();
-    assert!(err.contains("'deploy' is a Kubernetes kind"), "{err}");
-    assert_eq!(app.view_state.kind_filter.view(), Some("apps"), "unchanged");
+    // Kubernetes kinds mix in (#304).
+    app.apply_default_filter("ks,deploy").unwrap();
+    assert_eq!(app.view_state.kind_filter.native_kinds()[0].token, "deploy");
 }
 
 #[test]
@@ -4325,7 +4338,7 @@ fn n_with_a_bad_kind_set_or_view_leaves_the_namespace_alone() {
     with_views(&mut app, &[("broken", &["ks"])]);
     app.config.views.get_mut("broken").unwrap().sort = Some("size".into());
 
-    for cmd in ["ks,deploy -n prod", "ks,bogus -n prod", "broken -n prod"] {
+    for cmd in ["ks,bogus -n prod", "broken -n prod"] {
         run(&mut app, cmd);
         assert_eq!(app.namespace.as_deref(), Some("flux-system"), "{cmd}");
         assert!(
@@ -4848,4 +4861,423 @@ fn per_object_sweeps_have_no_standing_keys() {
         !footer.contains(&"o") && footer.contains(&"Ctrl-r"),
         "{footer:?}"
     );
+}
+
+/// Test rows of a mixed-in kind: namespace, name, health.
+type TestRows<'a> = &'a [(&'a str, &'a str, crate::kube::object_status::ObjectHealth)];
+
+/// A mixed-in snapshot: each kind with its rows.
+fn mixed_snapshot(
+    kinds: Vec<(crate::models::kinds::KindSpec, TestRows<'_>)>,
+) -> crate::kube::kind_list::MixedSnapshot {
+    use crate::kube::kind_list::{KindListSnapshot, KindRow, MixedKind, MixedSnapshot};
+    MixedSnapshot {
+        kinds: kinds
+            .into_iter()
+            .map(|(spec, rows)| MixedKind {
+                spec,
+                snapshot: Some(KindListSnapshot {
+                    columns: vec![],
+                    rows: rows
+                        .iter()
+                        .map(|(ns, name, health)| KindRow {
+                            labels: Default::default(),
+                            annotations: Default::default(),
+                            namespace: ns.to_string(),
+                            name: name.to_string(),
+                            health: *health,
+                            message: format!("{health:?} message"),
+                            cells: vec![],
+                            created: None,
+                            ownership: crate::kube::ownership::Ownership::Unmanaged,
+                            resolved: None,
+                            flux_probe: None,
+                            orphan: None,
+                        })
+                        .collect(),
+                    total: rows.len(),
+                }),
+                error: None,
+            })
+            .collect(),
+    }
+}
+
+/// A Flux list with Kubernetes kinds mixed in (#304): the kind filter
+/// names them and their watch delivered `rows` (namespace, name, health).
+fn mix_in(
+    app: &mut App,
+    filter: &str,
+    spec: crate::models::kinds::KindSpec,
+    rows: &[(&str, &str, crate::kube::object_status::ObjectHealth)],
+) {
+    app.view_state.current_view = View::ResourceList;
+    app.view_state.kind_filter = KindFilter::parse(filter).unwrap();
+    app.on_mixed_snapshot(mixed_snapshot(vec![(spec, rows)]));
+}
+
+/// `:ks,deploy` lists Kustomizations and Deployments in one list, with the
+/// shared columns; kstatus health reads as READY.
+#[test]
+fn a_mixed_list_shows_flux_and_kubernetes_rows_together() {
+    use crate::kube::object_status::ObjectHealth;
+    let mut app = create_test_app(false);
+    add_resource(&mut app); // Kustomization flux-system/my-kustomization
+    add_flux(&mut app, "HelmRelease", "podinfo");
+    mix_in(
+        &mut app,
+        "ks,deploy",
+        kind("apps", "Deployment", "deployments"),
+        &[
+            ("flux-system", "web", ObjectHealth::Current),
+            ("flux-system", "broken", ObjectHealth::Failed),
+        ],
+    );
+    let rows = app.get_filtered_resources();
+    let listed: Vec<_> = rows
+        .iter()
+        .map(|r| (r.resource_type.as_str(), r.name.as_str(), r.ready))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("Kustomization", "my-kustomization", Some(true)),
+            ("Deployment", "broken", Some(false)),
+            ("Deployment", "web", Some(true)),
+        ],
+        "only the kinds given (no HelmRelease); Flux kinds first, as given"
+    );
+    assert_eq!(app.view_state.kind_filter.single(), None, "shared columns");
+}
+
+/// Keys follow the selected row: Flux operations on a Flux row, the
+/// kind's (Enter → workload detail, `r` restart, `l` logs) on a Kubernetes
+/// row — and describe / YAML open the Kubernetes object.
+#[test]
+fn mixed_list_keys_follow_the_selected_row() {
+    use crate::kube::object_status::ObjectHealth;
+    let mut app = create_test_app(false);
+    add_resource(&mut app);
+    mix_in(
+        &mut app,
+        "ks,deploy",
+        kind("apps", "Deployment", "deployments"),
+        &[("flux-system", "web", ObjectHealth::Current)],
+    );
+
+    // Row 0: the Kustomization.
+    assert!(!app.on_native_row());
+    let footer = footer_keys(&app);
+    assert!(footer.contains(&("s", "Suspend")) && !footer.iter().any(|(k, _)| *k == "l"));
+
+    // Row 1: the Deployment.
+    app.handle_key(make_key(KeyCode::Char('j')));
+    assert!(app.on_native_row());
+    let footer = footer_keys(&app);
+    assert!(
+        !footer.iter().any(|(k, _)| *k == "s"),
+        "no Flux suspend: {footer:?}"
+    );
+    assert!(footer.contains(&("r", "Restart")), "{footer:?}");
+    assert!(footer.contains(&("l", "Logs")), "{footer:?}");
+    assert_eq!(app.view_target(), None, "not a watched Flux resource");
+    let target = app.native_view_target().unwrap();
+    assert_eq!(
+        (
+            target.api_version.as_deref(),
+            target.kind.as_str(),
+            target.name.as_str()
+        ),
+        (Some("apps/v1"), "Deployment", "web")
+    );
+
+    app.handle_key(make_key(KeyCode::Char('r')));
+    assert_eq!(
+        pending_restart(&app),
+        Some(("Deployment".into(), "flux-system".into(), "web".into()))
+    );
+    app.async_state.confirmation_pending = None;
+
+    app.handle_key(make_key(KeyCode::Enter));
+    assert_eq!(app.view_state.current_view, View::WorkloadDetail);
+    assert_eq!(
+        app.async_state
+            .workload
+            .pending()
+            .map(|k| k.to_key_string()),
+        Some("Deployment:flux-system:web".to_string())
+    );
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(
+        app.view_state.current_view,
+        View::ResourceList,
+        "back to the mixed list"
+    );
+    assert!(app.on_native_row(), "the cursor stayed on the Deployment");
+}
+
+/// A Kubernetes kind named like a Flux kind (Crossplane's `Bucket`) shows
+/// its group, so it's never taken for — or acted on as — the Flux kind.
+#[test]
+fn a_kubernetes_kind_named_like_a_flux_kind_keeps_its_group() {
+    use crate::kube::object_status::ObjectHealth;
+    let mut app = create_test_app(false);
+    mix_in(
+        &mut app,
+        "buckets.s3.aws.upbound.io",
+        kind("s3.aws.upbound.io", "Bucket", "buckets"),
+        &[("flux-system", "data", ObjectHealth::Current)],
+    );
+    let rows = app.get_filtered_resources();
+    assert_eq!(rows[0].resource_type, "Bucket.s3.aws.upbound.io");
+    assert!(app.on_native_row());
+    assert!(!footer_keys(&app).iter().any(|(k, _)| *k == "s"));
+}
+
+/// The watch runs only for the Flux list: another top-level view stops it,
+/// and coming back (or a namespace switch) asks for it again.
+#[test]
+fn the_mixed_watch_follows_the_flux_list() {
+    let mut app = create_test_app(false);
+    app.view_state.current_view = View::ResourceList;
+    app.view_state.kind_filter = KindFilter::parse("ks,deploy").unwrap();
+    // Nothing resolvable yet (no discovery in tests): no watch, and the
+    // title says why.
+    app.sync_mixed_watch();
+    assert!(app.async_state.mixed.key().is_none());
+    assert!(
+        app.mixed_notice()
+            .is_some_and(|n| n.contains("skipped deploy")),
+        "{:?}",
+        app.mixed_notice()
+    );
+
+    // A running watch stops when another top-level view opens.
+    app.async_state
+        .mixed
+        .request(crate::kube::kind_list::MixedRequest { kinds: vec![] });
+    run(&mut app, "pulse");
+    assert!(
+        app.async_state.mixed.key().is_none(),
+        "stopped off the Flux list"
+    );
+}
+
+/// A watch update that inserts a row above the selected Kubernetes row
+/// keeps the selection on the same object — it's what restart / delete /
+/// edit act on.
+#[test]
+fn mixed_updates_keep_the_selected_kubernetes_row() {
+    use crate::kube::object_status::ObjectHealth::Current;
+    let mut app = create_test_app(false);
+    add_resource(&mut app);
+    let deployments = || kind("apps", "Deployment", "deployments");
+    mix_in(
+        &mut app,
+        "ks,deploy",
+        deployments(),
+        &[("flux-system", "web", Current)],
+    );
+    app.view_state.selected_index = 1; // web
+    mix_in(
+        &mut app,
+        "ks,deploy",
+        deployments(),
+        &[
+            ("flux-system", "aaa", Current),
+            ("flux-system", "web", Current),
+        ],
+    );
+    let selected = &app.get_filtered_resources()[app.view_state.selected_index];
+    assert_eq!(
+        selected.name, "web",
+        "the insert didn't move the action target"
+    );
+}
+
+/// Only a Current Kubernetes object is healthy: a rolling Deployment shows
+/// under `:unhealthy`, not `:healthy`.
+#[test]
+fn progressing_kubernetes_rows_are_not_healthy() {
+    use crate::kube::object_status::ObjectHealth;
+    let mut app = create_test_app(false);
+    mix_in(
+        &mut app,
+        "ks,deploy",
+        kind("apps", "Deployment", "deployments"),
+        &[
+            ("flux-system", "rolling", ObjectHealth::InProgress),
+            ("flux-system", "going", ObjectHealth::Terminating),
+        ],
+    );
+    assert!(app.get_filtered_resources().iter().all(|r| !r.is_healthy()));
+    run(&mut app, "healthy");
+    assert!(app.get_filtered_resources().is_empty());
+    run(&mut app, "unhealthy");
+    assert_eq!(app.get_filtered_resources().len(), 2);
+}
+
+/// A mixed-in kind cut at the row cap says so in the title, with how many
+/// of how many it shows.
+#[test]
+fn truncated_mixed_kinds_are_reported() {
+    use crate::kube::object_status::ObjectHealth::Current;
+    let mut app = create_test_app(false);
+    mix_in(
+        &mut app,
+        "ks,deploy",
+        kind("apps", "Deployment", "deployments"),
+        &[("flux-system", "web", Current)],
+    );
+    let mut snapshot = app.async_state.mixed.result().unwrap().clone();
+    snapshot.kinds[0].snapshot.as_mut().unwrap().total = 10_000;
+    app.on_mixed_snapshot(snapshot);
+    let notice = app.mixed_notice().unwrap_or_default();
+    assert!(
+        notice.contains("deployments truncated: 1 of 10000"),
+        "{notice}"
+    );
+}
+
+/// A kind set naming a kind discovery hasn't delivered yet (`-c ks,widgets`
+/// at startup) is held like a single kind, and parsed again when discovery
+/// lands — still unknown, it's reported then.
+#[test]
+fn kind_sets_typed_during_discovery_wait_for_it() {
+    let mut app = create_test_app(false);
+    app.view_state.current_view = View::ResourceList;
+    app.request_kind_discovery();
+    run(&mut app, "ks,zzwidgets");
+    assert_eq!(
+        app.pending_kind_command.as_ref().map(|p| p.token.as_str()),
+        Some("ks,zzwidgets")
+    );
+    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+    assert!(
+        !is_error && message.contains("opens when ready"),
+        "{message}"
+    );
+
+    // Discovery lands (as the main loop sees it), knowing no such kind.
+    let ((), tx) = app.async_state.kind_discovery.dispatch().unwrap();
+    tx.send(Ok(Vec::new())).unwrap();
+    assert!(app.async_state.kind_discovery.try_recv().is_some());
+    app.on_kind_discovery_complete();
+    assert!(app.pending_kind_command.is_none());
+    let (message, is_error) = app.ui_state.status_message.clone().unwrap();
+    assert!(
+        is_error && message.contains("Unknown kind 'zzwidgets'"),
+        "{message}"
+    );
+}
+
+/// Two kinds of the same name from different groups (core and Knative
+/// `Service`) with same-named objects: each row is its own object — TYPE
+/// tells them apart and actions target the right API.
+#[test]
+fn same_named_kinds_of_two_groups_stay_apart() {
+    use crate::kube::object_status::ObjectHealth::Current;
+    let mut app = create_test_app(false);
+    app.view_state.current_view = View::ResourceList;
+    app.view_state.kind_filter = KindFilter::parse("svc,services.serving.knative.dev").unwrap();
+    let rows: &[(&str, &str, _)] = &[("apps", "web", Current)];
+    app.on_mixed_snapshot(mixed_snapshot(vec![
+        (kind("", "Service", "services"), rows),
+        (kind("serving.knative.dev", "Service", "services"), rows),
+    ]));
+    let types: Vec<_> = app
+        .get_filtered_resources()
+        .iter()
+        .map(|r| r.resource_type.clone())
+        .collect();
+    assert!(types.contains(&"Service".to_string()), "{types:?}");
+    assert!(
+        types.contains(&"Service.serving.knative.dev".to_string()),
+        "{types:?}"
+    );
+
+    let knative = types
+        .iter()
+        .position(|t| t == "Service.serving.knative.dev")
+        .unwrap();
+    app.view_state.selected_index = knative;
+    let target = app.native_view_target().unwrap();
+    assert_eq!(
+        target.api_version.as_deref(),
+        Some("serving.knative.dev/v1")
+    );
+    let core = types.iter().position(|t| t == "Service").unwrap();
+    app.view_state.selected_index = core;
+    assert_eq!(
+        app.native_view_target().unwrap().api_version.as_deref(),
+        Some("v1")
+    );
+}
+
+/// An update that arrives while describe is open (a row inserted above the
+/// selection) doesn't move the selection: Back returns to the same object.
+#[test]
+fn updates_under_a_nested_view_keep_the_selection() {
+    use crate::kube::object_status::ObjectHealth::Current;
+    let mut app = create_test_app(false);
+    add_resource(&mut app);
+    let deployments = || kind("apps", "Deployment", "deployments");
+    mix_in(
+        &mut app,
+        "ks,deploy",
+        deployments(),
+        &[("flux-system", "web", Current)],
+    );
+    app.view_state.selected_index = 1; // web
+    app.handle_key(make_key(KeyCode::Char('d')));
+    assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+
+    app.on_mixed_snapshot(mixed_snapshot(vec![(
+        deployments(),
+        &[
+            ("flux-system", "aaa", Current),
+            ("flux-system", "web", Current),
+        ],
+    )]));
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::ResourceList);
+    let selected = &app.get_filtered_resources()[app.view_state.selected_index];
+    assert_eq!(
+        selected.name, "web",
+        "Back returns to the object, not the index"
+    );
+}
+
+/// `/label:` and `/ann:` match a mixed list's Kubernetes rows by their own
+/// metadata, like Flux rows.
+#[test]
+fn metadata_filters_match_kubernetes_rows() {
+    use crate::kube::object_status::ObjectHealth::Current;
+    let mut app = create_test_app(false);
+    app.view_state.current_view = View::ResourceList;
+    app.view_state.kind_filter = KindFilter::parse("deploy").unwrap();
+    let mut snapshot = mixed_snapshot(vec![(
+        kind("apps", "Deployment", "deployments"),
+        &[("apps", "web", Current), ("apps", "db", Current)],
+    )]);
+    let rows = &mut snapshot.kinds[0].snapshot.as_mut().unwrap().rows;
+    rows[0].labels.insert("app".into(), "web".into());
+    rows[0].annotations.insert("team".into(), "payments".into());
+    rows[1].labels.insert("app".into(), "db".into());
+    app.on_mixed_snapshot(snapshot);
+    let names = |app: &App| -> Vec<String> {
+        app.get_filtered_resources()
+            .iter()
+            .map(|r| r.name.clone())
+            .collect()
+    };
+
+    app.view_state.filter = "label:app=web".into();
+    assert_eq!(names(&app), ["web"]);
+    app.view_state.filter = "label:app".into();
+    assert_eq!(names(&app).len(), 2, "by key");
+    app.view_state.filter = "ann:team=pay".into();
+    assert_eq!(names(&app), ["web"], "annotation prefix");
+    app.view_state.filter = "annotations:team".into();
+    assert_eq!(names(&app), ["web"]);
 }

@@ -12,7 +12,8 @@ use ratatui::{
 };
 use std::collections::HashMap;
 
-/// What the header shows. `browsing` is set while browsing a non-Flux kind (#267): it replaces the Flux resource summary, keeping the Flux total as the anchor.
+/// What the header shows. `browsing` is set while browsing a non-Flux kind (#267): it replaces the
+/// Flux resource summary, keeping the Flux total as the anchor.
 pub struct HeaderProps<'a> {
     pub state: &'a ResourceState,
     pub controller_pods: &'a ControllerPodState,
@@ -77,9 +78,10 @@ pub fn render_header(f: &mut Frame, area: Rect, props: HeaderProps<'_>, theme: &
 
     match kind_filter.view() {
         Some(view) => filter_parts.push(format!("view={view}")),
-        None if !kind_filter.is_all() => {
-            filter_parts.push(format!("type={}", kind_filter.kinds().join(",")))
-        }
+        None if !kind_filter.is_all() => filter_parts.push(format!(
+            "type={}",
+            kind_filter.all_labels().collect::<Vec<_>>().join(",")
+        )),
         None => {}
     }
 
@@ -100,6 +102,13 @@ pub fn render_header(f: &mut Frame, area: Rect, props: HeaderProps<'_>, theme: &
             .kinds()
             .iter()
             .map(|kind| format!("{}:{}", kind, counts.get(kind).copied().unwrap_or(0)))
+            // Mixed-in Kubernetes kinds (#304) aren't in the Flux counts.
+            .chain(
+                kind_filter
+                    .native_kinds()
+                    .iter()
+                    .map(|k| k.label().to_string()),
+            )
             .collect()
     } else {
         // Show all resource types with their counts

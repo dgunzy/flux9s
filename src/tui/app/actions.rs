@@ -193,13 +193,17 @@ fn in_view(app: &App, views: &[View]) -> bool {
     views.contains(&app.view_state.current_view)
 }
 
+/// The selected Kubernetes object's kind has a capability: in a kind list,
+/// or on a Kubernetes row of a mixed Flux list (#304).
 fn kind_caps(app: &App, has: fn(&Capabilities) -> bool) -> bool {
-    app.view_state.current_view == View::KindList && has(&app.kind_list_caps())
+    app.selected_native_caps().is_some_and(|caps| has(&caps))
 }
 
 /// Views that act on a Flux resource: Flux operations, `t`, `h`, `g`, `v`.
+/// Not a Kubernetes row of a mixed Flux list: its kind's keys apply there.
 fn on_flux_resource(app: &App) -> bool {
     app.selection_state.native_object.is_none()
+        && !app.on_native_row()
         && in_view(
             app,
             &[
@@ -934,7 +938,7 @@ pub(crate) const ACTIONS: &[Action] = &[
     Action {
         id: ActionId::ListEnter,
         keys: &[code(KeyCode::Enter)],
-        when: |app| app.view_state.current_view.is_list_view(),
+        when: |app| app.view_state.current_view.is_list_view() && !app.on_native_row(),
         spec: ActionSpec::Builtin(|app, _| {
             app.open_selected_detail();
             None
@@ -946,7 +950,7 @@ pub(crate) const ACTIONS: &[Action] = &[
     Action {
         id: ActionId::Favorite,
         keys: &[key('f')],
-        when: |app| app.view_state.current_view.is_list_view(),
+        when: |app| app.view_state.current_view.is_list_view() && !app.on_native_row(),
         spec: ActionSpec::Builtin(|app, _| {
             app.toggle_selected_favorite();
             None
@@ -1157,6 +1161,29 @@ const KIND_LIST_LAYOUT: &[FooterItem] = &[
     TAIL[2],
 ];
 
+/// A Kubernetes row of a mixed Flux list (#304): its kind's keys, as in a
+/// kind list, plus the Flux list's own.
+const MIXED_NATIVE_ROW_LAYOUT: &[FooterItem] = &[
+    Act(A::Move),
+    Act(A::Page),
+    Act(A::CommandMode),
+    Act(A::KindEnter),
+    Act(A::KindDescribe),
+    Act(A::FilterOrSearch),
+    Act(A::Sort),
+    Act(A::Describe),
+    Act(A::Yaml),
+    Act(A::Edit),
+    Act(A::NativeTrace),
+    Act(A::NativeGraph),
+    Act(A::JumpToManager),
+    Act(A::KindLogs),
+    Act(A::Restart),
+    Act(A::KindDeletePod),
+    Act(A::Help),
+    Act(A::Back),
+];
+
 /// The unmanaged / orphaned sweep (#274): open a row, or go to the Flux
 /// object an orphan names.
 const OWNERSHIP_LAYOUT: &[FooterItem] = &[
@@ -1262,6 +1289,9 @@ impl App {
             return CONNECTION_ERROR_LAYOUT;
         }
         let view = self.view_state.current_view;
+        if self.on_native_row() {
+            return MIXED_NATIVE_ROW_LAYOUT;
+        }
         if self.selection_state.native_object.is_some()
             && matches!(
                 view,

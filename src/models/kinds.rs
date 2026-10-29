@@ -435,7 +435,9 @@ pub fn resolve(token: &str) -> Option<KindSpec> {
     resolve_in(token, catalog())
 }
 
-fn resolve_in(token: &str, discovered: &KindCatalog) -> Option<KindSpec> {
+/// [`resolve`] against a given catalog of discovered kinds — for code (and
+/// tests) that mustn't depend on the process-wide one.
+pub fn resolve_in(token: &str, discovered: &KindCatalog) -> Option<KindSpec> {
     let token = token.trim().to_lowercase();
     if token.is_empty() {
         return None;

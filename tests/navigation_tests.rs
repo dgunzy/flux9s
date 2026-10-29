@@ -49,6 +49,7 @@ fn create_test_app_no_splash() -> App {
 
 fn add_test_resource(app: &mut App) {
     let resource = ResourceInfo {
+        api_group: None,
         name: "my-kustomization".to_string(),
         namespace: "flux-system".to_string(),
         resource_type: "Kustomization".to_string(),

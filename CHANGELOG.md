@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Flux and Kubernetes kinds in one list (#304): `:ks,deploy`, `-c ks,deploy`,
+  or a view (`views.app-health.kinds: [ks, hr, deploy, svc]`). Kubernetes
+  rows share the Flux list's columns (health in STATUS / READY, MESSAGE),
+  follow `:ns`, and are watched only while the list is on screen. Keys
+  follow the selected row: Flux operations on Flux rows; Enter / `l` / `r`
+  / `t` / `g` / `m` on a Kubernetes row as in its kind list. Needs native
+  resources; otherwise the kinds are skipped with a notice
 - Unmanaged / orphaned lists switch what they show in place: `a`
   everything Flux doesn't manage, `o` orphans only, `u` unmanaged only — no
   rescan. The title counts each standing (`3 orphaned · 41 unmanaged hidden

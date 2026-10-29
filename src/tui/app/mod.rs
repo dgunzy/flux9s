@@ -17,6 +17,7 @@ mod events;
 mod keys;
 mod kind_browser;
 mod managers;
+pub(crate) mod mixed;
 mod navigation;
 mod ownership;
 mod rendering;

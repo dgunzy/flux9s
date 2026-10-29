@@ -833,6 +833,7 @@ mod tests {
         assert!(!op.requires_confirmation());
 
         let resource = ResourceInfo {
+            api_group: None,
             name: "test-ks".to_string(),
             namespace: "default".to_string(),
             resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
@@ -872,6 +873,7 @@ mod tests {
         assert!(op.requires_confirmation());
 
         let resource = ResourceInfo {
+            api_group: None,
             name: "test-resource".to_string(),
             namespace: "flux-system".to_string(),
             resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
@@ -1049,6 +1051,7 @@ mod tests {
         let op = ReconcileWithSourceOperation;
 
         let resource = ResourceInfo {
+            api_group: None,
             name: "test-kustomization".to_string(),
             namespace: "flux-system".to_string(),
             resource_type: FluxResourceKind::Kustomization.as_str().to_string(),

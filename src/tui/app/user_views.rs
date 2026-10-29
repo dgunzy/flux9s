@@ -25,6 +25,16 @@ impl App {
         }
         self.view_state.kind_filter = filter;
         self.reset_list_position();
+        self.sync_mixed_watch();
+        let skipped = self.skipped_mixed_kinds();
+        if !skipped.is_empty() {
+            let why = if self.config.native_resources {
+                "isn't a kind this cluster serves (yet — discovery may still be running)"
+            } else {
+                "is a Kubernetes kind — :native turns them on"
+            };
+            self.set_status_message((format!("Skipped {}: {why}", skipped.join(", ")), false));
+        }
         self.invalidate_layout_cache(); // The kind filter is shown in the header
     }
 
@@ -63,6 +73,10 @@ impl App {
                 Ok(filter) => {
                     self.switch_namespace(namespace);
                     self.show_kinds(filter);
+                }
+                Err(_) if self.discovery_may_know(head) => {
+                    self.switch_namespace(namespace);
+                    self.hold_kind_command(head);
                 }
                 Err(e) => self.set_status_message((e, true)),
             }
@@ -152,12 +166,22 @@ impl App {
         Ok(())
     }
 
-    /// `:ks,hr`: several Flux kinds in one list.
+    /// `:ks,hr` / `:ks,deploy`: several kinds in one list (Kubernetes kinds mix in, #304).
     pub(super) fn cmd_kind_set(&mut self, spec: &str) {
         match KindFilter::parse(spec) {
             Ok(filter) => self.show_kinds(filter),
+            // A custom kind's name (`ks,widgets`) typed — or given with
+            // `-c` — before discovery finished: held until it lands.
+            Err(_) if self.discovery_may_know(spec) => self.hold_kind_command(spec),
             Err(e) => self.set_status_message((e, true)),
         }
+    }
+
+    /// Whether a kind set that didn't parse may once discovery finishes.
+    fn discovery_may_know(&self, spec: &str) -> bool {
+        spec.contains(',')
+            && self.config.native_resources
+            && self.async_state.kind_discovery.is_loading()
     }
 
     /// `defaultResourceFilter` at startup: a view name, or one or more
@@ -387,8 +411,8 @@ mod tests {
         );
         assert!(has("view 'bad name': names can't contain"), "{problems:#?}");
         assert!(
-            has("view 'mixed': 'deploy' is a Kubernetes kind"),
-            "{problems:#?}"
+            !has("view 'mixed'"),
+            "Kubernetes kinds mix in: {problems:#?}"
         );
         assert!(
             has("view 'typo': 'kss' isn't a Flux kind flux9s knows"),

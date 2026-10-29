@@ -348,6 +348,7 @@ mod tests {
         suspended: Option<bool>,
     ) -> ResourceInfo {
         ResourceInfo {
+            api_group: None,
             name: name.to_string(),
             namespace: "flux-system".to_string(),
             resource_type: kind.to_string(),

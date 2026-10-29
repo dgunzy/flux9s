@@ -19,7 +19,7 @@ impl App {
     /// must decide whether it shows one.
     pub(crate) fn native_subject(&self) -> Option<ObjectRef> {
         match self.view_state.current_view {
-            View::KindList | View::OwnershipList => self.native_view_target(),
+            View::KindList | View::OwnershipList | View::ResourceList => self.native_view_target(),
             View::WorkloadDetail => self.async_state.workload.result().map(|w| ObjectRef {
                 kind: w.kind.clone(),
                 namespace: w.namespace.clone(),
@@ -29,8 +29,7 @@ impl App {
             View::ResourceDescribe | View::ResourceYAML | View::ResourceTrace => {
                 self.selection_state.native_object.clone()
             }
-            View::ResourceList
-            | View::ResourceDetail
+            View::ResourceDetail
             | View::ResourceGraph
             | View::ResourceFavorites
             | View::ResourceHistory
@@ -53,6 +52,7 @@ impl App {
         let native = self.selection_state.native_object.is_some();
         match self.view_state.current_view {
             View::KindList => self.selected_kind_row()?.flux_manager(),
+            View::ResourceList => self.selected_native_row()?.1.flux_manager(),
             View::OwnershipList => self.selected_sweep_row()?.flux_manager(),
             View::WorkloadDetail => self
                 .async_state
@@ -97,8 +97,7 @@ impl App {
                 }
                 self.trace_result()?.flux_manager().map(|n| n.key())
             }
-            View::ResourceList
-            | View::ResourceDetail
+            View::ResourceDetail
             | View::ResourceGraph
             | View::ResourceFavorites
             | View::ResourceHistory

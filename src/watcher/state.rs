@@ -90,6 +90,10 @@ pub struct ResourceInfo {
     // Reconciliation tracking
     pub last_reconciled: Option<chrono::DateTime<chrono::Utc>>,
     pub reconciliation_history: Vec<ReconciliationEvent>, // Limited to last N events
+    /// The API group of a Kubernetes row in a mixed Flux list (#304);
+    /// `None` for watched Flux resources. With kind, namespace, and name it
+    /// identifies the row — TYPE is display text only.
+    pub api_group: Option<String>,
 }
 
 impl ResourceInfo {
@@ -306,6 +310,7 @@ mod tests {
     fn test_resource_state_upsert() {
         let state = ResourceState::new();
         let info = ResourceInfo {
+            api_group: None,
             name: "test-resource".to_string(),
             namespace: "default".to_string(),
             resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
@@ -344,6 +349,7 @@ mod tests {
         use crate::models::FluxResourceKind;
         let state = ResourceState::new();
         let info = ResourceInfo {
+            api_group: None,
             name: "test-resource".to_string(),
             namespace: "default".to_string(),
             resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
@@ -378,6 +384,7 @@ mod tests {
 
         // Add multiple resources of different types
         let kustomization = ResourceInfo {
+            api_group: None,
             name: "ks1".to_string(),
             namespace: "default".to_string(),
             resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
@@ -393,6 +400,7 @@ mod tests {
         };
 
         let gitrepo = ResourceInfo {
+            api_group: None,
             name: "repo1".to_string(),
             namespace: "default".to_string(),
             resource_type: FluxResourceKind::GitRepository.as_str().to_string(),
@@ -408,6 +416,7 @@ mod tests {
         };
 
         let kustomization2 = ResourceInfo {
+            api_group: None,
             name: "ks2".to_string(),
             namespace: "default".to_string(),
             resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
@@ -459,6 +468,7 @@ mod tests {
             )
             .to_key_string(),
             ResourceInfo {
+                api_group: None,
                 name: "ks1".to_string(),
                 namespace: "default".to_string(),
                 resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
@@ -482,6 +492,7 @@ mod tests {
             )
             .to_key_string(),
             ResourceInfo {
+                api_group: None,
                 name: "ks2".to_string(),
                 namespace: "default".to_string(),
                 resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
@@ -505,6 +516,7 @@ mod tests {
             )
             .to_key_string(),
             ResourceInfo {
+                api_group: None,
                 name: "repo1".to_string(),
                 namespace: "default".to_string(),
                 resource_type: FluxResourceKind::GitRepository.as_str().to_string(),
@@ -545,6 +557,7 @@ mod tests {
             )
             .to_key_string(),
             ResourceInfo {
+                api_group: None,
                 name: "test".to_string(),
                 namespace: "default".to_string(),
                 resource_type: FluxResourceKind::Kustomization.as_str().to_string(),
