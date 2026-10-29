@@ -1159,3 +1159,74 @@ async fn notification_kinds_fall_back_to_v1beta3_on_older_flux() {
         );
     }
 }
+
+/// A mixed Flux list's Kubernetes kinds (#304): one combined watch lists
+/// each kind in the namespace and keeps the kinds apart, in order.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster"]
+async fn mixed_watch_lists_each_kubernetes_kind() {
+    use flux9s::kube::kind_list::{KindListRequest, MixedRequest, watch_kinds};
+
+    let client = client_for(&simple_context()).await;
+    let kinds = flux9s::kube::discovery::discover_kinds(&client)
+        .await
+        .unwrap_or_else(|e| panic!("discovery failed: {e:#}"));
+    let find = |kind: &str, group: &str| {
+        kinds
+            .iter()
+            .find(|k| k.gvk.kind == kind && k.gvk.group == group)
+            .cloned()
+            .unwrap_or_else(|| panic!("{kind} not discovered"))
+    };
+    let request = |spec| KindListRequest {
+        spec,
+        namespace: Some("flux-resources".to_string()),
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(watch_kinds(
+        client,
+        MixedRequest {
+            kinds: vec![
+                request(find("Deployment", "apps")),
+                request(find("Service", "")),
+            ],
+        },
+        tx,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let snapshot = loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let message = tokio::time::timeout(remaining, rx.recv())
+            .await
+            .expect("both kinds listed in time")
+            .expect("watch still running");
+        let snapshot = message.unwrap_or_else(|e| panic!("watch failed: {e:#}"));
+        if snapshot.kinds.iter().all(|k| k.snapshot.is_some()) {
+            break snapshot;
+        }
+    };
+    task.abort();
+
+    let names = |index: usize| -> Vec<String> {
+        snapshot.kinds[index]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .rows
+            .iter()
+            .map(|r| r.name.clone())
+            .collect()
+    };
+    assert_eq!(
+        snapshot.kinds[0].spec.gvk.kind, "Deployment",
+        "in the order given"
+    );
+    assert_eq!(snapshot.kinds[1].spec.gvk.kind, "Service");
+    assert!(names(0).contains(&"podinfo".to_string()), "{:?}", names(0));
+    assert!(names(1).contains(&"podinfo".to_string()), "{:?}", names(1));
+    assert!(
+        snapshot.kinds.iter().all(|k| k.error.is_none()),
+        "no errors: {:?}",
+        snapshot.kinds.iter().map(|k| &k.error).collect::<Vec<_>>()
+    );
+}

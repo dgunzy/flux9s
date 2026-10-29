@@ -605,8 +605,16 @@ impl App {
             View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace => {
                 self.selection_state.native_object.clone()
             }
-            View::ResourceList
-            | View::ResourceDetail
+            // A Kubernetes row of a mixed Flux list (#304).
+            View::ResourceList => self.selected_native_row().map(|(spec, row)| {
+                ObjectRef::native(
+                    spec.gvk.api_version(),
+                    spec.gvk.kind.clone(),
+                    row.namespace.clone(),
+                    row.name.clone(),
+                )
+            }),
+            View::ResourceDetail
             | View::ResourceGraph
             | View::ResourceFavorites
             | View::ResourceHistory

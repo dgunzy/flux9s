@@ -291,6 +291,7 @@ impl ClusterSession {
                 self.state.upsert(
                     key,
                     ResourceInfo {
+                        api_group: None,
                         name,
                         namespace: ns,
                         resource_type,

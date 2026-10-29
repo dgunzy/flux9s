@@ -459,6 +459,7 @@ impl App {
                 self.go_home_flux();
             }
             self.async_state.kind_list.clear();
+            self.async_state.mixed.clear();
             self.clear_sweep();
             self.async_state.kind_discovery.clear();
             self.async_state.namespace_list.clear();
@@ -698,8 +699,9 @@ impl App {
         }
 
         self.reset_list_position();
-        // A kind list follows the namespace (#267).
+        // A kind list, and a mixed Flux list's kinds, follow the namespace.
         self.refresh_kind_list_namespace();
+        self.sync_mixed_watch();
     }
 
     /// `:healthy` — filter the list to healthy resources.
@@ -793,6 +795,7 @@ impl App {
         }
         if !self.view_state.kind_filter.is_all() {
             self.view_state.kind_filter = KindFilter::all();
+            self.sync_mixed_watch();
             self.invalidate_layout_cache(); // Resource type filter affects header display
         }
         if self.view_state.health_filter != HealthFilter::All {

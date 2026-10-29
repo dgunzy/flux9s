@@ -74,6 +74,7 @@ Press `:` and type a command. `Tab` autocompletes.
 | `:ns` / `:ns <name>` / `:ns all` | Pick or switch the namespace, or watch all namespaces |
 | `:<kind>` | Filter the Flux list to a kind (`:ks`, `:hr`, `:gitrepo`, …); with native resources on, browse [any kind](../native-resources/) (`:deploy`, `:po`) |
 | `:ks,hr` | Several Flux kinds in one list, in the order given |
+| `:ks,deploy` | Flux and Kubernetes kinds in one list — keys follow the selected row ([views](/configuration/#views); native resources on) |
 | `:<view>` | A [view](/configuration/#views) from your config (`:apps`) |
 | `:<view> -n <ns>` / `:ks,hr -n <ns>` / `:<kind> -n <ns>` | Open it in a namespace (`all` for every namespace); wins over a view's own namespace |
 | `:all` | Clear the kind and health filters |

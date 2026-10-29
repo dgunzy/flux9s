@@ -159,7 +159,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `:ns <namespace>` - Switch namespace
 - `:ns all` - View all namespaces
 - `:favorites` or `:fav` - View favorite resources
-- `:ks,hr` - Several Flux kinds in one list; name a set you use often in your config (`views: {apps: {kinds: [ks, hr]}}`) and open it with `:apps` (views can also set a `namespace` and `sort`; `defaultSort: type` groups the list by kind at startup)
+- `:ks,hr` - Several Flux kinds in one list; name a set you use often in your config (`views: {apps: {kinds: [ks, hr]}}`) and open it with `:apps` (views can also set a `namespace` and `sort`; `defaultSort: type` groups the list by kind at startup). With `:native`, Kubernetes kinds mix in too (`:ks,deploy`), each row keeping its own keys
 - `:events` or `:ev` - Live Kubernetes events feed (current namespace scope)
 - `:unmanaged` / `:orphaned [<kind>/<name>]` - What Flux doesn't manage, or left behind (`-n <ns>`, `-A`; with `:native`); in the list `o` / `u` / `a` switch between orphans only, unmanaged only, and everything
 - `:trace <kind>/<name> [-n <namespace>]` - Trace what manages an object; watching all namespaces, it finds the object without `-n`

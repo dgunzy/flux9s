@@ -46,7 +46,8 @@ fn width(header: &str, values: impl Iterator<Item = usize>, cap: usize) -> u16 {
     u16::try_from(widest.min(cap)).unwrap_or(u16::MAX)
 }
 
-/// What a kind list shows: the kind, its namespace scope, the live snapshot and its filtered rows, and any error.
+/// What a kind list shows: the kind, its namespace scope, the live snapshot and its filtered rows,
+/// and any error.
 pub struct KindListProps<'a> {
     pub spec: Option<&'a KindSpec>,
     pub namespace: &'a Option<String>,
@@ -239,9 +240,12 @@ mod tests {
 
     fn row(ns: &str, name: &str, health: ObjectHealth) -> KindRow {
         KindRow {
+            labels: Default::default(),
+            annotations: Default::default(),
             namespace: ns.into(),
             name: name.into(),
             health,
+            message: String::new(),
             cells: vec![health.label().into(), "3d".into(), "Replicas: 1/1".into()],
             created: None,
             ownership: crate::kube::ownership::Ownership::Unmanaged,

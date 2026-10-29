@@ -354,6 +354,7 @@ impl App {
                 View::ResourceList => {
                     let resources = self.get_filtered_resources();
                     let access_notice = self.access_notice();
+                    let mixed_notice = self.mixed_notice();
                     render_resource_list(
                         f,
                         area,
@@ -366,6 +367,7 @@ impl App {
                             sort_field: self.view_state.sort_field,
                             sort_reverse: self.view_state.sort_reverse,
                             access_notice: access_notice.as_deref(),
+                            notice: mixed_notice.as_deref(),
                         },
                         ListCursor::new(
                             self.view_state.selected_index,
@@ -505,9 +507,19 @@ impl App {
                     render_resource_list(
                         f,
                         area,
-                        ResourceListProps { resources: &resources, kind_filter: &self.view_state.kind_filter, resource_objects: &self.resource_objects, no_icons: self.config.ui.no_icons, favorites: &self.selection_state.favorites, sort_field: self.view_state.sort_field, sort_reverse: self.view_state.sort_reverse, access_notice: // Favorites is curated; an empty list there isn't an RBAC
-                        // signal, so keep the neutral empty-state.
-                        None },
+                        ResourceListProps {
+                            resources: &resources,
+                            kind_filter: &self.view_state.kind_filter,
+                            resource_objects: &self.resource_objects,
+                            no_icons: self.config.ui.no_icons,
+                            favorites: &self.selection_state.favorites,
+                            sort_field: self.view_state.sort_field,
+                            sort_reverse: self.view_state.sort_reverse,
+                            // Favorites is curated; an empty list there isn't
+                            // an RBAC signal, so keep the neutral empty-state.
+                            access_notice: None,
+                            notice: None,
+                        },
                         ListCursor::new(
                             self.view_state.selected_index,
                             &mut self.view_state.scroll_offset,

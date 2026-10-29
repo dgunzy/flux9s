@@ -32,7 +32,7 @@ flux9s config path
 | `defaultControllerNamespace` | string | `flux-system` | Namespace where Flux controllers run |
 | `defaultResourceFilter` | string | *(none)* | Flux list filter at startup: a kind (`ks`), several (`ks,hr`), or a [view](#views) name |
 | `defaultSort` | string | *(none)* | Flux list sort at startup: `name`, `age`, `type`, `status`; `-age` or `age:desc` reverses ([details](#default-sort)) |
-| `views` | map | *(empty)* | Named Flux list views: `views.<name>.kinds` lists Flux kinds, with optional `namespace` and `sort`; `:<name>` opens it ([details](#views)) |
+| `views` | map | *(empty)* | Named Flux list views: `views.<name>.kinds` lists Flux kinds (and, with native resources on, Kubernetes kinds), with optional `namespace` and `sort`; `:<name>` opens it ([details](#views)) |
 | `ownership.ignore` | list | *(empty)* | Objects `:unmanaged` / `:orphaned` never report: `group` / `kind` / `namespace` / `name` glob rules ([details](#ownership)) |
 | `ownership.ignoreNamespaces` | string[] | `kube-system`, `kube-public`, `kube-node-lease` | Namespaces those sweeps skip; `[]` sweeps every namespace ([details](#ownership)) |
 | `connectTimeoutSeconds` | integer | `10` | Startup Kubernetes API health-check timeout in seconds |
@@ -162,7 +162,7 @@ after the namespace.
 
 ### Views {#views}
 
-A view names a set of Flux kinds you look at together. `:<name>` opens it,
+A view names a set of kinds you look at together. `:<name>` opens it,
 `Tab` completes it, and `?` lists your views.
 
 ```yaml
@@ -173,6 +173,8 @@ views:
     namespace: all           # optional: switch to this namespace (all = every namespace)
   sources:
     kinds: [gitrepo, oci, helmrepository]
+  app-health:
+    kinds: [ks, hr, deploy, svc]   # Flux and Kubernetes kinds in one list
 ```
 
 Or from the command line:
@@ -198,8 +200,17 @@ flux9s config set views.apps ""      # remove it
   `:ks`. [Flux-adjacent kinds](#discovering-flux-adjacent-resource-kinds)
   work once flux9s has discovered them; until then (and in
   `flux9s config`) they're noted as unknown, in case they're a typo.
-  Kubernetes kinds (`deploy`, `po`) can't be mixed in yet; a view that lists
-  one says so when opened.
+- **Kubernetes kinds** (`deploy`, `svc`, any CRD the cluster serves) mix in
+  with [native resources](/user-guide/native-resources/) on. Their objects
+  join the Flux list with the shared columns — STATUS and READY from their
+  health, MESSAGE — after the Flux kinds, in the order given. Each is
+  watched only while the list is on screen, in the current namespace. Keys
+  follow the selected row: Flux operations on Flux rows; on a Kubernetes row
+  its kind's keys (Enter opens a workload's detail, `l` logs, `r` restart,
+  `t` / `g` / `m` when Flux manages it). With native resources off, the
+  view's Kubernetes kinds are skipped and its title says so. Name a kind by
+  `plural.group` (`buckets.s3.aws.upbound.io`) when several groups serve the
+  same name.
 - **Names:** flux9s commands come first, then views, then kinds. A view
   can't be named like a command (`:events`, `:pulse` — it would never open).
   A view may reuse a kind name (`ks`, `po`) and then stands in for it; the

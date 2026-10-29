@@ -662,8 +662,30 @@ releases. Async failures use `back_from(view)` and edit results
 The Flux list shows a `models::kind_filter::KindFilter`: all kinds, one
 (`:ks` — that kind's own columns), several (`:ks,hr` — the unified
 columns), or a named view (`views.<name>.kinds` in the config).
-`KindFilter::parse` resolves tokens through the kind registry and refuses
-Kubernetes kinds (mixing them needs per-row actions; later work).
+`KindFilter::parse` resolves tokens through the kind registry; Kubernetes
+kinds go to `native_kinds()` (kept as written until discovery resolves
+them).
+
+**Mixed lists (#304)** — `tui/app/mixed.rs`. A filter with Kubernetes kinds
+runs one `kube::kind_list::watch_kinds` (a `watch_kind` per kind, merged)
+in `AsyncOperationState::mixed`, only for the Flux list: `sync_mixed_watch`
+starts / restarts / stops it to match the filter and namespace whenever the
+Flux list is (re)entered or either changes, and `leave_view(ResourceList)`
+stops it for another top-level view. `get_filtered_resources` appends the
+rows as `ResourceInfo`s (`mixed_resources`), so sort / filter / cursor code
+is shared. A Kubernetes row sets `ResourceInfo::api_group`; with type,
+namespace, and name that's its identity (`mixed::RowId`) — TYPE is display
+text, the kind qualified by group when a Flux kind or another listed kind
+shares its name. Filter entries keep their resolved group and kind
+(`NativeKind`), and `KindFilter::adopt_discovered` places entries parsed
+before discovery and merges spellings of one kind. Selection survives
+updates: by identity on the list, and via `ViewState::mixed_reselect` while
+a view opened from it is on top. Per-row behaviour comes from one predicate pair:
+`App::on_native_row` (Flux actions and `on_flux_resource` stand aside) and
+`App::selected_native_caps` (kind actions' `kind_caps`), plus the
+`ResourceList` arms of `native_view_target`, `native_subject`, and
+`target_flux_manager`. The footer uses `MIXED_NATIVE_ROW_LAYOUT` on a
+Kubernetes row.
 
 - `:` dispatch order (`execute_command`): flux9s commands, then views
   (`App::view_named`, case-insensitive), then comma lists, then kinds.

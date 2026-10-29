@@ -59,6 +59,7 @@ fn create_test_resource_state() -> ResourceState {
     // Add some test resources
     let resources = vec![
         ResourceInfo {
+            api_group: None,
             name: "my-kustomization".to_string(),
             namespace: "flux-system".to_string(),
             resource_type: "Kustomization".to_string(),
@@ -73,6 +74,7 @@ fn create_test_resource_state() -> ResourceState {
             reconciliation_history: vec![],
         },
         ResourceInfo {
+            api_group: None,
             name: "my-gitrepo".to_string(),
             namespace: "flux-system".to_string(),
             resource_type: "GitRepository".to_string(),
@@ -87,6 +89,7 @@ fn create_test_resource_state() -> ResourceState {
             reconciliation_history: vec![],
         },
         ResourceInfo {
+            api_group: None,
             name: "my-helmrelease".to_string(),
             namespace: "default".to_string(),
             resource_type: "HelmRelease".to_string(),
@@ -358,6 +361,7 @@ fn test_render_resource_list() {
                     sort_field: SortField::Default,
                     sort_reverse: false,
                     access_notice: None,
+                    notice: None,
                 },
                 ListCursor::new(0, &mut scroll_offset),
                 &theme,
@@ -402,6 +406,7 @@ fn test_render_resource_list_with_selection() {
                     sort_field: SortField::Default,
                     sort_reverse: false,
                     access_notice: None,
+                    notice: None,
                 },
                 ListCursor::new(
                     1, // Select second item
@@ -446,6 +451,7 @@ fn test_render_resource_list_with_resource_type_filter() {
                     sort_field: SortField::Default,
                     sort_reverse: false,
                     access_notice: None,
+                    notice: None,
                 },
                 ListCursor::new(0, &mut scroll_offset),
                 &theme,
@@ -480,6 +486,7 @@ fn test_render_resource_list_empty() {
                     sort_field: SortField::Default,
                     sort_reverse: false,
                     access_notice: None,
+                    notice: None,
                 },
                 ListCursor::new(0, &mut scroll_offset),
                 &theme,

@@ -10,6 +10,9 @@
 //! - Objects are reduced to display rows **on arrival**; full objects are
 //!   never retained. Listing Secrets keeps no secret data in memory, and
 //!   large objects (Helm release Secrets, big ConfigMaps) cost one row each.
+//!   Rows keep labels and annotations (for metadata filters, #304) but never
+//!   `last-applied-configuration`, which would carry a Secret's data, and
+//!   annotation values are capped.
 //! - Every displayed string is cluster data, so it's sanitised: control
 //!   characters (terminal escapes) removed, newlines flattened, length capped.
 //! - Snapshots are capped at [`MAX_ROWS`]; the UI says when it truncates.
@@ -68,6 +71,16 @@ pub struct KindRow {
     pub namespace: String,
     pub name: String,
     pub health: ObjectHealth,
+    /// The health's message, first line (what a mixed Flux list's MESSAGE
+    /// shows, #304).
+    pub message: String,
+    /// Labels and annotations, for `/label:` and `/ann:` filters in a mixed
+    /// Flux list (#304). `last-applied-configuration` is left out — it holds
+    /// the whole manifest, a Secret's data included — and other annotation
+    /// values are capped at [`MAX_CELL_CHARS`], which prefix filters still
+    /// match.
+    pub labels: std::collections::HashMap<String, String>,
+    pub annotations: std::collections::HashMap<String, String>,
     pub cells: Vec<String>,
     /// Creation time, so AGE cells can be refreshed without the object.
     pub created: Option<chrono::DateTime<chrono::Utc>>,
@@ -365,6 +378,9 @@ pub fn kind_row(
         namespace,
         name,
         health: status.health,
+        message: sanitize_cell(status.message.lines().next().unwrap_or_default()),
+        labels: string_map(obj, "labels", usize::MAX),
+        annotations: string_map(obj, "annotations", MAX_CELL_CHARS),
         cells,
         created,
         ownership: owned,
@@ -372,6 +388,28 @@ pub fn kind_row(
         flux_probe,
         orphan: None,
     })
+}
+
+/// The annotation `kubectl apply` stores the whole applied manifest in.
+const LAST_APPLIED: &str = "kubectl.kubernetes.io/last-applied-configuration";
+
+/// `metadata.<field>` as a string map, each value cut to `max_chars`;
+/// never [`LAST_APPLIED`].
+fn string_map(
+    obj: &Value,
+    field: &str,
+    max_chars: usize,
+) -> std::collections::HashMap<String, String> {
+    obj.pointer(&format!("/metadata/{field}"))
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| key.as_str() != LAST_APPLIED)
+        .filter_map(|(key, value)| {
+            let value = value.as_str()?;
+            Some((key.clone(), value.chars().take(max_chars).collect()))
+        })
+        .collect()
 }
 
 /// Columns from a CRD's `additionalPrinterColumns` for `version`: STATUS
@@ -619,6 +657,91 @@ fn list_error_message(spec: &KindSpec, namespace: &Option<String>, error: &str) 
     }
 }
 
+/// The Kubernetes kinds mixed into the Flux list (#304), each watched as a
+/// kind list is, while the list is on screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MixedRequest {
+    pub kinds: Vec<KindListRequest>,
+}
+
+/// One mixed-in kind's latest state.
+#[derive(Debug, Clone)]
+pub struct MixedKind {
+    pub spec: KindSpec,
+    /// `None` until its first listing.
+    pub snapshot: Option<KindListSnapshot>,
+    /// Why it can't be listed (RBAC, unreachable), if it can't.
+    pub error: Option<String>,
+}
+
+/// Every mixed-in kind, in the order the filter gives them.
+#[derive(Debug, Clone, Default)]
+pub struct MixedSnapshot {
+    pub kinds: Vec<MixedKind>,
+}
+
+/// Keep several kinds live for a mixed Flux list (#304): one
+/// [`watch_kind`] per kind, merged — each update resends every kind's
+/// latest snapshot. Ends when the receiver is dropped (list closed), which
+/// ends the per-kind watches with it.
+pub async fn watch_kinds(
+    client: kube::Client,
+    request: MixedRequest,
+    tx: UnboundedSender<anyhow::Result<MixedSnapshot>>,
+) {
+    let (merged_tx, mut merged_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(usize, anyhow::Result<KindListSnapshot>)>();
+    let mut state = MixedSnapshot {
+        kinds: request
+            .kinds
+            .iter()
+            .map(|kind| MixedKind {
+                spec: kind.spec.clone(),
+                snapshot: None,
+                error: None,
+            })
+            .collect(),
+    };
+    let mut handles = Vec::new();
+    for (index, kind) in request.kinds.into_iter().enumerate() {
+        let (kind_tx, mut kind_rx) = tokio::sync::mpsc::unbounded_channel();
+        let merged_tx = merged_tx.clone();
+        handles.push(tokio::spawn(watch_kind(client.clone(), kind, kind_tx)));
+        handles.push(tokio::spawn(async move {
+            while let Some(message) = kind_rx.recv().await {
+                if merged_tx.send((index, message)).is_err() {
+                    return;
+                }
+            }
+        }));
+    }
+    drop(merged_tx);
+    // Abort every per-kind task when this one ends (or is aborted).
+    struct AbortAll(Vec<tokio::task::JoinHandle<()>>);
+    impl Drop for AbortAll {
+        fn drop(&mut self) {
+            self.0.iter().for_each(tokio::task::JoinHandle::abort);
+        }
+    }
+    let _guard = AbortAll(handles);
+
+    while let Some((index, message)) = merged_rx.recv().await {
+        let Some(kind) = state.kinds.get_mut(index) else {
+            continue;
+        };
+        match message {
+            Ok(snapshot) => {
+                kind.snapshot = Some(snapshot);
+                kind.error = None;
+            }
+            Err(e) => kind.error = Some(format!("{e:#}")),
+        }
+        if tx.send(Ok(state.clone())).is_err() {
+            return; // List closed
+        }
+    }
+}
+
 /// Keep a kind's list live: send a snapshot after the initial listing and
 /// after every settled burst of changes. Errors before the first listing
 /// are reported (once per distinct message) while the watch keeps retrying;
@@ -862,6 +985,37 @@ mod tests {
         assert!(row.created.is_some());
     }
 
+    /// Rows keep labels and annotations for metadata filters (#304) — not the
+    /// last-applied manifest (a Secret's would carry its data), and long
+    /// values cut.
+    #[test]
+    fn rows_keep_labels_and_capped_annotations() {
+        let now: chrono::DateTime<chrono::Utc> = "2026-09-29T12:00:00Z".parse().unwrap();
+        let long = "x".repeat(10_000);
+        let obj = json!({
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "name": "web",
+                "namespace": "apps",
+                "labels": {"app": "web"},
+                "annotations": {
+                    "team": "payments",
+                    "notes": long,
+                    "kubectl.kubernetes.io/last-applied-configuration": "{\"data\":{\"example\":\"bm90LWEtc2VjcmV0\"}}"
+                }
+            }
+        });
+        let row = kind_row(&spec().columns, &obj, now).unwrap();
+        assert_eq!(row.labels.get("app").map(String::as_str), Some("web"));
+        assert_eq!(
+            row.annotations.get("team").map(String::as_str),
+            Some("payments")
+        );
+        assert!(!row.annotations.contains_key(LAST_APPLIED), "never kept");
+        assert_eq!(row.annotations["notes"].chars().count(), MAX_CELL_CHARS);
+    }
+
     #[test]
     fn watched_objects_get_kind_stamped_before_health() {
         // Watch items omit apiVersion/kind; without stamping, Deployment
@@ -1010,9 +1164,12 @@ mod tests {
             store.relist.insert(
                 (String::new(), format!("obj-{i:05}")),
                 KindRow {
+                    labels: Default::default(),
+                    annotations: Default::default(),
                     namespace: String::new(),
                     name: format!("obj-{i:05}"),
                     health: ObjectHealth::Current,
+                    message: String::new(),
                     cells: vec![],
                     created: None,
                     ownership: Ownership::Unmanaged,

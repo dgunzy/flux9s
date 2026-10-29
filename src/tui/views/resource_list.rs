@@ -31,7 +31,9 @@ fn decorate_header(col: &str, sort_field: SortField, sort_reverse: bool, no_icon
     }
 }
 
-/// What the Flux list (or favorites) shows. `access_notice` is the contextual RBAC notice shown in place of the default empty-state message when the list is empty because a kind is restricted (see `App::access_notice`).
+/// What the Flux list (or favorites) shows. `access_notice` is the contextual RBAC notice shown in
+/// place of the default empty-state message when the list is empty because a kind is restricted
+/// (see `App::access_notice`).
 pub struct ResourceListProps<'a> {
     pub resources: &'a [ResourceInfo],
     pub kind_filter: &'a crate::models::kind_filter::KindFilter,
@@ -41,6 +43,8 @@ pub struct ResourceListProps<'a> {
     pub sort_field: SortField,
     pub sort_reverse: bool,
     pub access_notice: Option<&'a str>,
+    /// Why mixed-in Kubernetes kinds are missing (#304), for the title.
+    pub notice: Option<&'a str>,
 }
 
 /// Render the resource list table
@@ -60,6 +64,7 @@ pub fn render_resource_list(
         sort_field,
         sort_reverse,
         access_notice,
+        notice,
     } = props;
     let ListCursor {
         selected: selected_index,
@@ -124,6 +129,7 @@ pub fn render_resource_list(
         }
         None => {
             let show_revision = !kind_filter.is_all()
+                && kind_filter.native_kinds().is_empty()
                 && kind_filter
                     .kinds()
                     .iter()
@@ -199,11 +205,15 @@ pub fn render_resource_list(
     } else {
         String::new()
     };
-    let title = match (kind_filter.view(), kind_filter.kinds_label()) {
+    let mut title = match (kind_filter.view(), kind_filter.kinds_label()) {
         (Some(view), Some(kinds)) => format!("{view}: {kinds} ({total}){range_suffix}"),
         (None, Some(kinds)) => format!("{kinds} ({total}){range_suffix}"),
         (_, None) => format!("All Resources ({total}){range_suffix}"),
     };
+    // Mixed-in kinds that are skipped or failing (#304).
+    if let Some(notice) = notice {
+        title.push_str(&format!(" · {notice}"));
+    }
     let block = Block::default().title(title).borders(Borders::ALL);
 
     // The widths the table will draw — the same constraints, spacing, flex,
@@ -427,6 +437,7 @@ mod tests {
 
     fn resource(kind: &str, name: &str, message: &str) -> ResourceInfo {
         ResourceInfo {
+            api_group: None,
             name: name.into(),
             namespace: "flux-system".into(),
             resource_type: kind.into(),
@@ -459,6 +470,7 @@ mod tests {
                         sort_field: SortField::Default,
                         sort_reverse: false,
                         access_notice: None,
+                        notice: None,
                     },
                     ListCursor::new(0, &mut 0),
                     &Theme::default(),
@@ -582,6 +594,7 @@ mod tests {
                         sort_field: SortField::Default,
                         sort_reverse: false,
                         access_notice: None,
+                        notice: None,
                     },
                     ListCursor::new(selected, &mut offset),
                     &Theme::default(),

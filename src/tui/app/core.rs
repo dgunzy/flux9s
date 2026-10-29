@@ -697,7 +697,7 @@ impl App {
         self.view_state.scroll_offset = 0;
 
         let msg = match self.view_state.sort_field {
-            SortField::Default if self.view_state.kind_filter.kinds().len() > 1 => {
+            SortField::Default if self.view_state.kind_filter.all_kinds().count() > 1 => {
                 "Sort: default (kinds in the order given, then namespace/name)".to_string()
             }
             SortField::Default => "Sort: default (namespace/type/name)".to_string(),
@@ -803,6 +803,10 @@ impl App {
             View::ResourceList | View::ResourceFavorites => {
                 let resources = self.get_filtered_resources();
                 let resource = resources.get(self.view_state.selected_index)?;
+                // A Kubernetes row (#304) isn't a watched Flux resource.
+                if self.native_row_of(resource).is_some() {
+                    return None;
+                }
                 Some(ResourceKey::new(
                     resource.resource_type.clone(),
                     resource.namespace.clone(),
@@ -988,6 +992,9 @@ impl App {
         if let Some(ref namespace) = self.namespace {
             resources.retain(|r| r.namespace == *namespace);
         }
+        // Mixed-in Kubernetes kinds (#304), already namespace-scoped by
+        // their watch (cluster-scoped ones have no namespace to match).
+        resources.extend(self.mixed_resources());
 
         if self.view_state.current_view == View::ResourceFavorites {
             resources.retain(|r| {
@@ -1046,9 +1053,17 @@ impl App {
 
         let sort_field = self.view_state.sort_field;
         let sort_reverse = self.view_state.sort_reverse;
-        // A kind set orders its kinds as given (`ks,hr`: Kustomizations
-        // first, #306); everything else sorts by kind name.
-        let kind_order = self.view_state.kind_filter.kinds();
+        // A kind set orders its kinds as given (`ks,hr,deploy`:
+        // Kustomizations first, #306); everything else sorts by kind name.
+        let kind_order: Vec<String> = self
+            .view_state
+            .kind_filter
+            .kinds()
+            .iter()
+            .cloned()
+            .chain(self.mixed_type_names())
+            .collect();
+        let kind_order = kind_order.as_slice();
         resources.sort_by(|a, b| {
             let a_key = crate::watcher::ResourceKey::new(&a.resource_type, &a.namespace, &a.name)
                 .to_key_string();
@@ -1386,6 +1401,7 @@ mod tests {
         age: Option<chrono::DateTime<chrono::Utc>>,
     ) -> crate::watcher::ResourceInfo {
         crate::watcher::ResourceInfo {
+            api_group: None,
             name: name.to_string(),
             namespace: namespace.to_string(),
             resource_type: resource_type.to_string(),
