@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-29
+
+# Version 1.5.0 Changelog
+
+**Added**
+- Mixed views support (#324)
+- Unmanaged filtering capabilities (#323)
+
+**Changed**
+- Enhanced unmanaged filtering with improvements (#323)
+
 ### Added
 - Flux and Kubernetes kinds in one list (#304): `:ks,deploy`, `-c ks,deploy`,
   or a view (`views.app-health.kinds: [ks, hr, deploy, svc]`). Kubernetes
