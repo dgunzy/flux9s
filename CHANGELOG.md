@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-30
+
+# Version 1.5.1 Changelog
+
+## Added
+- App view feature (#326)
+
 ### Added
 - App view: what Flux objects deploy, from Flux's own records. `a` on a
   Kustomization / HelmRelease / ResourceSet / FluxInstance, `:app ks/a
