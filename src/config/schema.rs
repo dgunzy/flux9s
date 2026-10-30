@@ -148,6 +148,7 @@ impl Config {
                 "apps".to_string(),
                 ViewConfig {
                     kinds: vec!["ks".to_string(), "hr".to_string()],
+                    apps: vec!["ks/flux-system/apps".to_string()],
                     namespace: Some("apps".to_string()),
                     sort: Some("type".to_string()),
                 },
@@ -208,8 +209,15 @@ impl Config {
 pub struct ViewConfig {
     /// Flux kinds the view shows, by name, plural, or alias (`ks`,
     /// `helmreleases`, `Kustomization`).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kinds: Vec<String>,
+
+    /// Flux objects the view shows with everything they deploy (the app
+    /// view), as `<kind>/<name>` or `<kind>/<namespace>/<name>`. A view has
+    /// `kinds` or `apps`, not both; `namespace` is where `<kind>/<name>`
+    /// entries are found.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub apps: Vec<String>,
 
     /// Namespace the view switches to when it opens, like `:ns` (`all` for
     /// every namespace). Unset keeps the current namespace (#306).

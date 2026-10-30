@@ -5,10 +5,11 @@
 use crate::kube::kind_list::sanitize_cell;
 use crate::kube::standing::Standing;
 use crate::kube::sweep::{
-    SweepRequest, SweepResult, SweepRow, SweepScope, SweepShow, describe_request,
+    SweepProgress, SweepRequest, SweepResult, SweepRow, SweepScope, SweepShow, describe_request,
 };
 use crate::tui::theme::Theme;
-use crate::tui::views::props::ListCursor;
+use crate::tui::views::columns::fit;
+use crate::tui::views::props::{ListCursor, held_widths};
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -17,14 +18,19 @@ use ratatui::{
 };
 
 /// What the unmanaged / orphaned list shows: the sweep asked for, its
-/// result, which standings are shown, and the rows after that and the `/`
-/// filter.
+/// result, which standings and namespace are shown, the rows after those
+/// and the `/` filter, and how far a running sweep has got.
 pub struct OwnershipListProps<'a> {
     pub request: Option<&'a SweepRequest>,
     pub result: Option<&'a SweepResult>,
     pub show: SweepShow,
+    /// The namespace shown (`None` = every namespace): `:ns` narrows a
+    /// sweep of every namespace without rescanning.
+    pub namespace: Option<&'a str>,
     pub rows: &'a [&'a SweepRow],
     pub loading: bool,
+    /// The running sweep's phase and time, while one runs.
+    pub progress: Option<SweepProgress>,
     pub filter: &'a str,
 }
 
@@ -40,23 +46,27 @@ pub fn render_ownership_list(
         request,
         result,
         show,
+        namespace,
         rows,
         loading,
+        progress,
         filter,
     } = props;
     let ListCursor {
         selected: selected_index,
         offset: scroll_offset,
+        widths,
     } = cursor;
     let what = request.map_or_else(
         || "Ownership".to_string(),
-        |request| describe_request(request, show),
+        |request| describe_request(request, show, namespace),
     );
     // Only a whole-cluster sweep has standings to switch between.
     let switchable = request.is_some_and(|r| r.scope == SweepScope::NotFlux);
     let Some(result) = result else {
         let message = if loading {
-            format!("{what}: listing every kind…")
+            let step = progress.map_or_else(|| "starting".to_string(), SweepProgress::label);
+            format!("{what}: listing every kind… {step}")
         } else {
             format!("{what}: the sweep didn't finish")
         };
@@ -64,21 +74,32 @@ pub fn render_ownership_list(
         return;
     };
 
+    let in_scope = result
+        .rows
+        .iter()
+        .filter(|row| row.in_namespace(namespace))
+        .count();
     let shown_by_show = result
         .rows
         .iter()
-        .filter(|row| show.shows(&row.standing))
+        .filter(|row| row.in_namespace(namespace) && show.shows(&row.standing))
         .count();
+    let rescanning =
+        loading.then(|| progress.map_or_else(|| "starting".to_string(), SweepProgress::label));
     let title = title(
         &what,
-        result,
-        switchable.then_some(show),
-        rows.len(),
-        shown_by_show,
+        TitleCounts {
+            result,
+            namespace,
+            show: switchable.then_some(show),
+            shown: rows.len(),
+            shown_by_show,
+        },
+        rescanning.as_deref(),
         filter,
     );
     if rows.is_empty() {
-        let hidden = result.rows.len() - shown_by_show;
+        let hidden = in_scope - shown_by_show;
         let message = match (filter.is_empty(), show) {
             (false, _) => format!("Nothing matches '{filter}'"),
             (true, SweepShow::Orphaned) if switchable => "No orphans".to_string(),
@@ -151,30 +172,22 @@ pub fn render_ownership_list(
         })
         .collect();
 
-    let width = |header: &str, values: &mut dyn Iterator<Item = usize>, max: u16| -> u16 {
-        let widest = values
-            .chain(std::iter::once(header.len()))
-            .max()
-            .unwrap_or(0);
-        u16::try_from(widest).unwrap_or(max).min(max)
-    };
+    let natural = vec![
+        fit("KIND", rows.iter().map(|r| r.kind.chars().count()), 28),
+        fit(
+            "NAMESPACE",
+            rows.iter().map(|r| r.namespace.chars().count().max(9)),
+            24,
+        ),
+        fit("NAME", rows.iter().map(|r| r.name.chars().count()), 48),
+    ];
+    // Held while the list is open: a rescan doesn't move the columns.
+    let held = held_widths(widths, &format!("sweep:{what}|{}", area.width), natural);
     let constraints = [
         Constraint::Length(9),
-        Constraint::Length(width(
-            "KIND",
-            &mut rows.iter().map(|r| r.kind.chars().count()),
-            28,
-        )),
-        Constraint::Length(width(
-            "NAMESPACE",
-            &mut rows.iter().map(|r| r.namespace.chars().count().max(9)),
-            24,
-        )),
-        Constraint::Length(width(
-            "NAME",
-            &mut rows.iter().map(|r| r.name.chars().count()),
-            48,
-        )),
+        Constraint::Length(held[0]),
+        Constraint::Length(held[1]),
+        Constraint::Length(held[2]),
         Constraint::Length(4),
         Constraint::Fill(1),
     ];
@@ -187,30 +200,43 @@ pub fn render_ownership_list(
     viewport.render_scrollbar(f, area, theme);
 }
 
-/// `Not managed by Flux in apps (44) · 2 unreadable: secrets, … · 3
-/// orphaned · 41 unmanaged · 12 other · 41 kinds`. Warnings that the scan
-/// is incomplete come right after the count, so a narrow terminal cuts the
-/// counts before them; the standing counts come with a switchable sweep
-/// (`show`), hidden ones marked.
-fn title(
-    what: &str,
-    result: &SweepResult,
+/// What the title counts: the result, the namespace shown, the standings
+/// shown (with a switchable sweep), and the rows shown before and after `/`.
+struct TitleCounts<'a> {
+    result: &'a SweepResult,
+    namespace: Option<&'a str>,
     show: Option<SweepShow>,
     shown: usize,
     shown_by_show: usize,
-    filter: &str,
-) -> String {
+}
+
+/// `Not managed by Flux in apps (44) · 2 unreadable: secrets, … · 3
+/// orphaned · 41 unmanaged · 12 other · 41 kinds`. A rescan's progress and
+/// warnings that the scan is incomplete come right after the count, so a
+/// narrow terminal cuts the counts before them; the standing counts come
+/// with a switchable sweep (`show`), hidden ones marked.
+fn title(what: &str, counts: TitleCounts<'_>, rescanning: Option<&str>, filter: &str) -> String {
+    let TitleCounts {
+        result,
+        namespace,
+        show,
+        shown,
+        shown_by_show,
+    } = counts;
     let count = if filter.is_empty() {
         format!("({shown})")
     } else {
         format!("({shown} of {shown_by_show})")
     };
     let mut title = format!("{what} {count}");
+    if let Some(step) = rescanning {
+        title.push_str(&format!(" · rescanning: {step}"));
+    }
     if let Some(warning) = incomplete_warning(result) {
         title.push_str(&format!(" · {warning}"));
     }
     if let Some(show) = show {
-        let counts = result.counts();
+        let counts = result.counts(namespace);
         for (n, label, visible) in [
             (counts.orphaned, "orphaned", show != SweepShow::Unmanaged),
             (counts.unmanaged, "unmanaged", show != SweepShow::Orphaned),
@@ -311,8 +337,10 @@ mod tests {
                         request: Some(&request),
                         result,
                         show,
+                        namespace: Some("apps"),
                         rows: &rows,
                         loading,
+                        progress: None,
                         filter: "",
                     },
                     ListCursor::new(0, &mut offset),
@@ -400,8 +428,10 @@ mod tests {
                         request: Some(&request),
                         result: Some(result),
                         show,
+                        namespace: None,
                         rows: &rows,
                         loading: false,
+                        progress: None,
                         filter: "",
                     },
                     ListCursor::new(0, &mut offset),
@@ -443,12 +473,117 @@ mod tests {
 
     #[test]
     fn loading_and_empty_states() {
-        assert!(render(None, true).contains("listing every kind"));
+        assert!(render(None, true).contains("listing every kind… starting"));
         let empty = SweepResult {
             kinds_scanned: 3,
             ..SweepResult::default()
         };
         assert!(render(Some(&empty), false).contains("Nothing found"));
+    }
+
+    /// Draw a sweep of every namespace shown for `namespace`, as the app
+    /// passes it: rows narrowed to the namespace.
+    fn render_scoped(
+        result: Option<&SweepResult>,
+        namespace: Option<&str>,
+        loading: bool,
+        progress: Option<SweepProgress>,
+    ) -> String {
+        let request = SweepRequest {
+            scope: SweepScope::NotFlux,
+            namespace: None,
+            config: Default::default(),
+        };
+        let rows: Vec<&SweepRow> = result
+            .map(|r| {
+                r.rows
+                    .iter()
+                    .filter(|row| row.in_namespace(namespace))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut terminal = Terminal::new(TestBackend::new(160, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                let mut offset = 0;
+                render_ownership_list(
+                    f,
+                    f.area(),
+                    OwnershipListProps {
+                        request: Some(&request),
+                        result,
+                        show: SweepShow::All,
+                        namespace,
+                        rows: &rows,
+                        loading,
+                        progress,
+                        filter: "",
+                    },
+                    ListCursor::new(0, &mut offset),
+                    &Theme::default(),
+                );
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(160)
+            .map(|line| line.iter().map(|c| c.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_running_sweep_shows_its_step_and_time() {
+        use crate::kube::sweep::SweepPhase;
+        let progress = SweepProgress {
+            phase: SweepPhase::Listing {
+                done: 41,
+                total: 128,
+            },
+            elapsed: std::time::Duration::from_secs(3),
+        };
+        let screen = render_scoped(None, None, true, Some(progress));
+        assert!(
+            screen.contains("listing every kind… listing kinds 41 / 128 · 3s"),
+            "{screen}"
+        );
+
+        // A rescan keeps the rows and says it's running in the title.
+        let result = SweepResult {
+            rows: vec![row("notes", Standing::Unmanaged { created_by: None })],
+            kinds_scanned: 128,
+            ..SweepResult::default()
+        };
+        let rescan = render_scoped(Some(&result), None, true, Some(progress));
+        assert!(
+            rescan.contains("(1) · rescanning: listing kinds 41 / 128 · 3s"),
+            "{rescan}"
+        );
+        assert!(rescan.contains("notes"));
+    }
+
+    #[test]
+    fn narrowing_a_sweep_of_every_namespace_counts_only_that_namespace() {
+        let mut web = row("site", Standing::Unmanaged { created_by: None });
+        web.namespace = "web".into();
+        let result = SweepResult {
+            rows: vec![row("notes", Standing::Unmanaged { created_by: None }), web],
+            kinds_scanned: 9,
+            ..SweepResult::default()
+        };
+        let all = render_scoped(Some(&result), None, false, None);
+        assert!(
+            all.contains("Not managed by Flux in all namespaces (2) · 0 orphaned · 2 unmanaged"),
+            "{all}"
+        );
+        let apps = render_scoped(Some(&result), Some("apps"), false, None);
+        assert!(
+            apps.contains("Not managed by Flux in apps (1) · 0 orphaned · 1 unmanaged"),
+            "{apps}"
+        );
+        assert!(apps.contains("notes") && !apps.contains("site"));
     }
 
     #[test]

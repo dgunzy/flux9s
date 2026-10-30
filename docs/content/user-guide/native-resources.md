@@ -121,7 +121,21 @@ and orphans sort first. Each row says where the object stands and why:
 `y` shows its YAML, and `t` / `m` go to the Flux object an orphan names, while
 it exists. Unlike the rest of flux9s, a sweep is **not a watch**: it lists
 each kind once, metadata only, when you run it — nothing repeats in the
-background. `Ctrl-r` rescans.
+background. While it runs, the list shows how far it has got
+(`listing kinds 41 / 128 · 3s`, then `reading 12 Flux owners`).
+
+`Ctrl-r` rescans the namespace on screen, keeping the rows until the new ones
+arrive (the title says `rescanning: …`). `:ns` reuses what was already swept
+where it can:
+
+| After a sweep of | `:ns` to | Does |
+| --- | --- | --- |
+| every namespace (`:ns all` or `-A`) | any namespace, or back to all | Filters the rows, no rescan |
+| one namespace | another namespace, or all | Sweeps the new scope |
+| one Flux object's orphans (`O`) | any | Filters the rows (they come from every namespace) |
+
+Narrowed to one namespace, cluster-scoped objects are hidden, as in a sweep of
+that namespace. Running `:unmanaged` / `:orphaned` again always sweeps afresh.
 
 **How the verdict is reached.** A sweep lists every discovered kind once,
 metadata only, and keeps top-level objects — anything with an owner

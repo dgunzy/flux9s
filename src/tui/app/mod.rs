@@ -8,8 +8,10 @@ pub mod state;
 pub mod async_task;
 pub mod live_task;
 pub mod logs;
+pub mod sweep_task;
 
 pub(crate) mod actions;
+mod apps;
 mod async_ops;
 pub(crate) mod command_mode;
 mod core;

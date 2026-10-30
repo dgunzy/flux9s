@@ -4,6 +4,8 @@
 //! in the TUI. Each component is responsible for rendering a specific
 //! part of the interface.
 
+mod app_tree;
+pub mod columns;
 mod confirmation;
 mod connection_error;
 mod describe;
@@ -33,6 +35,7 @@ pub mod trace;
 mod workloads;
 mod yaml;
 
+pub use app_tree::*;
 pub use confirmation::*;
 pub use connection_error::render_connection_error;
 pub use describe::*;

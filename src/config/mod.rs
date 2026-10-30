@@ -202,13 +202,33 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
             let (name, field) = rest.split_once('.').unwrap_or((rest, "kinds"));
             if name.is_empty() || field.contains('.') {
                 return Err(anyhow::anyhow!(
-                    "Use views.<name>[.kinds|.namespace|.sort] (e.g. flux9s config set views.apps ks,hr)"
+                    "Use views.<name>[.kinds|.apps|.namespace|.sort] (e.g. flux9s config set views.apps ks,hr)"
                 ));
             }
             let set = |value: &str| (!value.is_empty()).then(|| value.trim().to_string());
             match field {
-                "kinds" if value.is_empty() => {
+                "kinds" | "apps" if value.is_empty() => {
                     config.views.remove(name);
+                }
+                // Flux objects shown with what they deploy (the app view).
+                "apps" => {
+                    let apps: Vec<String> = value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|t| !t.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                    for app in &apps {
+                        crate::kube::app::AppTarget::parse(app)
+                            .map_err(|e| anyhow::anyhow!("views.{name}.apps: {e}"))?;
+                    }
+                    let view = config.views.entry(name.to_string()).or_default();
+                    if !view.kinds.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "views.{name} lists kinds — a view lists kinds or shows apps, not both"
+                        ));
+                    }
+                    view.apps = apps;
                 }
                 "kinds" => {
                     // Validate; store the kinds as written (aliases read
@@ -216,7 +236,13 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
                     // runtime); the CLI warns about them via `view_problems`.
                     crate::models::kind_filter::KindFilter::parse_allowing_unknown(value)
                         .map_err(|e| anyhow::anyhow!("views.{name}: {e}"))?;
-                    config.views.entry(name.to_string()).or_default().kinds = value
+                    let view = config.views.entry(name.to_string()).or_default();
+                    if !view.apps.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "views.{name} shows apps — a view lists kinds or shows apps, not both"
+                        ));
+                    }
+                    view.kinds = value
                         .split(',')
                         .map(str::trim)
                         .filter(|t| !t.is_empty())
@@ -230,7 +256,7 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
                     }
                     let view = config.views.get_mut(name).ok_or_else(|| {
                         anyhow::anyhow!(
-                            "No view '{name}' — set its kinds first: flux9s config set views.{name} ks,hr"
+                            "No view '{name}' — set its kinds or apps first: flux9s config set views.{name} ks,hr"
                         )
                     })?;
                     if field == "sort" {
@@ -241,7 +267,7 @@ pub fn set_config_value(config: &mut schema::Config, key: &str, value: &str) -> 
                 }
                 _ => {
                     return Err(anyhow::anyhow!(
-                        "Unknown view setting '{field}' — use kinds, namespace, or sort"
+                        "Unknown view setting '{field}' — use kinds, apps, namespace, or sort"
                     ));
                 }
             }
@@ -357,7 +383,30 @@ mod tests {
     fn view_options_and_default_sort_set_from_the_cli() {
         let mut config = schema::Config::default();
         let err = set_config_value(&mut config, "views.apps.sort", "type").unwrap_err();
-        assert!(err.to_string().contains("set its kinds first"), "{err}");
+        assert!(
+            err.to_string().contains("set its kinds or apps first"),
+            "{err}"
+        );
+
+        // An app view: Flux objects shown with what they deploy.
+        set_config_value(
+            &mut config,
+            "views.shop.apps",
+            "ks/flux-system/shop, hr/redis",
+        )
+        .unwrap();
+        assert_eq!(
+            config.views["shop"].apps,
+            ["ks/flux-system/shop", "hr/redis"]
+        );
+        set_config_value(&mut config, "views.shop.namespace", "data").unwrap();
+        assert!(
+            set_config_value(&mut config, "views.shop", "ks").is_err(),
+            "kinds or apps"
+        );
+        assert!(set_config_value(&mut config, "views.shop.apps", "ks").is_err());
+        set_config_value(&mut config, "views.shop.apps", "").unwrap();
+        assert!(!config.views.contains_key("shop"));
 
         set_config_value(&mut config, "views.apps", "ks,hr").unwrap();
         set_config_value(&mut config, "views.apps.namespace", "apps").unwrap();

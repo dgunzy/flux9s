@@ -161,6 +161,58 @@ pub struct SweepRequest {
     pub config: OwnershipConfig,
 }
 
+impl SweepRequest {
+    /// Whether this sweep's rows already hold everything `namespace`
+    /// (`None` = every namespace) would list, so showing it is a filter, not
+    /// a rescan: a sweep of every namespace covers each one, and a
+    /// per-owner sweep always looks everywhere.
+    pub fn covers(&self, namespace: Option<&str>) -> bool {
+        match self.scope {
+            SweepScope::OrphansOf(_) => true,
+            SweepScope::NotFlux => {
+                self.namespace.is_none() || self.namespace.as_deref() == namespace
+            }
+        }
+    }
+}
+
+/// How far a running sweep has got, for its loading screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SweepPhase {
+    /// Discovery hadn't finished when the sweep started.
+    Discovering,
+    /// Listing kinds: `done` of `total` listed.
+    Listing { done: usize, total: usize },
+    /// Reading the Flux objects the found objects name.
+    ReadingOwners { owners: usize },
+}
+
+impl SweepPhase {
+    /// `listing kinds 41 / 128`.
+    pub fn label(self) -> String {
+        match self {
+            SweepPhase::Discovering => "discovering kinds".to_string(),
+            SweepPhase::Listing { done, total } => format!("listing kinds {done} / {total}"),
+            SweepPhase::ReadingOwners { owners: 1 } => "reading 1 Flux owner".to_string(),
+            SweepPhase::ReadingOwners { owners } => format!("reading {owners} Flux owners"),
+        }
+    }
+}
+
+/// A running sweep's phase and how long it has run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SweepProgress {
+    pub phase: SweepPhase,
+    pub elapsed: Duration,
+}
+
+impl SweepProgress {
+    /// `listing kinds 41 / 128 · 3s`.
+    pub fn label(self) -> String {
+        format!("{} · {}s", self.phase.label(), self.elapsed.as_secs())
+    }
+}
+
 /// One object a sweep reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SweepRow {
@@ -174,6 +226,18 @@ pub struct SweepRow {
 }
 
 impl SweepRow {
+    /// The row's object, to find it again after a rescan.
+    pub fn key(&self) -> ResourceKey {
+        ResourceKey::new(&self.kind, &self.namespace, &self.name)
+    }
+
+    /// Whether the row is shown when the list is scoped to `namespace`
+    /// (`None` = every namespace). Cluster-scoped rows only show for every
+    /// namespace, as a sweep of one namespace doesn't list them.
+    pub fn in_namespace(&self, namespace: Option<&str>) -> bool {
+        namespace.is_none_or(|namespace| self.namespace == namespace)
+    }
+
     /// The Flux object a managed or orphaned row names — `None` when it's
     /// gone, so there's nothing to go to.
     pub fn flux_manager(&self) -> Option<ResourceKey> {
@@ -184,8 +248,13 @@ impl SweepRow {
     }
 }
 
-/// A one-line description of what a sweep shows, for its title.
-pub fn describe_request(request: &SweepRequest, show: SweepShow) -> String {
+/// A one-line description of what a sweep shows, for its title:
+/// `namespace` is the scope the list shows (`None` = every namespace).
+pub fn describe_request(
+    request: &SweepRequest,
+    show: SweepShow,
+    namespace: Option<&str>,
+) -> String {
     let what = match &request.scope {
         SweepScope::NotFlux => match show {
             SweepShow::Orphaned => "Left behind by Flux",
@@ -194,13 +263,18 @@ pub fn describe_request(request: &SweepRequest, show: SweepShow) -> String {
         }
         .to_string(),
         SweepScope::OrphansOf(owner) => {
-            return format!(
+            let what = format!(
                 "Left behind by {} {}/{}",
                 owner.resource_type, owner.namespace, owner.name
             );
+            // Every namespace unless `:ns` narrowed the list.
+            return match namespace {
+                Some(namespace) => format!("{what} in {namespace}"),
+                None => what,
+            };
         }
     };
-    match &request.namespace {
+    match namespace {
         Some(namespace) => format!("{what} in {namespace}"),
         None => format!("{what} in all namespaces"),
     }
@@ -219,10 +293,11 @@ pub struct SweepResult {
 }
 
 impl SweepResult {
-    /// Rows by standing, whatever the list shows.
-    pub fn counts(&self) -> StandingCounts {
+    /// Rows in `namespace` (`None` = every namespace) by standing, whatever
+    /// standings the list shows.
+    pub fn counts(&self, namespace: Option<&str>) -> StandingCounts {
         let mut counts = StandingCounts::default();
-        for row in &self.rows {
+        for row in self.rows.iter().filter(|row| row.in_namespace(namespace)) {
             match row.standing {
                 Standing::Orphaned(..) => counts.orphaned += 1,
                 Standing::Unmanaged { .. } => counts.unmanaged += 1,
@@ -321,11 +396,13 @@ async fn list_kind(
         .unwrap_or_else(|_| Err(spec.names.plural.clone()))
 }
 
-/// Run a sweep over `kinds` (the discovered catalog).
+/// Run a sweep over `kinds` (the discovered catalog), reporting how far it
+/// has got on `progress`.
 pub async fn sweep(
     client: &kube::Client,
     request: SweepRequest,
     kinds: Vec<KindSpec>,
+    progress: &tokio::sync::watch::Sender<SweepPhase>,
 ) -> SweepResult {
     let per_owner = matches!(request.scope, SweepScope::OrphansOf(_));
     let namespace = if per_owner {
@@ -339,6 +416,10 @@ pub async fn sweep(
         kinds_scanned: kinds.len(),
         ..SweepResult::default()
     };
+    progress.send_replace(SweepPhase::Listing {
+        done: 0,
+        total: kinds.len(),
+    });
 
     let listed: Vec<(KindSpec, Result<KindObjects, Unreadable>)> = futures::stream::iter(kinds)
         .map(|spec| {
@@ -347,6 +428,11 @@ pub async fn sweep(
             async move {
                 let objects =
                     list_kind(client, &spec, namespace.as_deref(), selector.as_deref()).await;
+                progress.send_modify(|phase| {
+                    if let SweepPhase::Listing { done, .. } = phase {
+                        *done += 1;
+                    }
+                });
                 (spec, objects)
             }
         })
@@ -397,6 +483,9 @@ pub async fn sweep(
         .iter()
         .filter_map(|object| standing::flux_owner(&object.meta).map(|(_, key)| key))
         .collect();
+    progress.send_replace(SweepPhase::ReadingOwners {
+        owners: owner_keys.len(),
+    });
     let mut owners = FluxOwners::default();
     owners.refresh(client, &owner_keys).await;
 
@@ -521,6 +610,66 @@ mod tests {
         assert!(per_owner.keeps(&orphan) && !per_owner.keeps(&unmanaged));
         // Orphans sort first.
         assert!(rank(&orphan) < rank(&unmanaged) && rank(&unmanaged) < rank(&other));
+    }
+
+    #[test]
+    fn a_sweep_covers_the_namespaces_it_listed() {
+        let request = |scope, namespace: Option<&str>| SweepRequest {
+            scope,
+            namespace: namespace.map(String::from),
+            config: Default::default(),
+        };
+        let everywhere = request(SweepScope::NotFlux, None);
+        assert!(everywhere.covers(None) && everywhere.covers(Some("apps")));
+        let apps = request(SweepScope::NotFlux, Some("apps"));
+        assert!(apps.covers(Some("apps")));
+        assert!(!apps.covers(Some("web")), "another namespace needs a sweep");
+        assert!(!apps.covers(None), "so does every namespace");
+        let per_owner = request(
+            SweepScope::OrphansOf(ResourceKey::new("Kustomization", "flux-system", "apps")),
+            None,
+        );
+        assert!(
+            per_owner.covers(Some("web")),
+            "per-owner sweeps look everywhere"
+        );
+    }
+
+    #[test]
+    fn narrowed_counts_and_rows_keep_to_the_namespace() {
+        let row = |namespace: &str| SweepRow {
+            api_version: "v1".into(),
+            kind: "ConfigMap".into(),
+            namespace: namespace.into(),
+            name: "x".into(),
+            standing: Standing::Unmanaged { created_by: None },
+            created: None,
+        };
+        let result = SweepResult {
+            rows: vec![row("apps"), row("web"), row("")],
+            ..SweepResult::default()
+        };
+        assert_eq!(result.counts(None).unmanaged, 3);
+        assert_eq!(result.counts(Some("apps")).unmanaged, 1);
+        assert!(!row("").in_namespace(Some("apps")), "cluster-scoped rows");
+        assert!(row("").in_namespace(None));
+    }
+
+    #[test]
+    fn progress_reads_as_a_step_and_a_time() {
+        let progress = SweepProgress {
+            phase: SweepPhase::Listing {
+                done: 41,
+                total: 128,
+            },
+            elapsed: Duration::from_millis(3_400),
+        };
+        assert_eq!(progress.label(), "listing kinds 41 / 128 · 3s");
+        assert_eq!(
+            SweepPhase::ReadingOwners { owners: 1 }.label(),
+            "reading 1 Flux owner"
+        );
+        assert_eq!(SweepPhase::Discovering.label(), "discovering kinds");
     }
 
     #[test]

@@ -710,6 +710,47 @@ Kubernetes row.
   namespace. `models::list_sort::ListSort`
   parses `defaultSort` / view `sort` (`type`, `-age`, `age:desc`).
 
+## App View (`src/kube/app.rs`, `src/tui/app/apps.rs`)
+
+What Flux objects deploy, read from Flux's records instead of configured.
+`View::AppTree`; opened by `a` (`App::app_of_selected`, drilled in),
+`:app <kind>/<name>…` (`cmd_app`), or a view's `apps` (`apply_view` →
+`open_app_view`; the view's `namespace` only places `<kind>/<name>`
+entries, it doesn't switch the session namespace).
+
+- **Building the tree** — `kube::app::resolve(request)` walks each root
+  depth-first: the Flux object (fetched by kind, so the older-Flux version
+  fallback applies), its sources (`source_refs`, pure: a Kustomization's
+  `sourceRef`; a HelmRelease's generated chart or `chartRef`), what it
+  applied (`kube::inventory::applied_objects`: `status.inventory`, or a
+  HelmRelease's release manifest via `helm_release_inventory`, shared with
+  the graph), nested app kinds (`is_app_kind` = `FluxResourceKind::can_orphan`)
+  expanded to `MAX_DEPTH`, and each `apps/` workload's pods by its selector.
+  Every other row's status comes from one `fetch_object_statuses` batch.
+  Unreadable objects show their error as status; unreadable inventories or
+  pod lists become `AppSnapshot::notes`. Rows are capped at `MAX_ROWS`.
+- **Keeping it live** — `kube::live::watch_app` sends the tree, then
+  `follow_app` watches every non-pod row by (apiVersion, kind, namespace)
+  and each workload's pods by selector. A status change updates the row in
+  place. The tree is rebuilt (`AppFollow::Reshape`, debounced) when an
+  expanded Flux object's `shape_of` changes (sources, inventory, latest
+  release; reconcile timestamps don't count) or is deleted, or a pod
+  appears or goes. `AppShape` records what the tree was built from. A watch
+  lists before it watches (at start and after a reconnect), and an object
+  deleted while it wasn't watching just isn't in that listing — no delete
+  event comes — so `Listing` compares each finished listing with what the
+  tree expected (`PodSet::pods`, the group's rows) and treats the rest as
+  deleted.
+- **Rows in the TUI** — Flux rows are Flux targets (`view_target`:
+  describe / YAML through the Flux path); Kubernetes rows are native
+  (`native_view_target`), and `target_flux_manager` is the nearest Flux row
+  above (`app_row_manager`), so `t` / `m` work. The cursor follows its row
+  across updates by identity (`apps::RowId`: object, depth, occurrence).
+  The watch is kept while a row is open in a nested view and released by
+  `leave_app_view` otherwise.
+
+## The Kind Registry (`:<kind>`)
+
 ## The Kind Registry (`:<kind>`)
 
 Every `:<kind>` command resolves to a `KindSpec` (`src/models/kinds.rs`) —

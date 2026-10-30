@@ -2,7 +2,7 @@
 title: "Graph and Live Views"
 linkTitle: "Graph and Live Views"
 weight: 3
-description: "Graph, workloads, inventory, trace, HelmRelease values, events, pulse, and controller logs"
+description: "Graph, workloads, inventory, app view, trace, HelmRelease values, events, pulse, and controller logs"
 type: docs
 ---
 
@@ -47,6 +47,53 @@ health: `Current`, `InProgress`, `Failed`, `Terminating`, or `NotFound` /
 `Forbidden` when it can't be read, with a message for anything short of
 `Current`. `Enter` / `d` describes an object, `y` shows its YAML (Secret
 values always redacted).
+
+## App view (`a`)
+
+What a Flux app deploys, from Flux's own records — nothing to list by hand.
+`a` on a Kustomization, HelmRelease, ResourceSet, or FluxInstance opens it;
+`:app ks/frontend hr/data/redis` opens one or more (`<kind>/<name>`, or
+`<kind>/<namespace>/<name>`; `-n` sets where `<kind>/<name>` is found). Each
+Flux object is a top-level row, with underneath it:
+
+- **source** — its GitRepository / OCIRepository / Bucket; for a
+  HelmRelease, the HelmChart (or OCIRepository) generated for it and the
+  chart's repository.
+- **applied** — everything in its inventory (`status.inventory`; for a
+  HelmRelease without one, the latest release's manifest). Nested
+  Kustomizations and HelmReleases are expanded the same way, four levels
+  deep.
+- **pod** — the pods each Deployment, StatefulSet, and DaemonSet runs.
+
+```
+STATUS      KIND              NAMESPACE       NAME                      ROLE     READY
+Suspended   HelmRelease       flux-resources  podinfo                   app      True
+Ready       └ HelmChart       flux-resources  flux-resources-podinfo    source   True
+Ready       └ HelmRepository  flux-resources  podinfo                   source   True
+Available   └ Deployment      flux-resources  podinfo                   applied  1/1
+Running       └ Pod           flux-resources  podinfo-5bd855f496-xckck  pod      1/1
+Current     └ Service         flux-resources  podinfo                   applied  -
+```
+
+STATUS is each kind's own state, coloured by health: Flux objects read as
+the Flux list does — **Suspended** first, then Reconciling / Stalled /
+Ready / Not Ready, with READY the `Ready` condition. Workloads say
+Available / Progressing / Rolling out with READY their replicas; pods
+their phase or what's stuck (`CrashLoopBackOff`, `ImagePullBackOff`) with
+ready containers and restarts; Jobs Complete / Running / Failed with
+completions. Other custom resources read their `Ready` condition, and kinds
+with no status of their own (ConfigMaps, Services) are `Current`. The
+inventory list uses the same states.
+
+Every row's health is live. When an inventory or source changes (a new
+commit adds or prunes objects) or a pod comes or goes, the tree is rebuilt,
+so it follows the app as Git changes. The title counts what's failing or in
+progress, and notes what couldn't be read (RBAC, Helm storage).
+
+`Enter` / `d` describes a row, `y` shows its YAML; on a Kubernetes row `t`
+traces it and `m` goes to the Flux object it hangs under. `/` filters. To
+keep a set of apps one command away, name it in a
+[view](/configuration/#views) with `apps`.
 
 ## Trace (`t`)
 

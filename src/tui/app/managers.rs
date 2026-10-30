@@ -19,7 +19,9 @@ impl App {
     /// must decide whether it shows one.
     pub(crate) fn native_subject(&self) -> Option<ObjectRef> {
         match self.view_state.current_view {
-            View::KindList | View::OwnershipList | View::ResourceList => self.native_view_target(),
+            View::KindList | View::OwnershipList | View::ResourceList | View::AppTree => {
+                self.native_view_target()
+            }
             View::WorkloadDetail => self.async_state.workload.result().map(|w| ObjectRef {
                 kind: w.kind.clone(),
                 namespace: w.namespace.clone(),
@@ -54,6 +56,11 @@ impl App {
             View::KindList => self.selected_kind_row()?.flux_manager(),
             View::ResourceList => self.selected_native_row()?.1.flux_manager(),
             View::OwnershipList => self.selected_sweep_row()?.flux_manager(),
+            // A Kubernetes row: the Flux object it hangs under.
+            View::AppTree => {
+                self.selected_app_flux_row().is_none().then_some(())?;
+                self.app_row_manager()
+            }
             View::WorkloadDetail => self
                 .async_state
                 .workload

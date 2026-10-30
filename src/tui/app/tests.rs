@@ -4643,6 +4643,141 @@ fn rescan_reruns_the_sweep_and_keeps_the_cursor() {
     assert_eq!(app.selected_sweep_row().unwrap().name, "kept");
 }
 
+/// A finished sweep of `namespace` (`None` = every namespace) with one
+/// unmanaged ConfigMap in each of `apps` and `web`.
+fn app_with_swept(namespace: Option<&str>) -> App {
+    use crate::kube::standing::Standing;
+    use crate::kube::sweep::{SweepResult, SweepRow};
+    let mut app = create_test_app(false);
+    app.config.native_resources = true;
+    app.namespace = namespace.map(String::from);
+    run(&mut app, "unmanaged");
+    app.async_state.sweep.dispatch();
+    let row = |namespace: &str| SweepRow {
+        api_version: "v1".into(),
+        kind: "ConfigMap".into(),
+        namespace: namespace.into(),
+        name: format!("{namespace}-notes"),
+        standing: Standing::Unmanaged { created_by: None },
+        created: None,
+    };
+    let rows = ["apps", "web"]
+        .into_iter()
+        .filter(|ns| namespace.is_none_or(|wanted| wanted == *ns))
+        .map(row)
+        .collect();
+    app.on_sweep_result(SweepResult {
+        rows,
+        kinds_scanned: 2,
+        ..SweepResult::default()
+    });
+    app
+}
+
+fn swept_names(app: &App) -> Vec<String> {
+    app.filtered_sweep_rows()
+        .iter()
+        .map(|row| row.name.clone())
+        .collect()
+}
+
+#[test]
+fn ns_narrows_a_sweep_of_every_namespace_without_rescanning() {
+    let mut app = app_with_swept(None);
+    assert_eq!(swept_names(&app), ["apps-notes", "web-notes"]);
+
+    run(&mut app, "ns apps");
+    assert!(app.async_state.sweep.pending().is_none(), "no rescan");
+    assert_eq!(swept_names(&app), ["apps-notes"]);
+    assert_eq!(app.view_state.current_view, View::OwnershipList);
+
+    // The sweep still holds every namespace: back to all is a filter too.
+    run(&mut app, "ns all");
+    assert!(app.async_state.sweep.pending().is_none(), "no rescan");
+    assert_eq!(swept_names(&app), ["apps-notes", "web-notes"]);
+}
+
+#[test]
+fn ns_outside_the_swept_namespace_rescans() {
+    let mut app = app_with_swept(Some("apps"));
+    assert_eq!(swept_names(&app), ["apps-notes"]);
+
+    run(&mut app, "ns web");
+    assert_eq!(
+        sweep_request(&app).namespace.as_deref(),
+        Some("web"),
+        "web wasn't swept"
+    );
+    assert!(
+        app.async_state.sweep.result().is_none(),
+        "apps' rows don't stand in for web's"
+    );
+
+    let mut app = app_with_swept(Some("apps"));
+    run(&mut app, "ns all");
+    assert_eq!(sweep_request(&app).namespace, None, "a wider scope rescans");
+}
+
+#[test]
+fn unmanaged_again_sweeps_the_narrowed_namespace_afresh() {
+    let mut app = app_with_swept(None);
+    run(&mut app, "ns apps");
+    run(&mut app, "unmanaged");
+    assert_eq!(sweep_request(&app).namespace.as_deref(), Some("apps"));
+    assert!(app.async_state.sweep.result().is_none(), "a fresh scan");
+}
+
+#[test]
+fn rescan_sweeps_the_shown_namespace_and_keeps_the_rows_meanwhile() {
+    let mut app = app_with_swept(None);
+    run(&mut app, "ns apps");
+    app.handle_key(make_ctrl_key(KeyCode::Char('r')));
+    assert_eq!(sweep_request(&app).namespace.as_deref(), Some("apps"));
+    assert_eq!(
+        swept_names(&app),
+        ["apps-notes"],
+        "rows stay until the new ones"
+    );
+}
+
+#[test]
+fn an_explicit_scope_shows_what_it_swept() {
+    let mut app = create_test_app(false);
+    app.config.native_resources = true;
+    app.namespace = Some("apps".into());
+    run(&mut app, "unmanaged -A");
+    assert_eq!(sweep_request(&app).namespace, None);
+    assert_eq!(
+        app.view_state.sweep_namespace, None,
+        "-A shows every namespace, not the session's"
+    );
+}
+
+#[test]
+fn ns_only_filters_one_flux_objects_orphans() {
+    use crate::kube::sweep::SweepScope;
+    let mut app = create_test_app(false);
+    app.config.native_resources = true;
+    add_resource(&mut app);
+    app.namespace = Some("flux-system".into());
+    app.view_state.current_view = View::ResourceList;
+    app.handle_key(make_key(KeyCode::Char('O')));
+    assert!(matches!(
+        sweep_request(&app).scope,
+        SweepScope::OrphansOf(_)
+    ));
+    assert_eq!(
+        app.view_state.sweep_namespace, None,
+        "an object's orphans show from every namespace"
+    );
+    app.async_state.sweep.dispatch();
+    app.on_sweep_result(crate::kube::sweep::SweepResult::default());
+
+    run(&mut app, "ns apps");
+    assert!(app.async_state.sweep.pending().is_none(), "no rescan");
+    assert_eq!(app.view_state.sweep_namespace.as_deref(), Some("apps"));
+}
+
 #[test]
 fn leaving_the_sweep_for_another_list_drops_it() {
     let mut app = app_with_sweep_rows();
@@ -5280,4 +5415,234 @@ fn metadata_filters_match_kubernetes_rows() {
     assert_eq!(names(&app), ["web"], "annotation prefix");
     app.view_state.filter = "annotations:team".into();
     assert_eq!(names(&app), ["web"]);
+}
+
+// --- App view ------------------------------------------------------------
+
+fn app_request(app: &App) -> Vec<ResourceKey> {
+    app.async_state
+        .app
+        .pending()
+        .map(|request| request.roots.clone())
+        .expect("an app view was requested")
+}
+
+#[test]
+fn app_opens_flux_objects_found_by_name_or_namespace() {
+    let mut app = create_test_app(false);
+    add_resource(&mut app); // Kustomization flux-system/my-kustomization
+    app.namespace = None;
+
+    run(&mut app, "app ks/my-kustomization hr/apps/web");
+    assert_eq!(app.view_state.current_view, View::AppTree);
+    assert_eq!(
+        app_request(&app),
+        [
+            ResourceKey::new("Kustomization", "flux-system", "my-kustomization"),
+            ResourceKey::new("HelmRelease", "apps", "web"),
+        ],
+        "the one watched object of that name, and the namespace given"
+    );
+    assert_eq!(app.view_state.app_title, "ks/my-kustomization, hr/apps/web");
+
+    run(&mut app, "app ks/other -n team");
+    assert_eq!(
+        app_request(&app),
+        [ResourceKey::new("Kustomization", "team", "other")]
+    );
+
+    app.async_state.app.clear();
+    run(&mut app, "app gitrepo/flux-system -n flux-system");
+    assert!(app.async_state.app.pending().is_none());
+    assert!(
+        app.ui_state
+            .status_message
+            .as_ref()
+            .is_some_and(|(msg, err)| *err && msg.contains("applies objects"))
+    );
+}
+
+#[test]
+fn a_drills_into_a_flux_objects_app_view_and_back_returns() {
+    let mut app = create_test_app(false);
+    add_resource(&mut app);
+    app.view_state.current_view = View::ResourceList;
+    app.view_state.filter = "my-k".to_string();
+
+    app.handle_key(make_key(KeyCode::Char('a')));
+    assert_eq!(app.view_state.current_view, View::AppTree);
+    assert_eq!(
+        app_request(&app),
+        [ResourceKey::new(
+            "Kustomization",
+            "flux-system",
+            "my-kustomization"
+        )]
+    );
+    assert!(
+        app.view_state.filter.is_empty(),
+        "the app view starts unfiltered"
+    );
+
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::ResourceList);
+    assert_eq!(app.view_state.filter, "my-k", "the list's filter is back");
+    assert!(app.async_state.app.key().is_none(), "the watch stopped");
+}
+
+#[test]
+fn an_app_view_opens_without_switching_the_namespace() {
+    let mut app = create_test_app(false);
+    app.namespace = Some("apps".into());
+    app.config.views.insert(
+        "shop".into(),
+        crate::config::ViewConfig {
+            apps: vec!["ks/frontend".into(), "hr/data/redis".into()],
+            namespace: Some("flux-system".into()),
+            ..Default::default()
+        },
+    );
+    run(&mut app, "shop");
+    assert_eq!(app.view_state.current_view, View::AppTree);
+    assert_eq!(app.view_state.app_title, "shop");
+    assert_eq!(
+        app_request(&app),
+        [
+            ResourceKey::new("Kustomization", "flux-system", "frontend"),
+            ResourceKey::new("HelmRelease", "data", "redis"),
+        ]
+    );
+    assert_eq!(
+        app.namespace.as_deref(),
+        Some("apps"),
+        "the session's namespace stays"
+    );
+}
+
+/// An app view showing a Kustomization, a Deployment under it, and its pod.
+fn app_with_tree() -> App {
+    use crate::kube::app::{AppRole, AppRow, AppSnapshot};
+    use crate::kube::inventory::InventoryEntry;
+    use crate::kube::object_status::{ObjectHealth, ObjectStatus};
+    let mut app = create_test_app(false);
+    run(&mut app, "app ks/flux-system/shop");
+    app.async_state.app.dispatch();
+    let row = |api_version: &str, kind: &str, name: &str, depth, role| AppRow {
+        object: InventoryEntry {
+            kind: kind.into(),
+            namespace: "apps".into(),
+            name: name.into(),
+            api_version: api_version.into(),
+        },
+        depth,
+        role,
+        status: ObjectStatus::new(ObjectHealth::Current, ""),
+    };
+    app.on_app_snapshot(AppSnapshot {
+        rows: vec![
+            row(
+                "kustomize.toolkit.fluxcd.io/v1",
+                "Kustomization",
+                "shop",
+                0,
+                AppRole::App,
+            ),
+            row("apps/v1", "Deployment", "web", 1, AppRole::Applied),
+            row("v1", "Pod", "web-1", 2, AppRole::Pod),
+            row("v1", "Service", "web", 1, AppRole::Applied),
+        ],
+        ..AppSnapshot::default()
+    });
+    app
+}
+
+#[test]
+fn app_rows_open_as_their_objects_and_reach_their_flux_object() {
+    let mut app = app_with_tree();
+    // The Flux row is a Flux target; Kubernetes rows are native objects.
+    assert_eq!(
+        app.view_target(),
+        Some(ResourceKey::new("Kustomization", "apps", "shop"))
+    );
+    assert!(app.native_view_target().is_none());
+
+    app.handle_key(make_key(KeyCode::Char('j')));
+    app.handle_key(make_key(KeyCode::Char('j')));
+    let pod = app.native_view_target().unwrap();
+    assert_eq!((pod.kind.as_str(), pod.name.as_str()), ("Pod", "web-1"));
+    assert_eq!(
+        app.target_flux_manager(),
+        Some(ResourceKey::new("Kustomization", "apps", "shop")),
+        "a pod's Flux object is its workload's"
+    );
+
+    app.handle_key(make_key(KeyCode::Enter));
+    assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::AppTree);
+    assert_eq!(
+        app.filtered_app_rows().len(),
+        4,
+        "kept while describing a row"
+    );
+}
+
+#[test]
+fn app_updates_keep_the_cursor_on_the_same_row() {
+    let mut app = app_with_tree();
+    app.handle_key(make_key(KeyCode::Char('j')));
+    app.handle_key(make_key(KeyCode::Char('j'))); // the pod
+    let mut update = app.async_state.app.result().unwrap().clone();
+    // A new pod above it: the cursor follows web-1.
+    let mut newer = update.rows[2].clone();
+    newer.object.name = "web-0".into();
+    update.rows.insert(2, newer);
+    app.on_app_snapshot(update);
+    assert_eq!(app.selected_app_row().unwrap().object.name, "web-1");
+}
+
+#[test]
+fn app_updates_under_describe_keep_the_row_for_the_way_back() {
+    let mut app = app_with_tree();
+    app.handle_key(make_key(KeyCode::Char('j')));
+    app.handle_key(make_key(KeyCode::Char('j'))); // web-1
+    app.handle_key(make_key(KeyCode::Enter));
+    assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+
+    // A pod appears above it while describe is open.
+    let mut update = app.async_state.app.result().unwrap().clone();
+    let mut newer = update.rows[2].clone();
+    newer.object.name = "web-0".into();
+    update.rows.insert(2, newer);
+    app.on_app_snapshot(update.clone());
+    // And another update before Back: still the row first selected.
+    app.on_app_snapshot(update);
+
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::AppTree);
+    assert_eq!(app.selected_app_row().unwrap().object.name, "web-1");
+}
+
+#[test]
+fn app_filter_matches_the_status_shown() {
+    use crate::kube::object_status::{ObjectHealth, ObjectStatus};
+    let mut app = app_with_tree();
+    let mut snapshot = app.async_state.app.result().unwrap().clone();
+    snapshot.rows[2].status =
+        ObjectStatus::new(ObjectHealth::Failed, "").with_state("CrashLoopBackOff");
+    snapshot.rows[1].status = ObjectStatus::new(ObjectHealth::Current, "").with_state("Available");
+    app.on_app_snapshot(snapshot);
+    let names = |app: &App| {
+        app.filtered_app_rows()
+            .iter()
+            .map(|row| row.object.name.clone())
+            .collect::<Vec<_>>()
+    };
+    app.view_state.filter = "crashloop".into();
+    assert_eq!(names(&app), ["web-1"]);
+    app.view_state.filter = "available".into();
+    assert_eq!(names(&app), ["web"]);
+    // The health still matches too.
+    app.view_state.filter = "failed".into();
+    assert_eq!(names(&app), ["web-1"]);
 }

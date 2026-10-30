@@ -32,7 +32,7 @@ flux9s config path
 | `defaultControllerNamespace` | string | `flux-system` | Namespace where Flux controllers run |
 | `defaultResourceFilter` | string | *(none)* | Flux list filter at startup: a kind (`ks`), several (`ks,hr`), or a [view](#views) name |
 | `defaultSort` | string | *(none)* | Flux list sort at startup: `name`, `age`, `type`, `status`; `-age` or `age:desc` reverses ([details](#default-sort)) |
-| `views` | map | *(empty)* | Named Flux list views: `views.<name>.kinds` lists Flux kinds (and, with native resources on, Kubernetes kinds), with optional `namespace` and `sort`; `:<name>` opens it ([details](#views)) |
+| `views` | map | *(empty)* | Named Flux list views: `views.<name>.kinds` lists Flux kinds (and, with native resources on, Kubernetes kinds), with optional `namespace` and `sort`; or `views.<name>.apps` lists Flux objects to show with everything they deploy; `:<name>` opens it ([details](#views)) |
 | `ownership.ignore` | list | *(empty)* | Objects `:unmanaged` / `:orphaned` never report: `group` / `kind` / `namespace` / `name` glob rules ([details](#ownership)) |
 | `ownership.ignoreNamespaces` | string[] | `kube-system`, `kube-public`, `kube-node-lease` | Namespaces those sweeps skip; `[]` sweeps every namespace ([details](#ownership)) |
 | `connectTimeoutSeconds` | integer | `10` | Startup Kubernetes API health-check timeout in seconds |
@@ -175,6 +175,12 @@ views:
     kinds: [gitrepo, oci, helmrepository]
   app-health:
     kinds: [ks, hr, deploy, svc]   # Flux and Kubernetes kinds in one list
+  shop:
+    apps:                    # an app view: these Flux objects and what they deploy
+      - ks/frontend
+      - ks/backend
+      - hr/data/redis        # <kind>/<namespace>/<name>
+    namespace: flux-system   # where <kind>/<name> entries are found
 ```
 
 Or from the command line:
@@ -184,6 +190,7 @@ flux9s config set views.apps ks,hr
 flux9s config set views.apps.sort type
 flux9s config set views.apps.namespace all
 flux9s config set views.apps ""      # remove it
+flux9s config set views.shop.apps ks/flux-system/frontend,hr/data/redis
 ```
 
 - **Sort** takes the same values as [`defaultSort`](#default-sort)
@@ -211,6 +218,13 @@ flux9s config set views.apps ""      # remove it
   view's Kubernetes kinds are skipped and its title says so. Name a kind by
   `plural.group` (`buckets.s3.aws.upbound.io`) when several groups serve the
   same name.
+- **Apps** make the view an [app view](/user-guide/views/#app-view-a): each
+  Flux object (Kustomization, HelmRelease, ResourceSet, FluxInstance) with
+  its sources, everything its inventory lists, and its workloads' pods —
+  read from Flux, so nothing else is configured. A view has `kinds` or
+  `apps`, not both. Its `namespace` is where `<kind>/<name>` entries are
+  found (it doesn't switch the session's namespace); without one, the
+  current namespace is used, or the one Flux object of that name.
 - **Names:** flux9s commands come first, then views, then kinds. A view
   can't be named like a command (`:events`, `:pulse` — it would never open).
   A view may reuse a kind name (`ks`, `po`) and then stands in for it; the

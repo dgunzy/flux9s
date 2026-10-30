@@ -480,7 +480,7 @@ pub async fn run_tui_with_async_init(
                     app.async_state.inventory_status.set_handle(handle);
                 }
 
-                if let Some((request, tx)) = app.async_state.sweep.dispatch()
+                if let Some(dispatch) = app.async_state.sweep.dispatch()
                     && app.config.native_resources
                 {
                     let client = client.clone();
@@ -493,8 +493,14 @@ pub async fn run_tui_with_async_init(
                                 .await
                                 .unwrap_or_default();
                         }
-                        let result = crate::kube::sweep::sweep(&client, request, kinds).await;
-                        let _ = tx.send(Ok(result));
+                        let result = crate::kube::sweep::sweep(
+                            &client,
+                            dispatch.request,
+                            kinds,
+                            &dispatch.progress,
+                        )
+                        .await;
+                        let _ = dispatch.result.send(Ok(result));
                     });
                 }
 
@@ -535,6 +541,12 @@ pub async fn run_tui_with_async_init(
                         tx,
                     ));
                     app.async_state.mixed.set_handle(handle);
+                }
+
+                if let Some((request, tx)) = app.async_state.app.dispatch() {
+                    let handle =
+                        tokio::spawn(crate::kube::live::watch_app(client.clone(), request, tx));
+                    app.async_state.app.set_handle(handle);
                 }
 
                 if let Some((request, tx)) = app.async_state.kind_list.dispatch() {
@@ -755,6 +767,9 @@ pub async fn run_tui_with_async_init(
 
             if let Some(Ok(snapshot)) = app.async_state.mixed.poll() {
                 app.on_mixed_snapshot(snapshot);
+            }
+            if let Some(Ok(snapshot)) = app.async_state.app.poll() {
+                app.on_app_snapshot(snapshot);
             }
             if let Some(result) = app.async_state.kind_list.poll() {
                 match result {

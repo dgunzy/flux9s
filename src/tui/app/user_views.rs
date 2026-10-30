@@ -118,6 +118,21 @@ impl App {
         lenient: bool,
         namespace: Option<Option<String>>,
     ) -> Result<(), String> {
+        // An app view: its namespace is where its entries are found, not a
+        // switch of the session's.
+        if !view.apps.is_empty() {
+            if !view.kinds.is_empty() {
+                return Err("a view has kinds or apps, not both".to_string());
+            }
+            let namespace = match namespace {
+                Some(namespace) => namespace,
+                None => view
+                    .namespace
+                    .as_deref()
+                    .and_then(super::command_mode::namespace_arg),
+            };
+            return self.open_app_view(name, &view.apps, namespace.as_deref());
+        }
         let kinds = view.kinds.join(",");
         let filter = if lenient {
             KindFilter::parse_allowing_unknown(&kinds).map(|(filter, _)| filter)?
@@ -221,7 +236,11 @@ impl App {
             .views
             .iter()
             .map(|(name, view)| {
-                let mut about = view.kinds.join(", ");
+                let mut about = if view.apps.is_empty() {
+                    view.kinds.join(", ")
+                } else {
+                    format!("app view: {}", view.apps.join(", "))
+                };
                 if let Some(namespace) = &view.namespace {
                     about.push_str(&format!(" · ns {namespace}"));
                 }
@@ -283,6 +302,24 @@ fn other_name(spec: &kinds::KindSpec, hidden: &str) -> String {
         .unwrap_or_else(|| format!("{}.{}", spec.names.plural.to_lowercase(), spec.gvk.group))
 }
 
+/// What's wrong with one of a view's `apps`, if anything: its form, or a
+/// kind that doesn't apply objects.
+fn app_problem(app: &str) -> Option<String> {
+    let target = match crate::kube::app::AppTarget::parse(app) {
+        Ok(target) => target,
+        Err(e) => return Some(e),
+    };
+    let applies = kinds::resolve(&target.kind)
+        .and_then(|spec| crate::models::FluxResourceKind::parse_optional(&spec.names.kind))
+        .is_some_and(crate::kube::app::is_app_kind);
+    (!applies).then(|| {
+        format!(
+            "'{app}': {} doesn't apply objects — apps are Kustomizations, HelmReleases, ResourceSets, or FluxInstances",
+            target.kind
+        )
+    })
+}
+
 /// What's wrong with the configured views — for the startup warning and
 /// `flux9s config`. Checks what's knowable without a cluster: names, kinds,
 /// and collisions with flux9s commands, Flux kinds, and common Kubernetes
@@ -315,6 +352,17 @@ pub fn view_problems(views: &BTreeMap<String, ViewConfig>) -> Vec<String> {
         }
         if let Some(Err(e)) = view.sort.as_deref().map(ListSort::parse) {
             problems.push(format!("view '{name}': sort: {e}"));
+        }
+        if !view.apps.is_empty() {
+            if !view.kinds.is_empty() {
+                problems.push(format!(
+                    "view '{name}': has kinds and apps — a view lists kinds or shows apps, not both"
+                ));
+            }
+            problems.extend(view.apps.iter().filter_map(|app| {
+                app_problem(app).map(|problem| format!("view '{name}': {problem}"))
+            }));
+            continue;
         }
         match KindFilter::parse_allowing_unknown(&view.kinds.join(",")) {
             Err(e) => problems.push(format!("view '{name}': {e}")),
@@ -358,6 +406,47 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn app_views_check_their_entries() {
+        let view = |kinds: &[&str], apps: &[&str]| ViewConfig {
+            kinds: kinds.iter().map(|k| k.to_string()).collect(),
+            apps: apps.iter().map(|a| a.to_string()).collect(),
+            ..Default::default()
+        };
+        let good = BTreeMap::from([(
+            "shop".to_string(),
+            view(&[], &["ks/flux-system/shop", "hr/redis"]),
+        )]);
+        assert!(
+            view_problems(&good).is_empty(),
+            "{:?}",
+            view_problems(&good)
+        );
+        let bad = BTreeMap::from([
+            ("both".to_string(), view(&["ks"], &["ks/shop"])),
+            ("source".to_string(), view(&[], &["gitrepo/shop", "ks"])),
+        ]);
+        let problems = view_problems(&bad);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("'both': has kinds and apps")),
+            "{problems:?}"
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("'gitrepo/shop': gitrepo doesn't apply objects")),
+            "{problems:?}"
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("'ks' isn't <kind>/<name>")),
+            "{problems:?}"
+        );
     }
 
     #[test]

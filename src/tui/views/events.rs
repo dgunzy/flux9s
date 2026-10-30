@@ -40,9 +40,11 @@ pub fn render_kube_events(
         filter,
         all_namespaces,
     } = props;
+    // Fixed column widths: nothing to hold.
     let ListCursor {
         selected: selected_index,
         offset: scroll_offset,
+        widths: _,
     } = cursor;
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling

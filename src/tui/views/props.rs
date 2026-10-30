@@ -3,6 +3,7 @@
 //! `bool`s or two `&mut usize`s can be swapped without the compiler noticing).
 
 use crate::tui::app::state::TextSearchState;
+use crate::tui::views::columns::StableWidths;
 use crate::watcher::ResourceState;
 use std::collections::HashMap;
 
@@ -44,15 +45,41 @@ impl<'a> TextScroll<'a> {
     }
 }
 
-/// Cursor of a list view: the selected row and the first row drawn.
+/// Cursor of a list view: the selected row, the first row drawn, and the
+/// column widths it has shown, held while it stays open (`None` sizes the
+/// columns to this frame alone).
 pub struct ListCursor<'a> {
     pub selected: usize,
     pub offset: &'a mut usize,
+    pub widths: Option<&'a mut StableWidths>,
 }
 
 impl<'a> ListCursor<'a> {
     pub fn new(selected: usize, offset: &'a mut usize) -> Self {
-        Self { selected, offset }
+        Self {
+            selected,
+            offset,
+            widths: None,
+        }
+    }
+
+    /// Hold the list's column widths in `widths` between frames.
+    pub fn with_widths(mut self, widths: &'a mut StableWidths) -> Self {
+        self.widths = Some(widths);
+        self
+    }
+}
+
+/// `natural` column widths, held still by `widths` when the list keeps
+/// them ([`StableWidths::hold`]).
+pub fn held_widths(
+    widths: Option<&mut StableWidths>,
+    identity: &str,
+    natural: Vec<u16>,
+) -> Vec<u16> {
+    match widths {
+        Some(widths) => widths.hold(identity, &natural),
+        None => natural,
     }
 }
 

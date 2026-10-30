@@ -80,7 +80,7 @@ impl App {
 
     /// The namespace of the Flux object `kind`/`name`: the selected
     /// namespace, else the one watched object of that name.
-    fn flux_object_namespace(&self, kind: &str, name: &str) -> Result<String, String> {
+    pub(super) fn flux_object_namespace(&self, kind: &str, name: &str) -> Result<String, String> {
         if let Some(namespace) = self.namespace() {
             return Ok(namespace.clone());
         }
@@ -116,17 +116,42 @@ impl App {
         }
     }
 
-    /// `Ctrl-r`: run the current sweep again.
+    /// `Ctrl-r`: run the current sweep again, for the namespace the list
+    /// shows. The rows stay on screen until the new ones arrive.
     pub(super) fn rescan_sweep(&mut self) {
         if !self.config.native_resources {
             return; // `:native` off: no discovery, no sweeps
         }
-        if let Some(request) = self.view_state.sweep_request.clone() {
-            self.view_state.sweep_reselect = self
-                .selected_sweep_row()
-                .map(|row| ResourceKey::new(&row.kind, &row.namespace, &row.name));
-            self.async_state.sweep.request(request);
+        let Some(mut request) = self.view_state.sweep_request.clone() else {
+            return;
+        };
+        if request.scope == SweepScope::NotFlux {
+            request.namespace = self.view_state.sweep_namespace.clone();
         }
+        self.view_state.sweep_reselect = self.selected_sweep_row().map(SweepRow::key);
+        self.view_state.sweep_request = Some(request.clone());
+        self.async_state.sweep.refresh(request);
+    }
+
+    /// `:ns` while a sweep is open: show the new namespace — from the rows
+    /// already scanned when the sweep covers it (a sweep of every
+    /// namespace covers each one), else by sweeping it.
+    pub(super) fn follow_sweep_namespace(&mut self) {
+        let Some(request) = self.view_state.sweep_request.as_ref() else {
+            return;
+        };
+        let namespace = self.namespace().clone();
+        self.view_state.sweep_namespace = namespace.clone();
+        if request.covers(namespace.as_deref()) || !self.config.native_resources {
+            return;
+        }
+        let request = SweepRequest {
+            namespace,
+            ..request.clone()
+        };
+        self.view_state.sweep_request = Some(request.clone());
+        self.view_state.sweep_reselect = None;
+        self.async_state.sweep.request(request);
     }
 
     /// `o` / `u` / `a`: switch which standings the list shows — no
@@ -136,9 +161,7 @@ impl App {
         if self.view_state.sweep_show == show {
             return;
         }
-        let selected = self
-            .selected_sweep_row()
-            .map(|row| ResourceKey::new(&row.kind, &row.namespace, &row.name));
+        let selected = self.selected_sweep_row().map(SweepRow::key);
         self.view_state.sweep_show = show;
         self.reselect_sweep_row(selected);
     }
@@ -172,9 +195,14 @@ impl App {
             ));
             return;
         }
+        // A per-owner sweep looks everywhere; the list shows all of it.
+        let namespace = match scope {
+            SweepScope::NotFlux => namespace.unwrap_or_else(|| self.namespace().clone()),
+            SweepScope::OrphansOf(_) => None,
+        };
         let request = SweepRequest {
             scope,
-            namespace: namespace.unwrap_or_else(|| self.namespace().clone()),
+            namespace: namespace.clone(),
             config: self.config.ownership.clone(),
         };
         // Navigate first: leaving an earlier sweep (e.g. from its describe
@@ -190,6 +218,7 @@ impl App {
             self.navigate_root(View::OwnershipList);
         }
         self.view_state.sweep_request = Some(request.clone());
+        self.view_state.sweep_namespace = namespace;
         self.view_state.sweep_show = show;
         self.view_state.sweep_reselect = None;
         self.async_state.sweep.request(request);
@@ -217,13 +246,7 @@ impl App {
     fn reselect_sweep_row(&mut self, selected: Option<ResourceKey>) {
         let rows = self.filtered_sweep_rows();
         let index = selected
-            .and_then(|key| {
-                rows.iter().position(|r| {
-                    r.kind == key.resource_type
-                        && r.namespace == key.namespace
-                        && r.name == key.name
-                })
-            })
+            .and_then(|key| rows.iter().position(|r| r.key() == key))
             .unwrap_or_else(|| {
                 self.view_state
                     .selected_index
@@ -237,11 +260,13 @@ impl App {
     pub(crate) fn clear_sweep(&mut self) {
         self.async_state.sweep.clear();
         self.view_state.sweep_request = None;
+        self.view_state.sweep_namespace = None;
         self.view_state.sweep_reselect = None;
         self.view_state.sweep_return = None;
     }
 
-    /// Sweep rows after the `/` filter (kind, namespace, name, or standing).
+    /// Sweep rows in the namespace the list shows, after the `/` filter
+    /// (kind, namespace, name, or standing).
     pub(crate) fn filtered_sweep_rows(&self) -> Vec<&SweepRow> {
         self.sweep_rows_matching().collect()
     }
@@ -259,6 +284,7 @@ impl App {
             .result()
             .into_iter()
             .flat_map(|result| result.rows.iter())
+            .filter(|row| row.in_namespace(self.view_state.sweep_namespace.as_deref()))
             .filter(|row| self.view_state.sweep_show.shows(&row.standing))
             .filter(move |row| {
                 filter.is_empty()

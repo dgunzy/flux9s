@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- App view: what Flux objects deploy, from Flux's own records. `a` on a
+  Kustomization / HelmRelease / ResourceSet / FluxInstance, `:app ks/a
+  hr/ns/b`, or a view's `apps` (`views.shop.apps: [ks/frontend,
+  hr/data/redis]`) shows each one with its sources, everything its
+  inventory lists (nested Kustomizations and HelmReleases expanded), and
+  its workloads' pods, across namespaces and with live health. The tree is
+  rebuilt when an inventory or source changes or a pod comes or goes.
+  STATUS is each kind's own state (a suspended Flux object reads
+  Suspended; Deployments Available / Progressing; pods their phase or
+  `CrashLoopBackOff`) with a READY column (replicas, ready containers, Job
+  completions, a Flux object's Ready condition)
+
+### Changed
+- Unmanaged / orphaned sweeps show their progress while they run (the step,
+  kinds listed of the total, and elapsed time), and `Ctrl-r` keeps the rows on
+  screen while it rescans
+- `:ns` on an unmanaged / orphaned list follows the namespace: a sweep of every
+  namespace is filtered in place without rescanning; a namespace it didn't
+  cover is swept
+
 ## [1.5.0] - 2026-10-29
 
 # Version 1.5.0 Changelog

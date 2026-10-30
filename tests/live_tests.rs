@@ -692,7 +692,7 @@ async fn graph_locates_a_pod_through_its_deployment() {
 #[ignore = "requires the kind-flux9s-simple dev cluster"]
 async fn sweeps_find_unmanaged_and_orphaned_objects() {
     use flux9s::kube::standing::{OrphanReason, Standing};
-    use flux9s::kube::sweep::{SweepRequest, SweepScope, sweep};
+    use flux9s::kube::sweep::{SweepPhase, SweepRequest, SweepScope, sweep};
     use flux9s::watcher::ResourceKey;
 
     let client = client_for(&simple_context()).await;
@@ -709,7 +709,10 @@ async fn sweeps_find_unmanaged_and_orphaned_objects() {
     let unmanaged = eventually("ownership fixtures classified", 240, || {
         let (client, kinds) = (client.clone(), kinds.clone());
         async move {
-            let result = sweep(&client, request(SweepScope::NotFlux), kinds).await;
+            let (progress, phase) = tokio::sync::watch::channel(SweepPhase::Discovering);
+            let result = sweep(&client, request(SweepScope::NotFlux), kinds, &progress).await;
+            // Every kind was listed before the owners were read.
+            assert!(matches!(*phase.borrow(), SweepPhase::ReadingOwners { .. }));
             let left = result
                 .rows
                 .iter()
@@ -799,6 +802,7 @@ async fn sweeps_find_unmanaged_and_orphaned_objects() {
             "apps",
         ))),
         kinds.clone(),
+        &tokio::sync::watch::channel(SweepPhase::Discovering).0,
     )
     .await;
     let names: Vec<_> = of_apps.rows.iter().map(|r| r.name.as_str()).collect();
@@ -931,6 +935,7 @@ async fn oci_chart_template_traces_to_its_generated_ocirepository() {
             config: Default::default(),
         },
         kinds,
+        &tokio::sync::watch::channel(flux9s::kube::sweep::SweepPhase::Discovering).0,
     )
     .await;
     assert!(
@@ -1229,4 +1234,78 @@ async fn mixed_watch_lists_each_kubernetes_kind() {
         "no errors: {:?}",
         snapshot.kinds.iter().map(|k| &k.error).collect::<Vec<_>>()
     );
+}
+
+/// The app view's tree is read from Flux's own records: a Kustomization's
+/// source and inventory (its HelmRelease expanded in turn), and a
+/// HelmRelease's generated source, release manifest, and workload pods.
+#[tokio::test]
+#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+async fn app_trees_follow_inventories_sources_and_pods() {
+    use flux9s::kube::app::{AppRequest, AppRole, resolve};
+    use flux9s::watcher::ResourceKey;
+
+    let client = client_for(&simple_context()).await;
+    let ns = "flux-resources";
+    let request = AppRequest {
+        roots: vec![
+            ResourceKey::new("Kustomization", ns, "apps"),
+            ResourceKey::new("HelmRelease", ns, "podinfo-oci-chart"),
+            ResourceKey::new("Kustomization", ns, "not-created-yet"),
+        ],
+    };
+    let (snapshot, shape) = resolve(&client, &request).await;
+    // A root that doesn't exist yet is shown, and watched to expand later.
+    let missing = snapshot
+        .rows
+        .iter()
+        .position(|r| r.object.name == "not-created-yet")
+        .expect("the missing root has a row");
+    assert_eq!(
+        snapshot.rows[missing].status.health,
+        flux9s::kube::object_status::ObjectHealth::NotFound
+    );
+    assert!(shape.shaped.contains_key(&missing));
+    let rows: Vec<(usize, AppRole, &str, &str)> = snapshot
+        .rows
+        .iter()
+        .map(|r| {
+            (
+                r.depth,
+                r.role,
+                r.object.kind.as_str(),
+                r.object.name.as_str(),
+            )
+        })
+        .collect();
+
+    let roots: Vec<_> = rows.iter().filter(|r| r.1 == AppRole::App).collect();
+    assert_eq!(roots.len(), 3, "{rows:?}");
+    assert!(
+        rows.contains(&(1, AppRole::Source, "GitRepository", "flux-system")),
+        "the Kustomization's source: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r.0 == 1 && r.1 == AppRole::Applied && r.2 == "HelmRelease"),
+        "a HelmRelease the Kustomization applied, expanded: {rows:?}"
+    );
+    assert!(
+        rows.contains(&(
+            1,
+            AppRole::Source,
+            "OCIRepository",
+            "flux-resources-podinfo-oci-chart"
+        )),
+        "the OCIRepository the chart template generated: {rows:?}"
+    );
+    assert!(
+        rows.contains(&(1, AppRole::Applied, "Deployment", "podinfo-oci-chart")),
+        "from the Helm release manifest: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.0 == 2 && r.1 == AppRole::Pod),
+        "the Deployment's pods: {rows:?}"
+    );
+    assert!(!shape.pod_sets.is_empty() && !shape.shaped.is_empty());
 }

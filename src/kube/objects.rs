@@ -245,7 +245,7 @@ pub fn redact_secret(obj: &mut Value) {
 }
 
 /// Map a lookup failure to the status an inventory row should show.
-fn status_for_error(error: &kube::Error) -> ObjectStatus {
+pub fn status_for_error(error: &kube::Error) -> ObjectStatus {
     match error {
         kube::Error::Api(resp) if resp.code == 404 => {
             ObjectStatus::new(ObjectHealth::NotFound, "Not found in cluster")

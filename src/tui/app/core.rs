@@ -840,6 +840,8 @@ impl App {
                 .selected_resource_key
                 .as_deref()
                 .and_then(ResourceKey::parse),
+            // A Flux row of the app view; Kubernetes rows are native.
+            View::AppTree => self.selected_app_flux_row(),
             // Logs, workload views, the pulse dashboard, and the edit view
             // don't point at a single watched Flux resource.
             View::Logs
