@@ -59,6 +59,7 @@ impl App {
             View::InventoryList => self.view_state.inventory_rows.len(),
             View::KindList => self.filtered_kind_rows().len(),
             View::OwnershipList => self.filtered_sweep_rows().len(),
+            View::AppTree => self.filtered_app_rows().len(),
             View::ResourceDetail
             | View::ResourceDescribe
             | View::ResourceYAML

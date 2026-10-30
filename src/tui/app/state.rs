@@ -77,6 +77,10 @@ views! {
     /// What Flux doesn't manage (#274): an unmanaged / orphaned sweep, or
     /// the orphans of one Flux object (`O`). Rows are any kind.
     OwnershipList,
+    /// What Flux apps deploy: Flux objects with their sources, inventories
+    /// (nested Flux objects expanded), and workloads' pods, kept live.
+    /// Opened with `a`, `:app <kind>/<name>…`, or a view's `apps`.
+    AppTree,
     /// Waiting for external editor / SSA apply
     ResourceEdit,
     Help,
@@ -103,7 +107,8 @@ impl View {
             | View::WorkloadList
             | View::InventoryList
             | View::KindList
-            | View::OwnershipList => ScrollModel::Selection,
+            | View::OwnershipList
+            | View::AppTree => ScrollModel::Selection,
             View::ResourceGraph => ScrollModel::Focus,
             View::ResourceDetail | View::ResourceEdit | View::Help => ScrollModel::Fixed,
         }
@@ -133,6 +138,7 @@ impl View {
             | View::InventoryList
             | View::KindList
             | View::OwnershipList
+            | View::AppTree
             | View::ResourceEdit
             | View::Help => None,
         }
@@ -165,6 +171,7 @@ impl View {
             | View::HelmValues
             | View::KindList
             | View::OwnershipList
+            | View::AppTree
             | View::ResourceEdit
             | View::Help => false,
         }
@@ -191,6 +198,7 @@ impl View {
             | View::InventoryList
             | View::KindList
             | View::OwnershipList
+            | View::AppTree
             | View::ResourceEdit
             | View::Help => false,
         }
@@ -217,6 +225,7 @@ impl View {
             | View::Pulse
             | View::KindList
             | View::OwnershipList
+            | View::AppTree
             | View::ResourceEdit
             | View::Help => false,
         }
@@ -242,6 +251,7 @@ impl View {
             | View::InventoryList
             | View::Pulse
             | View::HelmValues
+            | View::AppTree
             | View::ResourceEdit
             | View::Help => false,
         }
@@ -397,9 +407,24 @@ pub struct ViewState {
     pub mixed_reselect: Option<crate::tui::app::mixed::RowId>,
     /// Which standings the sweep list shows (`o` / `u` / `a`).
     pub sweep_show: crate::kube::sweep::SweepShow,
+    /// The namespace the sweep list shows (`None` = every namespace) —
+    /// narrower than the sweep's own after `:ns`, which filters the rows
+    /// it already has instead of rescanning.
+    pub sweep_namespace: Option<String>,
     /// The list `O` drilled in from: its filter, selection, and scroll,
     /// restored on the way back (the sweep shares those fields).
     pub sweep_return: Option<(String, usize, usize)>,
+    /// Column widths the content-sized list on screen has shown, held so
+    /// changing values don't move its columns (`views::columns`).
+    pub column_widths: crate::tui::views::columns::StableWidths,
+    /// The app view's title: the view's name, or the Flux objects asked for.
+    pub app_title: String,
+    /// The list `a` drilled in from: its filter, selection, and scroll,
+    /// restored on the way back (the app view shares those fields).
+    pub app_return: Option<(String, usize, usize)>,
+    /// The app view's selected row when its tree updated while a view
+    /// opened from it was on top, restored on the way back.
+    pub app_reselect: Option<crate::tui::app::apps::RowId>,
     /// Why the current kind list can't be shown (e.g. RBAC), if it can't.
     pub kind_list_error: Option<String>,
     /// Scroll offset for the controller log view
@@ -460,7 +485,12 @@ impl Default for ViewState {
             sweep_reselect: None,
             mixed_reselect: None,
             sweep_show: Default::default(),
+            sweep_namespace: None,
             sweep_return: None,
+            column_widths: Default::default(),
+            app_title: String::new(),
+            app_return: None,
+            app_reselect: None,
             kind_list_error: None,
             log_scroll_offset: 0,
             workload_scroll_offset: 0,
@@ -683,8 +713,11 @@ pub struct AsyncOperationState {
     /// Kubernetes kinds mixed into the Flux list (#304).
     pub mixed:
         LiveTask<crate::kube::kind_list::MixedRequest, crate::kube::kind_list::MixedSnapshot>,
+    /// The app view's tree, kept live while it (or a view opened from it)
+    /// is on screen.
+    pub app: LiveTask<crate::kube::app::AppRequest, crate::kube::app::AppSnapshot>,
     /// Unmanaged / orphaned sweep backing the ownership list (#274).
-    pub sweep: AsyncTask<crate::kube::sweep::SweepRequest, crate::kube::sweep::SweepResult>,
+    pub sweep: super::sweep_task::SweepTask,
     /// API discovery feeding the kind registry, run on connect (#267).
     pub kind_discovery: AsyncTask<(), Vec<crate::models::kinds::KindSpec>>,
     /// Every namespace in the cluster, for the `:ns` picker (#267).
@@ -736,6 +769,7 @@ impl AsyncOperationState {
         self.workload_metrics.clear();
         self.kind_list.clear();
         self.mixed.clear();
+        self.app.clear();
         self.sweep.clear();
         self.kind_discovery.clear();
         self.namespace_list.clear();

@@ -169,6 +169,13 @@ uses the id and its selection handler is registered in `SUBMENU_TABLE`
   line offsets, `list` for selections — draw only `viewport.range()`, then call
   `viewport.render_scrollbar(f, area, theme)` on the bordered area. Never clamp
   offsets by hand or draw a custom indicator.
+- **Content-sized columns hold still.** A list whose columns fit their values
+  sizes them with `views::columns::fit` and passes the result through
+  `props::held_widths` with the cursor's `widths` (`ListCursor::with_widths`,
+  backed by `ViewState::column_widths`): while the same list is open a column
+  only grows, so live updates don't shift the table. Name the list, its
+  columns, and `area.width` in the identity so another list or a resize
+  starts over. Never hand-roll a width helper per view.
 - **Long text wraps through one helper.** Messages that can outgrow the screen
   (confirmations, status lines, empty/loading states, anything built from cluster
   data) render with `views::text::wrapped`; a layout that must make room for them

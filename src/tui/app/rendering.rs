@@ -372,7 +372,8 @@ impl App {
                         ListCursor::new(
                             self.view_state.selected_index,
                             &mut self.view_state.scroll_offset,
-                        ),
+                        )
+                        .with_widths(&mut self.view_state.column_widths),
                         &self.theme,
                     );
                 }
@@ -430,6 +431,7 @@ impl App {
                 View::KindList => {
                     // Rows borrow `self`; the scroll offset is written back after.
                     let mut scroll_offset = self.view_state.scroll_offset;
+                    let mut widths = std::mem::take(&mut self.view_state.column_widths);
                     let rows = self.filtered_kind_rows();
                     let request = self.async_state.kind_list.key();
                     views::render_kind_list(
@@ -443,14 +445,17 @@ impl App {
                             error: self.view_state.kind_list_error.as_deref(),
                             loading: self.async_state.kind_list.is_loading(),
                         },
-                        ListCursor::new(self.view_state.selected_index, &mut scroll_offset),
+                        ListCursor::new(self.view_state.selected_index, &mut scroll_offset)
+                            .with_widths(&mut widths),
                         &self.theme,
                     );
                     self.view_state.scroll_offset = scroll_offset;
+                    self.view_state.column_widths = widths;
                 }
                 View::OwnershipList => {
                     // Rows borrow `self`; the scroll offset is written back after.
                     let mut scroll_offset = self.view_state.scroll_offset;
+                    let mut widths = std::mem::take(&mut self.view_state.column_widths);
                     let rows = self.filtered_sweep_rows();
                     views::render_ownership_list(
                         f,
@@ -459,14 +464,18 @@ impl App {
                             request: self.view_state.sweep_request.as_ref(),
                             result: self.async_state.sweep.result(),
                             show: self.view_state.sweep_show,
+                            namespace: self.view_state.sweep_namespace.as_deref(),
                             rows: &rows,
                             loading: self.async_state.sweep.is_loading(),
+                            progress: self.async_state.sweep.progress(),
                             filter: &self.view_state.filter,
                         },
-                        ListCursor::new(self.view_state.selected_index, &mut scroll_offset),
+                        ListCursor::new(self.view_state.selected_index, &mut scroll_offset)
+                            .with_widths(&mut widths),
                         &self.theme,
                     );
                     self.view_state.scroll_offset = scroll_offset;
+                    self.view_state.column_widths = widths;
                 }
                 View::HelmValues => {
                     views::render_helm_values(
@@ -523,7 +532,8 @@ impl App {
                         ListCursor::new(
                             self.view_state.selected_index,
                             &mut self.view_state.scroll_offset,
-                        ),
+                        )
+                        .with_widths(&mut self.view_state.column_widths),
                         &self.theme,
                     );
                 }
@@ -624,6 +634,30 @@ impl App {
                         &self.theme,
                     );
                 }
+                View::AppTree => {
+                    // Rows borrow `self`; the scroll offset is written back after.
+                    let mut scroll_offset = self.view_state.scroll_offset;
+                    let mut widths = std::mem::take(&mut self.view_state.column_widths);
+                    let rows = self.filtered_app_rows();
+                    views::render_app_tree(
+                        f,
+                        area,
+                        views::AppTreeProps {
+                            title: &self.view_state.app_title,
+                            snapshot: Fetched::new(
+                                self.async_state.app.result(),
+                                self.async_state.app.is_loading(),
+                            ),
+                            rows: &rows,
+                            filter: &self.view_state.filter,
+                        },
+                        ListCursor::new(self.view_state.selected_index, &mut scroll_offset)
+                            .with_widths(&mut widths),
+                        &self.theme,
+                    );
+                    self.view_state.scroll_offset = scroll_offset;
+                    self.view_state.column_widths = widths;
+                }
                 View::InventoryList => {
                     views::render_inventory_list(
                         f,
@@ -639,7 +673,8 @@ impl App {
                         ListCursor::new(
                             self.view_state.selected_index,
                             &mut self.view_state.scroll_offset,
-                        ),
+                        )
+                        .with_widths(&mut self.view_state.column_widths),
                         &self.theme,
                     );
                 }

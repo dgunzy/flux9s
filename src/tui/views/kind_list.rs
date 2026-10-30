@@ -5,10 +5,11 @@
 //! Stateless: the app passes the spec, snapshot, and filtered rows.
 
 use crate::kube::kind_list::{KindListSnapshot, KindRow};
-use crate::kube::object_status::ObjectHealth;
 use crate::models::kinds::{BuiltinColumn, Column, KindSpec};
 use crate::tui::theme::Theme;
-use crate::tui::views::props::ListCursor;
+use crate::tui::views::columns::fit;
+use crate::tui::views::inventory::health_style;
+use crate::tui::views::props::{ListCursor, held_widths};
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -16,34 +17,11 @@ use ratatui::{
     widgets::{Cell, Row, Table},
 };
 
-/// Theme style for a health value (shared palette with the inventory view).
-fn health_style(health: ObjectHealth, theme: &Theme) -> Style {
-    match health {
-        ObjectHealth::Current => theme.status_ready_style(),
-        ObjectHealth::InProgress | ObjectHealth::Terminating => {
-            Style::default().fg(theme.status_pending)
-        }
-        ObjectHealth::Failed | ObjectHealth::NotFound => theme.status_error_style(),
-        ObjectHealth::Forbidden | ObjectHealth::Unknown => {
-            Style::default().fg(theme.status_unknown)
-        }
-    }
-}
-
 fn is_health_column(column: &Column) -> bool {
     matches!(
         column,
         Column::Builtin(BuiltinColumn::Status | BuiltinColumn::Health)
     )
-}
-
-/// Width for a column: its widest value or header, capped.
-fn width(header: &str, values: impl Iterator<Item = usize>, cap: usize) -> u16 {
-    let widest = values
-        .chain(std::iter::once(header.len()))
-        .max()
-        .unwrap_or(0);
-    u16::try_from(widest.min(cap)).unwrap_or(u16::MAX)
 }
 
 /// What a kind list shows: the kind, its namespace scope, the live snapshot and its filtered rows,
@@ -76,6 +54,7 @@ pub fn render_kind_list(
     let ListCursor {
         selected: selected_index,
         offset: scroll_offset,
+        widths,
     } = cursor;
     let Some(spec) = spec else {
         crate::tui::views::helpers::render_empty_state(
@@ -145,36 +124,47 @@ pub fn render_kind_list(
     let selected = selected_index.min(rows.len().saturating_sub(1));
     let show_namespace = spec.is_namespaced() && namespace.is_none();
 
+    // Every column but the last is sized to its content (held while the
+    // list is open); the last takes the rest.
     let mut headers: Vec<String> = Vec::new();
-    let mut constraints: Vec<Constraint> = Vec::new();
+    let mut natural: Vec<u16> = Vec::new();
     if show_namespace {
         headers.push("NAMESPACE".into());
-        constraints.push(Constraint::Length(width(
+        natural.push(fit(
             "NAMESPACE",
-            rows.iter().map(|r| r.namespace.len()),
+            rows.iter().map(|r| r.namespace.chars().count()),
             28,
-        )));
+        ));
     }
     headers.push("NAME".into());
-    constraints.push(Constraint::Length(width(
-        "NAME",
-        rows.iter().map(|r| r.name.len()),
-        48,
-    )));
+    natural.push(fit("NAME", rows.iter().map(|r| r.name.chars().count()), 48));
     let last = snapshot.columns.len().saturating_sub(1);
     for (i, column) in snapshot.columns.iter().enumerate() {
         let header = column.header();
-        constraints.push(if i == last {
-            Constraint::Min(10)
-        } else {
-            Constraint::Length(width(
+        if i != last {
+            natural.push(fit(
                 &header,
                 rows.iter()
                     .map(|r| r.cells.get(i).map_or(0, |c| c.chars().count())),
                 32,
-            ))
-        });
+            ));
+        }
         headers.push(header);
+    }
+    let identity = format!(
+        "kind:{}|{}|{}",
+        spec.gvk.api_version(),
+        spec.gvk.kind,
+        area.width
+    );
+    let held = held_widths(
+        widths,
+        &format!("{identity}|{}", headers.join(",")),
+        natural,
+    );
+    let mut constraints: Vec<Constraint> = held.into_iter().map(Constraint::Length).collect();
+    if !snapshot.columns.is_empty() {
+        constraints.push(Constraint::Min(10));
     }
 
     let table_rows: Vec<Row> = rows
@@ -222,6 +212,7 @@ pub fn render_kind_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kube::object_status::ObjectHealth;
     use crate::models::kinds::{Gvk, KindScope};
     use ratatui::{Terminal, backend::TestBackend};
 

@@ -2,7 +2,7 @@
 
 use crate::tui::app::state::SortField;
 use crate::tui::theme::Theme;
-use crate::tui::views::props::ListCursor;
+use crate::tui::views::props::{ListCursor, held_widths};
 use crate::tui::views::{extract_resource_specific_fields, get_resource_type_columns};
 use crate::watcher::ResourceInfo;
 use ratatui::{
@@ -69,6 +69,7 @@ pub fn render_resource_list(
     let ListCursor {
         selected: selected_index,
         offset: scroll_offset,
+        widths,
     } = cursor;
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2; // Keep 2 rows buffer before scrolling
@@ -179,19 +180,33 @@ pub fn render_resource_list(
     // layout shrinks the widest columns first, so short ones (READY, AGE)
     // stay readable.
     let column_cap = area.width.saturating_sub(2) / MAX_COLUMN_SHARE;
-    let constraints: Vec<Constraint> = columns
+    let natural: Vec<u16> = columns
         .iter()
         .enumerate()
+        .filter(|(_, col)| **col != "MESSAGE")
         .map(|(i, col)| {
-            if *col == "MESSAGE" {
-                return Constraint::Fill(1);
-            }
             let widest = texts
                 .iter()
                 .map(|row| display_width(&row[i]))
                 .max()
                 .unwrap_or(0);
-            Constraint::Length(widest.min(column_cap).max(header_width(col)))
+            widest.min(column_cap).max(header_width(col))
+        })
+        .collect();
+    // Held while this list is open, so a message, revision, or status
+    // changing doesn't move the columns.
+    let identity = format!(
+        "flux:{}|{}|{}",
+        kind_filter.kinds_label().unwrap_or_default(),
+        columns.join(","),
+        area.width
+    );
+    let mut held = held_widths(widths, &identity, natural).into_iter();
+    let constraints: Vec<Constraint> = columns
+        .iter()
+        .map(|col| match *col {
+            "MESSAGE" => Constraint::Fill(1),
+            _ => Constraint::Length(held.next().unwrap_or_default()),
         })
         .collect();
 

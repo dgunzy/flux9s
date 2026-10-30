@@ -80,6 +80,7 @@ pub fn render_workload_list(
                         ObjectHealth::Failed | ObjectHealth::NotFound => "✗",
                         ObjectHealth::Forbidden | ObjectHealth::Unknown => "?",
                         ObjectHealth::InProgress | ObjectHealth::Terminating => "○",
+                        ObjectHealth::Suspended => "⏸",
                     };
                     let status = if live.message.is_empty() {
                         live.health.label().to_string()

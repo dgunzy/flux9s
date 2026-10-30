@@ -4,6 +4,7 @@
 //! and groups them into categories for graph visualization.
 
 use crate::models::FluxResourceKind;
+use anyhow::Context;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -81,7 +82,7 @@ pub fn kind_counts_from_description(description: &str) -> Vec<(String, usize)> {
 }
 
 /// Workload kinds that get special treatment in the graph
-const WORKLOAD_KINDS: &[&str] = &["Deployment", "StatefulSet", "DaemonSet"];
+pub const WORKLOAD_KINDS: &[&str] = &["Deployment", "StatefulSet", "DaemonSet"];
 
 /// Extract inventory from a resource's status field
 ///
@@ -220,6 +221,240 @@ fn parse_id_field(id: &str, v: &Value) -> Option<InventoryEntry> {
         namespace: namespace.to_string(),
         api_version,
     })
+}
+
+/// What a Flux object applied: its `status.inventory`, or for a
+/// HelmRelease without one, its latest release's manifest from Helm storage
+/// ([`helm_release_inventory`]).
+pub async fn applied_objects(
+    client: &kube::Client,
+    kind: FluxResourceKind,
+    obj: &Value,
+    namespace: &str,
+) -> anyhow::Result<Vec<InventoryEntry>> {
+    let entries = extract_inventory(obj)?;
+    if entries.is_empty() && kind == FluxResourceKind::HelmRelease {
+        return helm_release_inventory(client, obj, namespace).await;
+    }
+    Ok(entries)
+}
+
+/// Extract HelmRelease inventory from Helm storage Secrets
+///
+/// Follows the web UI pattern exactly:
+/// 1. Check prerequisites (skip remote clusters, require storageNamespace and history)
+/// 2. Extract latest release info from status.history[0]
+/// 3. Fetch Helm storage Secret from status.storageNamespace
+/// 4. Decode: base64 → gzip detection → decompress → JSON parse → extract manifest
+/// 5. Parse multi-document YAML manifest
+/// 6. Handle CRDs if spec.install.crds or spec.upgrade.crds is true
+pub async fn helm_release_inventory(
+    client: &kube::Client,
+    helmrelease_obj: &serde_json::Value,
+    helmrelease_namespace: &str,
+) -> anyhow::Result<Vec<InventoryEntry>> {
+    use k8s_openapi::api::core::v1::Secret;
+    use kube::api::Api;
+
+    // 1. Check prerequisites
+    let spec = helmrelease_obj
+        .get("spec")
+        .ok_or_else(|| anyhow::anyhow!("HelmRelease missing spec"))?;
+
+    // Skip remote cluster releases (spec.kubeConfig exists)
+    if spec.get("kubeConfig").is_some() {
+        tracing::debug!("Skipping HelmRelease with kubeConfig (remote cluster)");
+        return Ok(Vec::new());
+    }
+
+    // No status, storage namespace, or history yet: nothing was released,
+    // so nothing was applied.
+    let (Some(storage_namespace), Some(history)) = (
+        helmrelease_obj
+            .pointer("/status/storageNamespace")
+            .and_then(|s| s.as_str()),
+        helmrelease_obj
+            .pointer("/status/history")
+            .and_then(|h| h.as_array()),
+    ) else {
+        tracing::debug!("HelmRelease has no release yet");
+        return Ok(Vec::new());
+    };
+
+    if history.is_empty() {
+        tracing::debug!("HelmRelease has no release history");
+        return Ok(Vec::new());
+    }
+
+    // 2. Extract latest release info from status.history[0]
+    let latest_release = &history[0];
+    let release_name = latest_release
+        .get("name")
+        .and_then(|n| n.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Latest release missing name"))?;
+    let release_version = latest_release
+        .get("version")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| anyhow::anyhow!("Latest release missing version"))?;
+    let release_namespace = latest_release
+        .get("namespace")
+        .and_then(|n| n.as_str())
+        .unwrap_or(helmrelease_namespace);
+
+    tracing::debug!(
+        "Latest release: name={}, version={}, namespace={}, storageNamespace={}",
+        release_name,
+        release_version,
+        release_namespace,
+        storage_namespace
+    );
+
+    // 3. Fetch Helm storage Secret
+    // Secret name format: sh.helm.release.v1.{releaseName}.v{version}
+    // Secret namespace: status.storageNamespace (NOT HelmRelease namespace!)
+    let secret_name = format!("sh.helm.release.v1.{}.v{}", release_name, release_version);
+    let secrets_api: Api<Secret> = Api::namespaced(client.clone(), storage_namespace);
+
+    let secret = secrets_api.get(&secret_name).await.with_context(|| {
+        format!(
+            "Failed to fetch Helm storage Secret {}/{}",
+            storage_namespace, secret_name
+        )
+    })?;
+
+    // 4. Decode release data
+    let release_data = secret
+        .data
+        .as_ref()
+        .and_then(|data| data.get("release"))
+        .ok_or_else(|| anyhow::anyhow!("Secret missing 'release' key"))?;
+
+    // Base64 decode
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&release_data.0)
+        .context("Failed to decode base64 release data")?;
+
+    // Check for gzip magic bytes (0x1f, 0x8b, 0x08)
+    let is_gzipped =
+        decoded.len() >= 3 && decoded[0] == 0x1f && decoded[1] == 0x8b && decoded[2] == 0x08;
+
+    // Decompress if gzipped
+    let decompressed = if is_gzipped {
+        use std::io::Read;
+        let mut decoder = flate2::read::GzDecoder::new(&decoded[..]);
+        let mut buf = Vec::new();
+        decoder
+            .read_to_end(&mut buf)
+            .context("Failed to decompress gzip release data")?;
+        buf
+    } else {
+        decoded
+    };
+
+    // JSON unmarshal
+    let release_json: serde_json::Value =
+        serde_json::from_slice(&decompressed).context("Failed to parse release JSON")?;
+
+    // Extract manifest from release JSON
+    // Helm release JSON structure: { "manifest": "---\nkind: Deployment\n..." }
+    let manifest = release_json
+        .get("manifest")
+        .and_then(|m| m.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Release JSON missing 'manifest' field"))?;
+
+    tracing::debug!(
+        "Extracted manifest from Helm release Secret ({} bytes, {} objects)",
+        manifest.len(),
+        manifest.matches("---\n").count() + 1
+    );
+
+    // 5. Parse multi-document YAML manifest
+    let mut entries = Vec::new();
+
+    // Split by "---\n" to get individual YAML documents
+    let documents: Vec<&str> = manifest.split("---\n").collect();
+
+    for doc in documents {
+        let doc = doc.trim();
+        if doc.is_empty() {
+            continue;
+        }
+
+        // Parse YAML document
+        let resource: serde_json::Value = match crate::yaml::from_str(doc) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Failed to parse YAML document: {}", e);
+                continue;
+            }
+        };
+
+        // Extract resource metadata
+        let kind = resource
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Resource missing kind"))?;
+
+        let metadata = resource
+            .get("metadata")
+            .ok_or_else(|| anyhow::anyhow!("Resource missing metadata"))?;
+
+        let name = metadata
+            .get("name")
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Resource missing name"))?;
+
+        // Namespace handling: use from manifest, fall back to release namespace
+        let resource_namespace = metadata
+            .get("namespace")
+            .and_then(|n| n.as_str())
+            .unwrap_or(release_namespace)
+            .to_string();
+
+        let api_version = resource
+            .get("apiVersion")
+            .and_then(|av| av.as_str())
+            .unwrap_or("v1")
+            .to_string();
+
+        entries.push(InventoryEntry {
+            kind: kind.to_string(),
+            name: name.to_string(),
+            namespace: resource_namespace,
+            api_version,
+        });
+    }
+
+    // 6. Handle CRDs if spec.install.crds or spec.upgrade.crds is true
+    let install_crds = spec
+        .get("install")
+        .and_then(|i| i.get("crds"))
+        .and_then(|c| c.as_bool())
+        .unwrap_or(false);
+    let upgrade_crds = spec
+        .get("upgrade")
+        .and_then(|u| u.get("crds"))
+        .and_then(|c| c.as_bool())
+        .unwrap_or(false);
+
+    if install_crds || upgrade_crds {
+        tracing::debug!(
+            "HelmRelease has CRD install/upgrade enabled, fetching CRDs with Helm labels"
+        );
+
+        // List CRDs with Helm labels: helm.toolkit.fluxcd.io/name and helm.toolkit.fluxcd.io/namespace
+        // This is a simplified approach - full implementation would use RESTMapper
+        // For now, we'll skip CRD extraction as it requires additional API calls and discovery
+        tracing::debug!("CRD extraction not yet implemented (requires RESTMapper)");
+    }
+
+    tracing::debug!(
+        "Extracted {} resources from Helm release manifest",
+        entries.len()
+    );
+
+    Ok(entries)
 }
 
 /// Group inventory entries by category for graph display

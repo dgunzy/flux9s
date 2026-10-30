@@ -45,6 +45,12 @@ impl<K, T> AsyncTask<K, T> {
         self.result = None;
     }
 
+    /// Queue a new request but keep the previous result until the new one
+    /// arrives, so a view can keep showing it while it reloads.
+    pub fn refresh(&mut self, key: K) {
+        self.pending = Some(key);
+    }
+
     /// Take the queued request and arm the result channel.
     ///
     /// Returns the request key and the sender the spawned task must complete
@@ -169,6 +175,16 @@ mod tests {
         task.set_result(1);
         task.request("next".to_string());
         assert!(task.result().is_none());
+    }
+
+    #[test]
+    fn refresh_keeps_the_previous_result_while_loading() {
+        let mut task: AsyncTask<String, u32> = AsyncTask::default();
+        task.set_result(1);
+        task.refresh("again".to_string());
+        assert_eq!(task.result(), Some(&1));
+        assert!(task.is_loading());
+        assert_eq!(task.pending(), Some(&"again".to_string()));
     }
 
     #[test]

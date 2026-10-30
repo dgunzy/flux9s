@@ -426,19 +426,47 @@ fn extract_containers(obj: &Value) -> Vec<ContainerInfo> {
     })
 }
 
-/// The workload's own pod selector as a `k=v,k=v` label selector string.
-/// CronJobs have none — their pods belong to spawned Jobs.
-fn extract_selector(obj: &Value) -> Option<String> {
-    let labels = obj
-        .pointer("/spec/selector/matchLabels")?
-        .as_object()
-        .filter(|map| !map.is_empty())?;
-    let mut pairs: Vec<String> = labels
-        .iter()
+/// The workload's own pod selector as a label selector string, as kubectl
+/// writes it: `matchLabels` as `k=v`, `matchExpressions` as `k in (a,b)`,
+/// `k notin (a,b)`, `k`, `!k` — all of them, so the pods listed are exactly
+/// the ones it selects. `None` when it has none (CronJobs: their pods belong
+/// to spawned Jobs), or an expression this can't express (the selector
+/// would be broader than the workload's).
+pub fn extract_selector(obj: &Value) -> Option<String> {
+    let selector = obj.pointer("/spec/selector")?;
+    let mut parts: Vec<String> = selector
+        .get("matchLabels")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
         .filter_map(|(k, v)| v.as_str().map(|v| format!("{k}={v}")))
         .collect();
-    pairs.sort();
-    Some(pairs.join(","))
+    parts.sort();
+    for expression in selector
+        .get("matchExpressions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let key = expression.get("key").and_then(Value::as_str)?;
+        let values = || -> Option<String> {
+            let values: Vec<&str> = expression
+                .get("values")?
+                .as_array()?
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            (!values.is_empty()).then(|| values.join(","))
+        };
+        parts.push(match expression.get("operator").and_then(Value::as_str)? {
+            "In" => format!("{key} in ({})", values()?),
+            "NotIn" => format!("{key} notin ({})", values()?),
+            "Exists" => key.to_string(),
+            "DoesNotExist" => format!("!{key}"),
+            _ => return None,
+        });
+    }
+    (!parts.is_empty()).then(|| parts.join(","))
 }
 
 /// Reduce a pod object to its table row.
@@ -646,5 +674,48 @@ mod tests {
             name: "web-abc".into(),
         };
         assert!(delete.confirmation_message().contains("pod 'web-abc'"));
+    }
+
+    #[test]
+    fn selectors_keep_their_expressions() {
+        let workload = |selector: Value| json!({"spec": {"selector": selector}});
+        assert_eq!(
+            extract_selector(&workload(
+                json!({"matchLabels": {"app": "web", "tier": "fe"}})
+            ))
+            .as_deref(),
+            Some("app=web,tier=fe")
+        );
+        assert_eq!(
+            extract_selector(&workload(json!({
+                "matchLabels": {"app": "web"},
+                "matchExpressions": [
+                    {"key": "track", "operator": "In", "values": ["stable", "canary"]},
+                    {"key": "legacy", "operator": "DoesNotExist"},
+                    {"key": "zone", "operator": "NotIn", "values": ["b"]},
+                    {"key": "managed", "operator": "Exists"}
+                ]
+            })))
+            .as_deref(),
+            Some("app=web,track in (stable,canary),!legacy,zone notin (b),managed")
+        );
+        // Expressions alone still select pods.
+        assert_eq!(
+            extract_selector(&workload(json!({"matchExpressions": [
+                {"key": "app", "operator": "In", "values": ["web"]}
+            ]})))
+            .as_deref(),
+            Some("app in (web)")
+        );
+        // Never broader than the workload's own: an expression that can't be
+        // written lists nothing rather than too much.
+        assert_eq!(
+            extract_selector(&workload(json!({
+                "matchLabels": {"app": "web"},
+                "matchExpressions": [{"key": "x", "operator": "Gt", "values": ["1"]}]
+            }))),
+            None
+        );
+        assert_eq!(extract_selector(&json!({"spec": {}})), None);
     }
 }

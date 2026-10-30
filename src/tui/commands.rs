@@ -470,6 +470,55 @@ pub fn parse_sweep_args(cmd: &str) -> Result<SweepArgs, String> {
     Ok(args)
 }
 
+/// `:app <kind>/<name>…` — only with a target, so a bare `:app` still
+/// reaches a kind of that name (Argo CD's Application).
+pub fn is_app_command(cmd: &str) -> bool {
+    let mut words = cmd.split_whitespace();
+    words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("app"))
+        && words.any(|word| word.contains('/'))
+}
+
+/// `:app` usage, shown for malformed arguments.
+pub const APP_USAGE: &str =
+    "Usage: :app <kind>/<name>… [-n <namespace>] (or <kind>/<namespace>/<name>)";
+
+pub use crate::kube::app::AppTarget;
+
+/// Parsed `:app` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppArgs {
+    pub targets: Vec<AppTarget>,
+    /// `-n <ns>`: where `<kind>/<name>` targets are looked up.
+    pub namespace: Option<String>,
+}
+
+/// Parse `:app <kind>/<name>… [-n <ns>]`. `Err` carries the message.
+pub fn parse_app_args(cmd: &str) -> Result<AppArgs, String> {
+    let mut tokens = cmd.split_whitespace().skip(1);
+    let mut targets = Vec::new();
+    let mut namespace = None;
+    while let Some(token) = tokens.next() {
+        let value = match token {
+            "-n" | "--namespace" => Some(tokens.next().ok_or("-n needs a namespace")?),
+            _ => token.strip_prefix("--namespace="),
+        };
+        match value {
+            Some(_) if namespace.is_some() => return Err(APP_USAGE.to_string()),
+            Some(ns) if !ns.is_empty() && ns != "all" => namespace = Some(ns.to_string()),
+            Some(_) => return Err("An app's namespace is one namespace".to_string()),
+            None => {
+                targets.push(AppTarget::parse(token).map_err(|e| format!("{e} — {APP_USAGE}"))?)
+            }
+        }
+    }
+    if targets.is_empty() {
+        return Err(APP_USAGE.to_string());
+    }
+    Ok(AppArgs { targets, namespace })
+}
+
 /// Check if command is context command (handles both "ctx" and "context")
 pub fn is_context_command(cmd: &str) -> bool {
     let cmd_lower = cmd.to_lowercase();
@@ -754,6 +803,8 @@ mod tests {
         assert!(parse_sweep_args("unmanaged -n a -n b").is_err());
         assert!(parse_sweep_args("unmanaged bogus").is_err());
         assert!(is_unmanaged_command("unmanaged all") && !is_unmanaged_command("unhealthy"));
+        // A bare `:app` is left to kinds (Argo CD's Application).
+        assert!(is_app_command("app ks/apps") && !is_app_command("app") && !is_app_command("apps"));
         assert!(is_orphaned_command("orphaned") && is_orphaned_command("orphans ks/x"));
     }
 
@@ -1070,5 +1121,36 @@ mod tests {
         );
         assert!(native_kind_matches("k", tokens.clone(), &flux, &app).is_empty());
         assert!(native_kind_matches("fl", tokens, &flux, &app).is_empty());
+    }
+
+    #[test]
+    fn app_args_take_targets_and_a_namespace() {
+        let args = parse_app_args("app ks/shop hr/apps/redis -n flux-system").unwrap();
+        assert_eq!(args.namespace.as_deref(), Some("flux-system"));
+        assert_eq!(
+            args.targets,
+            [
+                AppTarget {
+                    kind: "ks".into(),
+                    namespace: None,
+                    name: "shop".into()
+                },
+                AppTarget {
+                    kind: "hr".into(),
+                    namespace: Some("apps".into()),
+                    name: "redis".into()
+                },
+            ]
+        );
+        assert_eq!(args.targets[1].label(), "hr/apps/redis");
+        assert!(parse_app_args("app").is_err(), "a target is required");
+        assert!(
+            parse_app_args("app ks")
+                .unwrap_err()
+                .contains("<kind>/<name>")
+        );
+        assert!(parse_app_args("app ks/a -A").is_err());
+        assert!(parse_app_args("app ks/a -n all").is_err(), "one namespace");
+        assert!(parse_app_args("app ks//a").is_err());
     }
 }

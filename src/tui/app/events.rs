@@ -605,6 +605,11 @@ impl App {
             View::ResourceYAML | View::ResourceDescribe | View::ResourceTrace => {
                 self.selection_state.native_object.clone()
             }
+            // A Kubernetes row of the app view (Flux rows are Flux targets).
+            View::AppTree => self
+                .selected_app_row()
+                .filter(|row| row.flux_kind().is_none())
+                .map(crate::kube::app::AppRow::object_ref),
             // A Kubernetes row of a mixed Flux list (#304).
             View::ResourceList => self.selected_native_row().map(|(spec, row)| {
                 ObjectRef::native(

@@ -239,6 +239,15 @@ impl FluxResourceKind {
         s.parse().ok()
     }
 
+    /// The Flux kind an object is, by its `apiVersion` and `kind`: the group
+    /// must be the kind's, so a same-named kind of another API (Crossplane's
+    /// `Bucket`) isn't taken for Flux's. Any version counts (older Flux).
+    pub fn from_api(api_version: &str, kind: &str) -> Option<Self> {
+        let parsed = Self::parse_optional(kind).filter(|parsed| parsed.as_str() == kind)?;
+        let group = api_version.rsplit_once('/').map_or("", |(group, _)| group);
+        (parsed.api_resource().group == group).then_some(parsed)
+    }
+
     /// Get all Flux resource kinds ([`Self::ALL`]).
     pub fn all() -> &'static [Self] {
         Self::ALL

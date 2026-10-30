@@ -9,7 +9,8 @@
 use crate::kube::inventory::InventoryEntry;
 use crate::kube::object_status::{ObjectHealth, ObjectStatus};
 use crate::tui::theme::Theme;
-use crate::tui::views::props::{Fetched, ListCursor};
+use crate::tui::views::columns::fit;
+use crate::tui::views::props::{Fetched, ListCursor, held_widths};
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -34,6 +35,7 @@ pub fn render_inventory_list(
     let ListCursor {
         selected: selected_index,
         offset: scroll_offset,
+        widths,
     } = cursor;
     let visible_height = (area.height as usize).saturating_sub(2);
     const SCROLL_BUFFER: usize = 2;
@@ -88,7 +90,7 @@ pub fn render_inventory_list(
             };
             let status = statuses.and_then(|s| s.get(index));
             let (status_text, message) = match status {
-                Some(status) => (status.health.label(), status.message.as_str()),
+                Some(status) => (status.label(), status.message.as_str()),
                 None if statuses_loading => ("…", ""),
                 None => ("-", ""),
             };
@@ -120,19 +122,30 @@ pub fn render_inventory_list(
     // KIND and API VERSION size to their longest value so CRD groups
     // (`gateway.networking.k8s.io/v1`) aren't truncated, capped so one long
     // group can't squeeze NAME and MESSAGE off screen.
-    let kind_width = column_width("KIND", rows.iter().map(|r| r.kind.as_str()), 28);
-    let api_width = column_width(
-        "API VERSION",
-        rows.iter().map(|r| r.api_version.as_str()),
-        36,
-    );
+    let chars = |text: &str| text.chars().count();
+    let status_labels = (0..rows.len()).map(|index| {
+        statuses
+            .and_then(|s| s.get(index))
+            .map_or(1, |status| chars(status.label()))
+    });
+    let natural = vec![
+        fit("KIND", rows.iter().map(|r| chars(&r.kind)), 28),
+        fit("STATUS", status_labels, 18),
+        fit(
+            "API VERSION",
+            rows.iter().map(|r| chars(&r.api_version)),
+            36,
+        ),
+    ];
+    // Held while the list is open: statuses arriving don't move columns.
+    let held = held_widths(widths, &format!("{title}|{}", area.width), natural);
     let constraints = [
-        Constraint::Length(kind_width), // KIND
-        Constraint::Length(18),         // NAMESPACE
-        Constraint::Min(20),            // NAME
-        Constraint::Length(12),         // STATUS
-        Constraint::Length(api_width),  // API VERSION
-        Constraint::Min(20),            // MESSAGE
+        Constraint::Length(held[0]), // KIND
+        Constraint::Length(18),      // NAMESPACE
+        Constraint::Min(20),         // NAME
+        Constraint::Length(held[1]), // STATUS
+        Constraint::Length(held[2]), // API VERSION
+        Constraint::Min(20),         // MESSAGE
     ];
 
     let block = crate::tui::views::helpers::create_themed_block(&title, theme);
@@ -143,24 +156,14 @@ pub fn render_inventory_list(
     viewport.render_scrollbar(f, area, theme);
 }
 
-/// Width of a column holding `values`: the longest value or the header,
-/// whichever is wider, capped at `max`.
-fn column_width<'a>(header: &str, values: impl Iterator<Item = &'a str>, max: u16) -> u16 {
-    let widest = values
-        .map(|v| v.chars().count())
-        .chain(std::iter::once(header.chars().count()))
-        .max()
-        .unwrap_or_default();
-    u16::try_from(widest).unwrap_or(max).min(max)
-}
-
 /// Theme style for a health value.
-fn health_style(health: ObjectHealth, theme: &Theme) -> Style {
+pub(crate) fn health_style(health: ObjectHealth, theme: &Theme) -> Style {
     match health {
         ObjectHealth::Current => theme.status_ready_style(),
         ObjectHealth::InProgress | ObjectHealth::Terminating => {
             Style::default().fg(theme.status_pending)
         }
+        ObjectHealth::Suspended => Style::default().fg(theme.status_suspended),
         ObjectHealth::Failed | ObjectHealth::NotFound => theme.status_error_style(),
         ObjectHealth::Forbidden | ObjectHealth::Unknown => {
             Style::default().fg(theme.status_unknown)
@@ -300,15 +303,5 @@ mod tests {
         route.api_version = "gateway.networking.k8s.io/v1".to_string();
         let output = render(&[route]);
         assert!(output.contains("gateway.networking.k8s.io/v1"));
-    }
-
-    #[test]
-    fn column_width_fits_content_within_cap() {
-        assert_eq!(column_width("KIND", ["Service"].into_iter(), 28), 7);
-        assert_eq!(column_width("API VERSION", ["v1"].into_iter(), 36), 11);
-        assert_eq!(
-            column_width("KIND", ["x".repeat(50).as_str()].into_iter(), 28),
-            28
-        );
     }
 }

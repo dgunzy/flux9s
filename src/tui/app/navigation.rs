@@ -102,6 +102,7 @@ impl App {
         self.view_state.current_view = view;
         self.sync_mixed_watch();
         self.restore_mixed_selection();
+        self.restore_app_selection();
         self.invalidate_layout_cache();
     }
 
@@ -138,6 +139,7 @@ impl App {
         }
         self.sync_mixed_watch();
         self.restore_mixed_selection();
+        self.restore_app_selection();
         self.invalidate_layout_cache();
         true
     }
@@ -248,6 +250,8 @@ impl App {
                 self.view_state.text_search.clear();
             }
             View::Pulse => self.view_state.text_search.clear(),
+            // Kept while its rows are open in describe / YAML / trace.
+            View::AppTree => self.leave_app_view(to),
         }
     }
 }

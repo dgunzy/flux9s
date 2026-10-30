@@ -137,6 +137,7 @@ pub(crate) enum ActionId {
     ReconcileWithSource,
     NativeTrace,
     Orphans,
+    OpenApp,
     Rescan,
     SweepOrphaned,
     SweepUnmanaged,
@@ -662,6 +663,25 @@ pub(crate) const ACTIONS: &[Action] = &[
         )),
         sets_status: false,
     },
+    // What a Kustomization / HelmRelease / ResourceSet / FluxInstance
+    // deploys: the app view.
+    Action {
+        id: ActionId::OpenApp,
+        keys: &[key('a')],
+        // Like `v`: other kinds say what it works on.
+        when: on_flux_resource,
+        spec: ActionSpec::Builtin(|app, _| {
+            app.app_of_selected();
+            None
+        }),
+        footer: Some(("a", "App")),
+        help: Some((
+            HelpColumn::Resource,
+            "<a>",
+            "What this Flux object deploys (app view)",
+        )),
+        sets_status: false,
+    },
     // Sweeps aren't live: run the current one again.
     Action {
         id: ActionId::Rescan,
@@ -728,7 +748,12 @@ pub(crate) const ACTIONS: &[Action] = &[
     Action {
         id: ActionId::InventoryDescribe,
         keys: &[code(KeyCode::Enter), key('d')],
-        when: |app| in_view(app, &[View::InventoryList, View::OwnershipList]),
+        when: |app| {
+            in_view(
+                app,
+                &[View::InventoryList, View::OwnershipList, View::AppTree],
+            )
+        },
         spec: ActionSpec::Builtin(|app, _| {
             app.open_describe_view();
             None
@@ -1050,6 +1075,7 @@ pub(crate) const FLUX_LAYOUT: &[FooterItem] = &[
     Act(A::Values),
     Act(A::Trace),
     Act(A::Orphans),
+    Act(A::OpenApp),
     Act(A::ReconcileWithSource),
     Act(A::Delete),
     Act(A::Help),
@@ -1091,6 +1117,22 @@ const INVENTORY_LAYOUT: &[FooterItem] = &[
     Act(A::InventoryDescribe),
     Act(A::Yaml),
     Act(A::Edit),
+    TAIL[0],
+    TAIL[1],
+    TAIL[2],
+];
+
+/// The app view: open a row, or go to the Flux object a Kubernetes row
+/// hangs under.
+const APP_LAYOUT: &[FooterItem] = &[
+    Act(A::Move),
+    Act(A::Page),
+    Act(A::InventoryDescribe),
+    Act(A::Yaml),
+    Act(A::Edit),
+    Act(A::NativeTrace),
+    Act(A::JumpToManager),
+    Relabel(A::FilterOrSearch, "Filter"),
     TAIL[0],
     TAIL[1],
     TAIL[2],
@@ -1240,6 +1282,7 @@ pub(crate) fn view_layout(view: View) -> &'static [FooterItem] {
         View::HelmValues => HELM_VALUES_LAYOUT,
         View::KindList => KIND_LIST_LAYOUT,
         View::OwnershipList => OWNERSHIP_LAYOUT,
+        View::AppTree => APP_LAYOUT,
         View::ResourceList
         | View::ResourceDetail
         | View::ResourceDescribe

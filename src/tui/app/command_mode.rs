@@ -75,6 +75,14 @@ pub(super) const COMMAND_TABLE: &[CommandSpec] = &[
         ],
     },
     CommandSpec {
+        matches: commands::is_app_command,
+        run: App::cmd_app,
+        help: &[(
+            ":app <kind>/<n>…",
+            "What Flux objects deploy (sources, inventory, pods)",
+        )],
+    },
+    CommandSpec {
         matches: commands::is_healthy_command,
         run: App::cmd_filter_healthy,
         help: &[(":healthy", "Show healthy resources")],
@@ -699,9 +707,11 @@ impl App {
         }
 
         self.reset_list_position();
-        // A kind list, and a mixed Flux list's kinds, follow the namespace.
+        // A kind list, and a mixed Flux list's kinds, follow the namespace;
+        // a sweep shows it from its rows or rescans.
         self.refresh_kind_list_namespace();
         self.sync_mixed_watch();
+        self.follow_sweep_namespace();
     }
 
     /// `:healthy` — filter the list to healthy resources.
