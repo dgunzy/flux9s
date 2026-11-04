@@ -861,6 +861,28 @@ This ensures submenus capture navigation keys when active without interfering wi
 
 See `ContextSubmenu` in `src/tui/commands.rs` for a complete working example of the submenu system.
 
+### Pod and Node list usage
+
+`kube::native_lists` supplies data-driven `Column::Native` fields and wraps the
+kind watch with view-scoped metrics tasks. Pod snapshots use `PodKey` (namespace
+and name); the workload detail consumes the same identity. A single pod metrics
+task consumes identities and node placement from the kind
+watch, scrapes each distinct node once per round with bounded concurrency, and
+never relists pods. Node usage uses kubelet summaries or NodeMetrics,
+with pod request totals as the explicit fallback. A compact typed pod-watch
+cache supplies active-pod counts and requests without periodic full pod lists
+or serializing Pod objects. The owning `JoinSet` aborts
+children when navigation drops the view. `KindListRequest.node` is a server-side
+Pod field selector, always across all namespaces; it is retained in the navigation
+stack and unaffected by session namespace changes.
+
+Run `cargo build --bin flux9s` then
+`python3 scripts/tui-smoke.py --context kind-flux9s-simple` for the real-terminal
+smoke test. Add `--metrics-source kubelet` to require measured CPU and memory
+usage; CI runs both modes. It uses an isolated tmux server, config, and kubeconfig; it does not
+modify the cluster or the user's selected context. The live-tests workflow runs
+it on the dev clusters after the Rust live suite. Failures print the terminal.
+
 ## Testing
 
 ### Running Tests
@@ -1121,3 +1143,4 @@ Contributions are welcome! Please:
 - [Flux CD](https://github.com/fluxcd/flux2) - GitOps toolkit
 - [Flux Operator](https://github.com/controlplaneio-fluxcd/flux-operator) - Flux installation operator
 - [Flux CRD Reference](https://github.com/controlplaneio-fluxcd/flux-operator/blob/main/api/v1/common_types.go#L83-L110) - Definitive list of Flux CRDs and API versions
+

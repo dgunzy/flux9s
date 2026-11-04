@@ -24,6 +24,7 @@ pub mod kind_list;
 pub mod live;
 pub mod logs;
 pub mod metrics;
+pub mod native_lists;
 pub mod object_status;
 pub mod objects;
 pub mod ownership;

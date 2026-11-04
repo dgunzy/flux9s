@@ -1229,6 +1229,7 @@ fn workload_data(pods: &[&str]) -> crate::kube::workloads::WorkloadData {
         pods: pods
             .iter()
             .map(|name| crate::kube::workloads::PodRow {
+                namespace: "apps".into(),
                 name: name.to_string(),
                 phase: "Running".to_string(),
                 ready: "1/1".to_string(),
@@ -1448,7 +1449,11 @@ fn kind_lists_stack_history_and_esc_walks_back_home() {
         app.view_state.nav_stack,
         [
             NavEntry::View(View::ResourceList),
-            NavEntry::Kind(kind("apps", "Deployment", "deployments"))
+            NavEntry::Kind(Box::new(crate::kube::kind_list::KindListRequest {
+                spec: kind("apps", "Deployment", "deployments"),
+                namespace: app.namespace.clone(),
+                node: None
+            }))
         ],
         "Flux, then deployments"
     );
@@ -5645,4 +5650,65 @@ fn app_filter_matches_the_status_shown() {
     // The health still matches too.
     app.view_state.filter = "failed".into();
     assert_eq!(names(&app), ["web-1"]);
+}
+
+#[test]
+fn node_scoped_pod_lists_keep_their_scope_across_back_and_namespace_changes() {
+    let mut app = create_test_app(false);
+    app.view_state.current_view = View::ResourceList;
+    app.open_kind_list(kind("", "Pod", "pods"));
+    let mut request = app.async_state.kind_list.key().cloned().unwrap();
+    request.node = Some("worker-a".into());
+    request.namespace = None;
+    app.async_state.kind_list.request(request);
+    app.open_kind_list(kind("apps", "Deployment", "deployments"));
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(
+        app.async_state.kind_list.key().unwrap().node.as_deref(),
+        Some("worker-a")
+    );
+    app.namespace = Some("other".into());
+    app.refresh_kind_list_namespace();
+    let request = app.async_state.kind_list.key().unwrap();
+    assert_eq!(request.namespace, None);
+    assert_eq!(request.node.as_deref(), Some("worker-a"));
+}
+
+#[test]
+fn only_core_nodes_offer_the_node_pods_action() {
+    let mut app = create_test_app(false);
+    app.open_kind_list(kind("example.com", "Node", "nodes"));
+    with_rows(&mut app, &[("apps", "custom")]);
+    assert!(!app.selected_is_node());
+    app.handle_key(make_key(KeyCode::Enter));
+    assert_eq!(app.view_state.current_view, View::ResourceDescribe);
+    app.open_kind_list(kind("", "Node", "nodes"));
+    with_rows(&mut app, &[("", "worker")]);
+    assert!(app.selected_is_node());
+}
+
+#[test]
+fn node_drill_down_returns_to_mixed_view_without_resetting_history() {
+    let mut app = create_test_app(false);
+    mix_in(
+        &mut app,
+        "ks,nodes",
+        kind("", "Node", "nodes"),
+        &[(
+            "",
+            "worker-a",
+            crate::kube::object_status::ObjectHealth::Current,
+        )],
+    );
+    app.namespace = Some("flux-system".into());
+    let filter = app.view_state.kind_filter.clone();
+    app.view_state.nav_stack.push(NavEntry::View(View::Help));
+    app.open_node_pods(kind("", "Pod", "pods"), "worker-a".into());
+    let request = app.async_state.kind_list.key().unwrap();
+    assert_eq!(request.node.as_deref(), Some("worker-a"));
+    assert_eq!(request.namespace, None);
+    app.handle_key(make_key(KeyCode::Esc));
+    assert_eq!(app.view_state.current_view, View::ResourceList);
+    assert_eq!(app.view_state.kind_filter, filter);
+    assert_eq!(app.view_state.nav_stack, [NavEntry::View(View::Help)]);
 }

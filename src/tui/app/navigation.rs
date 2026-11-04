@@ -33,7 +33,7 @@ impl App {
                 .async_state
                 .kind_list
                 .key()
-                .map(|request| NavEntry::Kind(request.spec.clone()))
+                .map(|request| NavEntry::Kind(Box::new(request.clone())))
                 .unwrap_or(NavEntry::View(View::KindList)),
             view => NavEntry::View(view),
         }
@@ -115,24 +115,25 @@ impl App {
         let leaving = self.view_state.current_view;
         self.leave_view(leaving, entry.view());
         match entry {
-            NavEntry::Kind(spec) => {
+            NavEntry::Kind(mut request) => {
+                let spec = request.spec.clone();
                 // Still loaded (we drilled into one of its rows): keep the
                 // live list and cursor. Replaced by another kind, or the
                 // namespace changed meanwhile: reopen it.
-                let namespace = if spec.is_namespaced() {
+                let namespace = if spec.is_namespaced() && request.node.is_none() {
                     self.namespace.clone()
                 } else {
                     None
                 };
-                let loaded = self
-                    .async_state
-                    .kind_list
-                    .key()
-                    .is_some_and(|r| r.spec == spec && r.namespace == namespace);
+                let loaded = self.async_state.kind_list.key().is_some_and(|r| {
+                    r.spec == spec && r.namespace == namespace && r.node == request.node
+                });
                 if loaded && leaving != View::KindList {
                     self.view_state.current_view = View::KindList;
                 } else {
                     self.show_kind_list(spec);
+                    request.namespace = namespace;
+                    self.async_state.kind_list.request(*request);
                 }
             }
             NavEntry::View(view) => self.view_state.current_view = view,

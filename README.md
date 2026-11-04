@@ -206,6 +206,12 @@ This project is inspired by and built with the following excellent tools:
 AI was used to get the scaffold of this project together, if there are mistakes or
 issues please open an issue, or a PR!
 
+
+Pods and nodes: `:pods` shows live usage, readiness, restarts and placement;
+`:nodes` shows usage against allocatable capacity and opens a node's pods with
+Enter. Both use the native resource browser (`:native` when disabled). Without
+metrics, resource cells show explicitly labelled requests/limits.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

@@ -550,9 +550,10 @@ pub async fn run_tui_with_async_init(
                 }
 
                 if let Some((request, tx)) = app.async_state.kind_list.dispatch() {
-                    let handle = tokio::spawn(crate::kube::kind_list::watch_kind(
+                    let handle = tokio::spawn(crate::kube::native_lists::watch_native(
                         client.clone(),
                         request,
+                        app.config.metrics_source,
                         tx,
                     ));
                     app.async_state.kind_list.set_handle(handle);

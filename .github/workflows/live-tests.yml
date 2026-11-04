@@ -88,6 +88,26 @@ jobs:
       - name: Run live regression suite
         run: cargo test --test live_tests -- --ignored --test-threads=1 --nocapture
 
+      - name: Build TUI and install terminal harness
+        run: |
+          cargo build --bin flux9s
+          sudo apt-get update
+          sudo apt-get install -y tmux
+
+      - name: Exercise TUI against dev clusters
+        run: |
+          tested=0
+          for ctx in kind-flux9s-simple kind-flux9s-legacy; do
+            kubectl config get-contexts -o name | grep -qx "$ctx" || continue
+            python3 scripts/tui-smoke.py --context "$ctx"
+            python3 scripts/tui-smoke.py --context "$ctx" --metrics-source kubelet
+            tested=$((tested + 1))
+          done
+          if [ "$tested" -eq 0 ]; then
+            echo "No dev cluster contexts found for TUI validation" >&2
+            exit 1
+          fi
+
       - name: Dump cluster diagnostics on failure
         if: failure()
         run: |

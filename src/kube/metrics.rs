@@ -121,12 +121,28 @@ pub struct PodUsage {
     pub memory_bytes: Option<f64>,
 }
 
+/// Identity of a pod in a metrics snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PodKey {
+    pub namespace: String,
+    pub name: String,
+}
+
+impl PodKey {
+    pub fn new(namespace: &str, name: &str) -> Self {
+        Self {
+            namespace: namespace.into(),
+            name: name.into(),
+        }
+    }
+}
+
 /// Usage for the pods of one view, from one source.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricsSnapshot {
     pub source: MetricsSource,
-    /// Keyed by pod name (the view's namespace is implied).
-    pub pods: HashMap<String, PodUsage>,
+    /// Namespace and name keep identically named pods distinct.
+    pub pods: HashMap<PodKey, PodUsage>,
 }
 
 /// What a live usage task watches.
@@ -297,7 +313,18 @@ struct PodTotals {
 /// `/metrics/resource` and `/metrics/cadvisor` (whose pod-level `container=""`
 /// and sandbox `container="POD"` series are skipped).
 fn pod_totals(text: &str, namespace: &str, pods: &HashSet<String>) -> HashMap<String, PodTotals> {
-    let mut totals: HashMap<String, PodTotals> = HashMap::new();
+    let wanted = pods
+        .iter()
+        .map(|name| PodKey::new(namespace, name))
+        .collect();
+    all_pod_totals(text, &wanted)
+        .into_iter()
+        .map(|(key, total)| (key.name, total))
+        .collect()
+}
+
+fn all_pod_totals(text: &str, pods: &HashSet<PodKey>) -> HashMap<PodKey, PodTotals> {
+    let mut totals: HashMap<PodKey, PodTotals> = HashMap::new();
     for sample in text.lines().filter_map(parse_sample) {
         let is_cpu = sample.name == "container_cpu_usage_seconds_total";
         let is_memory = sample.name == "container_memory_working_set_bytes";
@@ -306,14 +333,11 @@ fn pod_totals(text: &str, namespace: &str, pods: &HashSet<String>) -> HashMap<St
         }
         let label = |k: &str| sample.labels.get(k).map(String::as_str).unwrap_or_default();
         let container = label("container");
-        if label("namespace") != namespace
-            || !pods.contains(label("pod"))
-            || container.is_empty()
-            || container == "POD"
-        {
+        let key = PodKey::new(label("namespace"), label("pod"));
+        if !pods.contains(&key) || container.is_empty() || container == "POD" {
             continue;
         }
-        let entry = totals.entry(label("pod").to_string()).or_default();
+        let entry = totals.entry(key).or_default();
         if is_cpu {
             *entry.cpu_seconds.get_or_insert(0.0) += sample.value;
             entry.cpu_timestamp_ms = match (entry.cpu_timestamp_ms, sample.timestamp_ms) {
@@ -584,14 +608,34 @@ async fn metrics_server_usage(
     namespace: &str,
     selector: &str,
 ) -> anyhow::Result<HashMap<String, PodUsage>> {
-    let resource = ApiResource {
-        group: "metrics.k8s.io".to_string(),
-        version: "v1beta1".to_string(),
-        api_version: "metrics.k8s.io/v1beta1".to_string(),
-        kind: "PodMetrics".to_string(),
-        plural: "pods".to_string(),
+    Ok(metrics_server_snapshot(client, Some(namespace), selector)
+        .await?
+        .into_iter()
+        .map(|(key, usage)| (key.name, usage))
+        .collect())
+}
+
+fn metrics_resource(kind: &str, plural: &str) -> ApiResource {
+    ApiResource {
+        group: "metrics.k8s.io".into(),
+        version: "v1beta1".into(),
+        api_version: "metrics.k8s.io/v1beta1".into(),
+        kind: kind.into(),
+        plural: plural.into(),
+    }
+}
+
+async fn metrics_server_snapshot(
+    client: &kube::Client,
+    namespace: Option<&str>,
+    selector: &str,
+) -> anyhow::Result<HashMap<PodKey, PodUsage>> {
+    let resource = metrics_resource("PodMetrics", "pods");
+    let api = match namespace {
+        Some(ns) => Api::<DynamicObject>::namespaced_with(client.clone(), ns, &resource),
+        None => Api::all_with(client.clone(), &resource),
     };
-    let list = Api::<DynamicObject>::namespaced_with(client.clone(), namespace, &resource)
+    let list = api
         .list(&ListParams::default().labels(selector))
         .await
         .context("Failed to list PodMetrics")?;
@@ -609,7 +653,10 @@ async fn metrics_server_usage(
                     .reduce(|a, b| a + b)
             };
             Some((
-                name,
+                PodKey::new(
+                    item.metadata.namespace.as_deref().unwrap_or_default(),
+                    &name,
+                ),
                 PodUsage {
                     cpu_millicores: sum("cpu", parse_cpu_millicores),
                     memory_bytes: sum("memory", parse_memory_bytes),
@@ -709,6 +756,10 @@ pub async fn watch_pod_metrics(
             Ok(pods) => {
                 failures = 0;
                 source_proven = true;
+                let pods = pods
+                    .into_iter()
+                    .map(|(name, usage)| (PodKey::new(&request.namespace, &name), usage))
+                    .collect();
                 if tx.send(Ok(MetricsSnapshot { source, pods })).is_err() {
                     return; // View closed
                 }
@@ -981,5 +1032,539 @@ container_memory_working_set_bytes{container="app",namespace="ns",pod="unrelated
         assert_eq!(MetricsSourceSetting::parse("prometheus"), None);
         let yaml: MetricsSourceSetting = crate::yaml::from_str("kubelet").unwrap();
         assert_eq!(yaml, MetricsSourceSetting::Kubelet);
+    }
+}
+
+/// Node usage, or summed pod requests when metrics are unavailable.
+#[derive(Debug, Clone, Default)]
+pub struct NodeUsage {
+    pub usage: PodUsage,
+    pub pods: Option<usize>,
+    pub requests: bool,
+}
+
+/// Refresh node usage through the configured provider, retaining useful
+/// allocation information when metrics or pod listing are forbidden.
+pub async fn watch_node_metrics(
+    client: kube::Client,
+    setting: MetricsSourceSetting,
+    tx: UnboundedSender<HashMap<String, NodeUsage>>,
+) {
+    use k8s_openapi::api::core::v1::Node;
+    let (allocations_tx, allocations_rx) = tokio::sync::watch::channel(None);
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(watch_node_allocations(client.clone(), allocations_tx));
+    let source = detect_source(&client, setting).await;
+    loop {
+        let round = async {
+            let nodes = with_timeout("node list", async {
+                Api::<Node>::all(client.clone())
+                    .list(&ListParams::default())
+                    .await
+                    .context("Failed to list nodes for metrics")
+            })
+            .await?;
+            let mut result: HashMap<String, NodeUsage> = nodes
+                .items
+                .into_iter()
+                .filter_map(|node| {
+                    Some((
+                        node.metadata.name?,
+                        NodeUsage {
+                            requests: true,
+                            ..Default::default()
+                        },
+                    ))
+                })
+                .collect();
+            if let Some(allocations) = allocations_rx.borrow().as_ref() {
+                for (name, node) in &mut result {
+                    node.pods = Some(0);
+                    if let Some(allocation) = allocations.get(name) {
+                        *node = allocation.clone();
+                    }
+                }
+            }
+            if source == MetricsSource::Kubelet {
+                use futures::{StreamExt, stream};
+                let names: Vec<_> = result.keys().cloned().collect();
+                let mut summaries = stream::iter(names.into_iter().map(|name| {
+                    let client = &client;
+                    async move {
+                        let fetched = with_timeout("node summary", async {
+                            let text = kubelet_get(client, &name, "/stats/summary").await?;
+                            serde_json::from_str::<Value>(&text).context("Invalid node summary")
+                        })
+                        .await;
+                        (name, fetched)
+                    }
+                }))
+                .buffer_unordered(8);
+                while let Some((name, fetched)) = summaries.next().await {
+                    let Some(node) = result.get_mut(&name) else {
+                        continue;
+                    };
+                    match fetched {
+                        Ok(summary) => {
+                            let usage = PodUsage {
+                                cpu_millicores: summary
+                                    .pointer("/node/cpu/usageNanoCores")
+                                    .and_then(Value::as_f64)
+                                    .map(|n| n / 1e6),
+                                memory_bytes: summary
+                                    .pointer("/node/memory/workingSetBytes")
+                                    .and_then(Value::as_f64),
+                            };
+                            if usage.cpu_millicores.is_some() || usage.memory_bytes.is_some() {
+                                node.usage = usage;
+                                node.requests = false;
+                            }
+                        }
+                        Err(error) => {
+                            tracing::debug!("Node summary unavailable for {name}: {error:#}")
+                        }
+                    }
+                }
+            }
+            if source != MetricsSource::None && result.values().any(|n| n.requests) {
+                let resource = metrics_resource("NodeMetrics", "nodes");
+                match with_timeout("node metrics list", async {
+                    Api::<DynamicObject>::all_with(client.clone(), &resource)
+                        .list(&ListParams::default())
+                        .await
+                        .context("Failed to list NodeMetrics")
+                })
+                .await
+                {
+                    Ok(metrics) => {
+                        for item in metrics.items {
+                            let Some(node) = item
+                                .metadata
+                                .name
+                                .as_ref()
+                                .and_then(|name| result.get_mut(name))
+                                .filter(|n| n.requests)
+                            else {
+                                continue;
+                            };
+                            node.usage = PodUsage {
+                                cpu_millicores: item
+                                    .data
+                                    .pointer("/usage/cpu")
+                                    .and_then(Value::as_str)
+                                    .and_then(parse_cpu_millicores),
+                                memory_bytes: item
+                                    .data
+                                    .pointer("/usage/memory")
+                                    .and_then(Value::as_str)
+                                    .and_then(parse_memory_bytes),
+                            };
+                            node.requests = false;
+                        }
+                    }
+                    Err(error) => tracing::debug!("NodeMetrics unavailable: {error}"),
+                }
+            }
+            Ok::<_, anyhow::Error>(result)
+        };
+        tokio::select! {
+            _ = tx.closed() => return,
+            result = round => match result {
+                Ok(snapshot) => if tx.send(snapshot).is_err() { return; },
+                Err(error) => tracing::debug!("Node usage unavailable: {error:#}"),
+            }
+        }
+        tokio::select! {
+            _ = tx.closed() => return,
+            _ = tokio::time::sleep(POLL_INTERVAL) => {}
+        }
+    }
+}
+
+/// Poll usage for pods already supplied by the kind watch. One task covers
+/// every namespace, and each distinct node is scraped once per round.
+pub async fn watch_list_metrics(
+    client: kube::Client,
+    namespace: Option<String>,
+    setting: MetricsSourceSetting,
+    mut targets: tokio::sync::watch::Receiver<HashMap<PodKey, String>>,
+    tx: UnboundedSender<MetricsSnapshot>,
+) {
+    use futures::{StreamExt, stream};
+    let mut source = detect_source(&client, setting).await;
+    let mut trackers: HashMap<PodKey, CpuTracker> = HashMap::new();
+    let mut hydrated = false;
+    let mut proven = false;
+    let mut failures = 0;
+    loop {
+        let selected = targets.borrow_and_update().clone();
+        if selected.is_empty() {
+            tokio::select! { _ = tx.closed() => return, result = targets.changed() => if result.is_err() { return; } }
+            continue;
+        }
+        let wanted: HashSet<_> = selected.keys().cloned().collect();
+        trackers.retain(|key, _| wanted.contains(key));
+        let round = async {
+            if source == MetricsSource::None {
+                return Ok(HashMap::new());
+            }
+            if source == MetricsSource::MetricsServer {
+                let mut values = with_timeout(
+                    "PodMetrics list",
+                    metrics_server_snapshot(&client, namespace.as_deref(), ""),
+                )
+                .await?;
+                values.retain(|key, _| wanted.contains(key));
+                return Ok(values);
+            }
+            let nodes: HashSet<_> = selected
+                .values()
+                .filter(|node| !node.is_empty())
+                .cloned()
+                .collect();
+            let count = nodes.len();
+            let mut failed = 0;
+            let mut usage = HashMap::new();
+            let mut scrapes = stream::iter(nodes.into_iter().map(|node| {
+                let client = &client;
+                async move {
+                    let scraped = with_timeout("kubelet scrape", scrape_node(client, &node)).await;
+                    let summary = if !hydrated {
+                        with_timeout("kubelet summary", async {
+                            let text = kubelet_get(client, &node, "/stats/summary").await?;
+                            serde_json::from_str::<Value>(&text).context("Invalid kubelet summary")
+                        })
+                        .await
+                        .ok()
+                    } else {
+                        None
+                    };
+                    (scraped, summary)
+                }
+            }))
+            .buffer_unordered(8);
+            while let Some((scraped, summary)) = scrapes.next().await {
+                match scraped {
+                    Ok(text) => {
+                        for (key, total) in all_pod_totals(&text, &wanted) {
+                            let cpu = total.cpu_seconds.and_then(|cpu| {
+                                trackers.entry(key.clone()).or_default().observe((
+                                    cpu,
+                                    total
+                                        .cpu_timestamp_ms
+                                        .unwrap_or(chrono::Utc::now().timestamp_millis() as f64),
+                                ))
+                            });
+                            usage.insert(
+                                key,
+                                PodUsage {
+                                    cpu_millicores: cpu,
+                                    memory_bytes: total.memory_bytes,
+                                },
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        failed += 1;
+                        tracing::debug!("Pod metrics scrape failed: {error:#}");
+                    }
+                }
+                if let Some(summary) = summary {
+                    let namespaces: HashSet<_> =
+                        wanted.iter().map(|key| key.namespace.as_str()).collect();
+                    for ns in namespaces {
+                        let names = wanted
+                            .iter()
+                            .filter(|key| key.namespace == ns)
+                            .map(|key| key.name.clone())
+                            .collect();
+                        for (name, instant) in summary_usage(&summary, ns, &names) {
+                            let key = PodKey::new(ns, &name);
+                            let entry = usage.entry(key.clone()).or_insert(instant);
+                            if entry.cpu_millicores.is_none() {
+                                entry.cpu_millicores = instant.cpu_millicores;
+                            }
+                            if let Some(cpu) = entry.cpu_millicores {
+                                trackers.entry(key).or_default().seed(cpu);
+                            }
+                        }
+                    }
+                }
+            }
+            if count > 0 && failed == count && usage.is_empty() {
+                anyhow::bail!("All kubelet scrapes failed");
+            }
+            Ok(usage)
+        };
+        let result = tokio::select! { _ = tx.closed() => return, result = round => result };
+        match result {
+            Ok(pods) => {
+                failures = 0;
+                proven = true;
+                hydrated = true;
+                if tx.send(MetricsSnapshot { source, pods }).is_err() {
+                    return;
+                }
+            }
+            Err(error) => {
+                tracing::debug!("List metrics unavailable: {error:#}");
+                if !proven {
+                    source = fallback_from(
+                        source,
+                        source == MetricsSource::Kubelet && metrics_server_available(&client).await,
+                    );
+                    continue;
+                }
+                failures += 1;
+            }
+        }
+        tokio::select! { _ = tx.closed() => return, _ = tokio::time::sleep(poll_delay(failures)) => {} }
+    }
+}
+
+#[cfg(test)]
+mod list_metrics_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn one_node_scrape_serves_two_namespaces_without_pod_lists_and_stops_on_close() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (requests_tx, mut requests_rx) = tokio::sync::mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut bytes = vec![0; 8192];
+                let count = loop {
+                    socket.readable().await.unwrap();
+                    match socket.try_read(&mut bytes) {
+                        Ok(count) => break count,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                let request = String::from_utf8_lossy(&bytes[..count]);
+                let path = request.split_whitespace().nth(1).unwrap().to_string();
+                requests_tx.send(path.clone()).unwrap();
+                let body = if path.ends_with("/metrics/resource") {
+                    "# TYPE container_cpu_usage_seconds_total counter\ncontainer_memory_working_set_bytes{namespace=\"a\",pod=\"web\",container=\"main\"} 100\ncontainer_memory_working_set_bytes{namespace=\"b\",pod=\"web\",container=\"main\"} 200\n"
+                } else {
+                    "{\"pods\":[]}"
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let mut remaining = response.as_bytes();
+                while !remaining.is_empty() {
+                    socket.writable().await.unwrap();
+                    match socket.try_write(remaining) {
+                        Ok(count) => remaining = &remaining[count..],
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                        Err(error) => panic!("{error}"),
+                    }
+                }
+            }
+        });
+        let client = kube::Client::try_from(kube::Config::new(
+            format!("http://{address}").parse().unwrap(),
+        ))
+        .unwrap();
+        let (_targets_tx, targets_rx) = tokio::sync::watch::channel(
+            [
+                (PodKey::new("a", "web"), "worker".into()),
+                (PodKey::new("b", "web"), "worker".into()),
+            ]
+            .into(),
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(watch_list_metrics(
+            client,
+            None,
+            MetricsSourceSetting::Kubelet,
+            targets_rx,
+            tx,
+        ));
+        let snapshot = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            snapshot.pods[&PodKey::new("a", "web")].memory_bytes,
+            Some(100.0)
+        );
+        assert_eq!(
+            snapshot.pods[&PodKey::new("b", "web")].memory_bytes,
+            Some(200.0)
+        );
+        let mut paths = Vec::new();
+        while let Ok(path) = requests_rx.try_recv() {
+            paths.push(path);
+        }
+        assert_eq!(
+            paths,
+            [
+                "/api/v1/nodes/worker/proxy/metrics/resource",
+                "/api/v1/nodes/worker/proxy/stats/summary"
+            ]
+        );
+        drop(rx);
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        server.abort();
+    }
+}
+
+/// The allocation cache retains only node placement and scalar requests,
+/// never full Pod objects. Completed pods don't count as node allocations.
+#[derive(Clone)]
+struct NodeAllocation {
+    node: String,
+    usage: PodUsage,
+}
+
+fn node_allocation(pod: &Pod) -> Option<NodeAllocation> {
+    if pod
+        .status
+        .as_ref()
+        .and_then(|s| s.phase.as_deref())
+        .is_some_and(|p| matches!(p, "Succeeded" | "Failed"))
+    {
+        return None;
+    }
+    let spec = pod.spec.as_ref()?;
+    let mut usage = PodUsage::default();
+    for container in &spec.containers {
+        if let Some(requests) = container
+            .resources
+            .as_ref()
+            .and_then(|r| r.requests.as_ref())
+        {
+            if let Some(cpu) = requests.get("cpu").and_then(|q| parse_cpu_millicores(&q.0)) {
+                *usage.cpu_millicores.get_or_insert(0.0) += cpu;
+            }
+            if let Some(mem) = requests
+                .get("memory")
+                .and_then(|q| parse_memory_bytes(&q.0))
+            {
+                *usage.memory_bytes.get_or_insert(0.0) += mem;
+            }
+        }
+    }
+    Some(NodeAllocation {
+        node: spec.node_name.clone()?,
+        usage,
+    })
+}
+
+async fn watch_node_allocations(
+    client: kube::Client,
+    tx: tokio::sync::watch::Sender<Option<HashMap<String, NodeUsage>>>,
+) {
+    use futures::{FutureExt, StreamExt};
+    use kube::runtime::{WatchStreamExt, watcher};
+    let mut events = watcher(Api::<Pod>::all(client), watcher::Config::default())
+        .backoff(crate::watcher::CappedBackoff::new())
+        .boxed();
+    let mut pods: HashMap<PodKey, NodeAllocation> = HashMap::new();
+    let mut relist = HashMap::new();
+    let mut listed = false;
+    loop {
+        let event = tokio::select! { _ = tx.closed() => return, event = events.next() => event };
+        let Some(event) = event else {
+            return;
+        };
+        let mut batch = vec![event];
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        while let Some(Some(event)) = events.next().now_or_never() {
+            batch.push(event);
+        }
+        for event in batch {
+            let event = match event {
+                Ok(event) => event,
+                Err(error) => {
+                    tracing::debug!("Node allocations unavailable: {error}");
+                    if crate::kube::api::is_forbidden_error(&error.to_string()) {
+                        return;
+                    }
+                    continue;
+                }
+            };
+            match event {
+                watcher::Event::Init => {
+                    relist.clear();
+                    listed = false;
+                }
+                watcher::Event::InitDone => {
+                    pods = std::mem::take(&mut relist);
+                    listed = true;
+                }
+                watcher::Event::Apply(pod) | watcher::Event::InitApply(pod) => {
+                    let key = PodKey::new(
+                        pod.metadata.namespace.as_deref().unwrap_or_default(),
+                        pod.metadata.name.as_deref().unwrap_or_default(),
+                    );
+                    let store = if listed { &mut pods } else { &mut relist };
+                    if let Some(allocation) = node_allocation(&pod) {
+                        store.insert(key, allocation);
+                    } else {
+                        store.remove(&key);
+                    }
+                }
+                watcher::Event::Delete(pod) => {
+                    pods.remove(&PodKey::new(
+                        pod.metadata.namespace.as_deref().unwrap_or_default(),
+                        pod.metadata.name.as_deref().unwrap_or_default(),
+                    ));
+                }
+            }
+        }
+        if listed {
+            let mut totals: HashMap<String, NodeUsage> = HashMap::new();
+            for pod in pods.values() {
+                let entry = totals.entry(pod.node.clone()).or_insert_with(|| NodeUsage {
+                    requests: true,
+                    pods: Some(0),
+                    ..Default::default()
+                });
+                *entry.pods.get_or_insert(0) += 1;
+                if let Some(cpu) = pod.usage.cpu_millicores {
+                    *entry.usage.cpu_millicores.get_or_insert(0.0) += cpu;
+                }
+                if let Some(mem) = pod.usage.memory_bytes {
+                    *entry.usage.memory_bytes.get_or_insert(0.0) += mem;
+                }
+            }
+            tx.send_replace(Some(totals));
+        }
+    }
+}
+
+#[cfg(test)]
+mod node_allocation_tests {
+    use super::*;
+
+    #[test]
+    fn counts_only_nonterminated_scheduled_pods_and_extracts_typed_requests() {
+        let pod: Pod = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "web", "namespace": "apps"},
+            "spec": {"nodeName": "worker", "containers": [{"name": "web", "resources": {"requests": {"cpu": "100m", "memory": "64Mi"}}}]},
+            "status": {"phase": "Running"}
+        })).unwrap();
+        let allocation = node_allocation(&pod).unwrap();
+        assert_eq!(allocation.node, "worker");
+        assert_eq!(allocation.usage.cpu_millicores, Some(100.0));
+        assert_eq!(allocation.usage.memory_bytes, Some(64.0 * 1024.0 * 1024.0));
+        for phase in ["Succeeded", "Failed"] {
+            let mut completed = pod.clone();
+            completed.status.as_mut().unwrap().phase = Some(phase.into());
+            assert!(node_allocation(&completed).is_none());
+        }
+        let mut pending = pod;
+        pending.spec.as_mut().unwrap().node_name = None;
+        assert!(node_allocation(&pending).is_none());
     }
 }

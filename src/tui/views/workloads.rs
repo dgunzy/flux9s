@@ -302,7 +302,12 @@ fn resource_lines(
     ];
     let source = metrics.map(|m| m.source);
     for pod in pods {
-        let usage = metrics.and_then(|m| m.pods.get(&pod.name));
+        let usage = metrics.and_then(|m| {
+            m.pods.get(&crate::kube::metrics::PodKey::new(
+                &pod.namespace,
+                &pod.name,
+            ))
+        });
         lines.push(Line::from(format!("  {}", pod.name)));
         lines.push(resource_line(
             "CPU",
@@ -569,6 +574,7 @@ mod tests {
                 image: "ghcr.io/fluxcd/source-controller:v1.9.3".to_string(),
             }],
             pods: vec![PodRow {
+                namespace: "apps".into(),
                 name: "source-controller-abc".to_string(),
                 phase: "CrashLoopBackOff".to_string(),
                 ready: "0/1".to_string(),
@@ -618,6 +624,7 @@ mod tests {
 
     fn pod_with_limits() -> PodRow {
         PodRow {
+            namespace: "apps".into(),
             name: "web-1".to_string(),
             phase: "Running".to_string(),
             ready: "1/1".to_string(),
@@ -636,7 +643,7 @@ mod tests {
         MetricsSnapshot {
             source,
             pods: std::collections::HashMap::from([(
-                "web-1".to_string(),
+                crate::kube::metrics::PodKey::new("apps", "web-1"),
                 crate::kube::metrics::PodUsage {
                     cpu_millicores: Some(cpu),
                     memory_bytes: Some(mem_mi * 1024.0 * 1024.0),
@@ -759,7 +766,10 @@ mod tests {
     fn resources_wait_for_source_and_first_cpu_sample() {
         assert!(resources_text(None).contains("detecting metrics source"));
         let mut metrics = snapshot(MetricsSource::Kubelet, 0.0, 10.0);
-        if let Some(usage) = metrics.pods.get_mut("web-1") {
+        if let Some(usage) = metrics
+            .pods
+            .get_mut(&crate::kube::metrics::PodKey::new("apps", "web-1"))
+        {
             usage.cpu_millicores = None;
         }
         assert!(resources_text(Some(&metrics)).contains("measuring…"));

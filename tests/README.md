@@ -65,3 +65,12 @@ TUI-specific tests such as `snapshot_tests` and `navigation_tests` are feature-g
 ## Snapshots
 
 Snapshot files are stored under `tests/snapshots/` and are validated by `snapshot_tests.rs`. When intentional rendering changes occur, review the updated snapshots carefully before accepting them.
+
+Real-terminal smoke coverage: build with `cargo build --bin flux9s`, then run
+`python3 scripts/tui-smoke.py --context kind-flux9s-simple` (or
+`kind-flux9s-legacy`). Requires tmux, Python 3, kubectl and a reachable dev cluster.
+The harness covers Pod describe/logs, namespace changes, Node drill-down, Back,
+and small-terminal navigation using the real binary with isolated local state.
+
+Add `--metrics-source kubelet` to require live CPU and memory usage. Both modes
+also check that node drill-down from a mixed list returns to that list.

@@ -32,6 +32,11 @@ pub struct Gvk {
 }
 
 impl Gvk {
+    /// Whether this identifies the named kind in Kubernetes' core API group.
+    pub fn is_core(&self, kind: &str) -> bool {
+        self.group.is_empty() && self.kind == kind
+    }
+
     /// `apiVersion` as it appears in manifests (`v1`, `apps/v1`).
     pub fn api_version(&self) -> String {
         if self.group.is_empty() {
@@ -103,6 +108,8 @@ impl KindNames {
 pub enum Column {
     /// A column flux9s computes itself.
     Builtin(BuiltinColumn),
+    /// Curated Pod/Node fields, computed on watch updates.
+    Native(crate::kube::native_lists::NativeColumn),
     /// A value at a JSONPath-style path (`.status.phase`).
     JsonPath { name: String, path: String },
 }
@@ -111,6 +118,7 @@ impl Column {
     pub fn header(&self) -> String {
         match self {
             Column::Builtin(b) => b.header().to_string(),
+            Column::Native(c) => c.header().into(),
             Column::JsonPath { name, .. } => name.to_uppercase(),
         }
     }
@@ -245,12 +253,14 @@ impl KindSpec {
             scope,
             names,
             family: Family::Native,
-            columns: vec![
-                Column::Builtin(BuiltinColumn::Status),
-                Column::Builtin(BuiltinColumn::ManagedBy),
-                Column::Builtin(BuiltinColumn::Age),
-                Column::Builtin(BuiltinColumn::Message),
-            ],
+            columns: crate::kube::native_lists::columns(&gvk_for_caps).unwrap_or_else(|| {
+                vec![
+                    Column::Builtin(BuiltinColumn::Status),
+                    Column::Builtin(BuiltinColumn::ManagedBy),
+                    Column::Builtin(BuiltinColumn::Age),
+                    Column::Builtin(BuiltinColumn::Message),
+                ]
+            }),
             health: HealthRule::Kstatus,
             caps: Capabilities::curated(&gvk_for_caps),
         }

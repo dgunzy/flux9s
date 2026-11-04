@@ -389,6 +389,7 @@ async fn kind_discovery_and_live_kind_list() {
     let task = tokio::spawn(watch_kind(
         client,
         KindListRequest {
+            node: None,
             spec: deployments,
             namespace: Some("flux-system".to_string()),
         },
@@ -1184,6 +1185,7 @@ async fn mixed_watch_lists_each_kubernetes_kind() {
             .unwrap_or_else(|| panic!("{kind} not discovered"))
     };
     let request = |spec| KindListRequest {
+        node: None,
         spec,
         namespace: Some("flux-resources".to_string()),
     };

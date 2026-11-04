@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Curated Pod and Node lists with live CPU/memory usage, namespace-safe metrics,
+  explicit resource allocation labels, and all-namespace node-to-pod drill-down.
+- Isolated terminal smoke tests for navigation, logs, fallback allocations and
+  real kubelet usage on the dev clusters.
+
+### Fixed
+- Node drill-down preserves mixed-list history and ignores the session namespace.
+- All-namespace Pod metrics scrape each node once per round without relisting pods.
+
 ## [1.5.1] - 2026-10-30
 
 # Version 1.5.1 Changelog

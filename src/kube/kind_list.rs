@@ -60,6 +60,8 @@ const MAX_CELL_CHARS: usize = 256;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KindListRequest {
     pub spec: KindSpec,
+    /// Limit Pod lists to a node (server-side field selector).
+    pub node: Option<String>,
     /// `None` = all namespaces (and always for cluster-scoped kinds).
     pub namespace: Option<String>,
 }
@@ -371,6 +373,7 @@ pub fn kind_row(
                 .map(|t| crate::age::compact(now - t))
                 .unwrap_or_default(),
             Column::Builtin(BuiltinColumn::ManagedBy) => sanitize_cell(&managed_text),
+            Column::Native(column) => sanitize_cell(&column.cell(obj)),
             Column::JsonPath { path, .. } => sanitize_cell(&eval_path(obj, path)),
         })
         .collect();
@@ -772,9 +775,15 @@ async fn watch_kind_with(
     };
 
     let start = || {
-        watcher(api.clone(), watcher::Config::default())
-            .backoff(crate::watcher::CappedBackoff::new())
-            .boxed()
+        watcher(
+            api.clone(),
+            match &request.node {
+                Some(node) => watcher::Config::default().fields(&format!("spec.nodeName={node}")),
+                None => watcher::Config::default(),
+            },
+        )
+        .backoff(crate::watcher::CappedBackoff::new())
+        .boxed()
     };
     let mut events = start();
     let mut store = KindStore::default();
@@ -1410,6 +1419,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let request = KindListRequest {
             spec: spec(),
+            node: None,
             namespace: Some("apps".into()),
         };
         let task = tokio::spawn(watch_kind_with(
