@@ -50,9 +50,11 @@ impl App {
         } else {
             None
         };
-        self.async_state
-            .kind_list
-            .request(KindListRequest { spec, namespace });
+        self.async_state.kind_list.request(KindListRequest {
+            spec,
+            namespace,
+            node: None,
+        });
         self.view_state.kind_list_error = None;
         self.view_state.filter.clear();
         self.view_state.filter_mode = false;
@@ -142,13 +144,17 @@ impl App {
         if self.view_state.current_view != View::KindList {
             return;
         }
-        if let Some(spec) = self
-            .async_state
-            .kind_list
-            .key()
-            .map(|request| request.spec.clone())
-        {
-            self.show_kind_list(spec);
+        if let Some(mut request) = self.async_state.kind_list.key().cloned() {
+            if request.node.is_some() {
+                return;
+            }
+            self.show_kind_list(request.spec.clone());
+            request.namespace = if request.spec.is_namespaced() {
+                self.namespace.clone()
+            } else {
+                None
+            };
+            self.async_state.kind_list.request(request);
         }
     }
 
@@ -159,6 +165,9 @@ impl App {
         }
         let request = self.async_state.kind_list.key()?;
         let mut label = format!("Cluster › {}", request.spec.names.plural);
+        if let Some(node) = &request.node {
+            label.push_str(&format!(" on {node}"));
+        }
         if let Some(snapshot) = self.async_state.kind_list.result() {
             let shown = self.filtered_kind_rows().len();
             if shown == snapshot.rows.len() {
@@ -229,9 +238,52 @@ impl App {
         Some(ResourceKey::new(kind, &row.namespace, &row.name))
     }
 
+    /// Only core Nodes offer node-to-pod navigation, not CRDs named Node.
+    pub(super) fn selected_is_node(&self) -> bool {
+        let spec = if self.view_state.current_view == View::ResourceList {
+            self.selected_native_row().map(|(spec, _)| spec)
+        } else {
+            self.async_state
+                .kind_list
+                .key()
+                .map(|request| &request.spec)
+        };
+        spec.is_some_and(|spec| spec.gvk.is_core("Node"))
+    }
+
+    /// Drill into a node without replacing the originating kind or mixed view.
+    pub(crate) fn open_node_pods(&mut self, spec: KindSpec, node: String) {
+        if self.view_state.current_view == View::KindList {
+            self.push_current_view();
+        } else {
+            self.navigate_to(View::KindList);
+        }
+        self.show_kind_list(spec);
+        if let Some(mut request) = self.async_state.kind_list.key().cloned() {
+            request.node = Some(node);
+            request.namespace = None;
+            self.async_state.kind_list.request(request);
+        }
+        self.sync_mixed_watch();
+    }
+
     /// Enter on a kind row: workload kinds open the shared workload detail
     /// view (the same one the graph drill-down uses); others are described.
     pub(crate) fn kind_enter_selected(&mut self) {
+        if let Some(key) = self
+            .selected_kind_object()
+            .filter(|_| self.selected_is_node())
+        {
+            if let Some(spec) = crate::models::kinds::catalog().find_by_group_kind("", "Pod") {
+                self.open_node_pods(spec, key.name);
+            } else {
+                self.set_status_message((
+                    "Pods are not available in discovery yet — try :pods".into(),
+                    true,
+                ));
+            }
+            return;
+        }
         if !self
             .selected_native_caps()
             .is_some_and(|c| c.workload_detail)

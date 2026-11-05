@@ -192,6 +192,7 @@ pub struct ContainerInfo {
 /// One pod row for the workload detail's PODS table.
 #[derive(Debug, Clone)]
 pub struct PodRow {
+    pub namespace: String,
     pub name: String,
     /// Pod phase, with `Terminating` derived from a deletion timestamp.
     pub phase: String,
@@ -508,6 +509,11 @@ fn pod_row_from_json(pod: &Value) -> Option<PodRow> {
         .and_then(|ts| ts.parse::<chrono::DateTime<chrono::Utc>>().ok());
 
     Some(PodRow {
+        namespace: pod
+            .pointer("/metadata/namespace")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
         name,
         phase,
         ready: format!("{ready_count}/{total}"),

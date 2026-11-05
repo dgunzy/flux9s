@@ -21,6 +21,7 @@ fn is_health_column(column: &Column) -> bool {
     matches!(
         column,
         Column::Builtin(BuiltinColumn::Status | BuiltinColumn::Health)
+            | Column::Native(crate::kube::native_lists::NativeColumn::Phase)
     )
 }
 

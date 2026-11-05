@@ -792,7 +792,7 @@ pub enum NavEntry {
     /// A view (for `KindList`, whichever kind list is loaded).
     View(View),
     /// A kind list of this kind (#267) — reopened if another kind replaced it.
-    Kind(crate::models::kinds::KindSpec),
+    Kind(Box<crate::kube::kind_list::KindListRequest>),
 }
 
 impl NavEntry {

@@ -209,3 +209,24 @@ CRDs labeled `app.kubernetes.io/part-of=flux` (Flagger, tofu-controller,
 ExternalArtifact controllers) can join the Flux list itself, view-only — turn
 it on with `discoverFluxResources` or `:discover` for a session. See
 [Discovering Flux-adjacent kinds](/configuration/#discovering-flux-adjacent-resource-kinds).
+
+### Pods and nodes
+
+`:pods` (`:po`) shows ready containers, status, restarts, CPU, memory, node,
+owner and age. It follows `:ns`; all-namespace lists distinguish identically named
+pods in different namespaces. Enter describes a pod; `l` opens its logs using the
+existing container picker.
+
+`:nodes` shows health, roles, CPU and memory usage against allocatable capacity,
+pod count, kubelet version, owner and age. Enter opens pods on the selected node,
+across all namespaces, regardless of `:ns`. The header identifies the node; Esc returns to
+the node list. `:pods` opens the unfiltered pod list again.
+
+Usage refreshes every 15 seconds through `metricsSource`. Pod usage uses the
+kubelet/metrics-server provider. Node usage reads kubelet summaries, then falls
+back to NodeMetrics. Cells always use the same labelled format: `use / req / lim` for pods and
+`use / req / cap` for nodes. Missing usage stays `-`; request totals are never
+presented as measured usage. Node fallback requests count active pods only. Missing
+values are `-`, never zero usage. Node pod counts and request totals require
+permission to list pods across namespaces. All metrics tasks stop when the list
+is closed. These lists follow the existing `nativeResources` setting.

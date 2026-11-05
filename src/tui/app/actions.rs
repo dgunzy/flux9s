@@ -121,6 +121,7 @@ pub(crate) enum ActionId {
     KindLogs,
     Restart,
     KindDeletePod,
+    NodePods,
     KindEnter,
     KindDescribe,
     NamespaceHotkey,
@@ -766,6 +767,22 @@ pub(crate) const ACTIONS: &[Action] = &[
         )),
         sets_status: false,
     },
+    Action {
+        id: ActionId::NodePods,
+        keys: &[code(KeyCode::Enter)],
+        when: |app| kind_caps(app, |c| c.view) && app.selected_is_node(),
+        spec: ActionSpec::Builtin(|app, _| {
+            app.kind_enter_selected();
+            None
+        }),
+        footer: Some(("Enter", "Pods")),
+        help: Some((
+            HelpColumn::Navigation,
+            "<Enter>",
+            "Pods on the selected node (:nodes)",
+        )),
+        sets_status: false,
+    },
     // Kind lists: workload kinds open the workload detail, others describe.
     Action {
         id: ActionId::KindEnter,
@@ -782,7 +799,7 @@ pub(crate) const ACTIONS: &[Action] = &[
     Action {
         id: ActionId::KindDescribe,
         keys: &[code(KeyCode::Enter)],
-        when: |app| kind_caps(app, |c| !c.workload_detail),
+        when: |app| kind_caps(app, |c| !c.workload_detail) && !app.selected_is_node(),
         spec: ActionSpec::Builtin(|app, _| {
             app.kind_enter_selected();
             None
@@ -1185,6 +1202,7 @@ const EVENTS_LAYOUT: &[FooterItem] = &[
 const KIND_LIST_LAYOUT: &[FooterItem] = &[
     Act(A::Move),
     Act(A::Page),
+    Act(A::NodePods),
     Act(A::KindEnter),
     Act(A::KindDescribe),
     Act(A::Describe),
@@ -1209,6 +1227,7 @@ const MIXED_NATIVE_ROW_LAYOUT: &[FooterItem] = &[
     Act(A::Move),
     Act(A::Page),
     Act(A::CommandMode),
+    Act(A::NodePods),
     Act(A::KindEnter),
     Act(A::KindDescribe),
     Act(A::FilterOrSearch),

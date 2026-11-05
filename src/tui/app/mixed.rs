@@ -100,6 +100,7 @@ impl App {
             .iter()
             .filter_map(resolve_native)
             .map(|spec| KindListRequest {
+                node: None,
                 namespace: if spec.is_namespaced() {
                     self.namespace.clone()
                 } else {
