@@ -30,6 +30,7 @@ pub mod objects;
 pub mod ownership;
 pub mod standing;
 pub mod sweep;
+pub mod tls;
 pub mod workloads;
 
 pub use api::{api_resource_for_kind, get_api_resource_with_fallback};
@@ -57,7 +58,7 @@ use url::Url;
 /// - Adding it to NO_PROXY if it appears to be an internal domain
 /// - Ensuring proper proxy bypass for corporate environments
 pub async fn create_client() -> Result<Client> {
-    let config = Config::infer().await?;
+    let mut config = Config::infer().await?;
 
     // Extract cluster host for NO_PROXY auto-detection
     // Convert Uri to string and parse to extract hostname
@@ -74,6 +75,7 @@ pub async fn create_client() -> Result<Client> {
         tracing::warn!("Failed to parse cluster URL: {}", cluster_url_str);
     }
 
+    tls::prepare(&mut config);
     let client = Client::try_from(config)?;
     tracing::debug!("Kubernetes client created successfully");
     Ok(client)
@@ -403,7 +405,7 @@ pub async fn create_client_from_kubeconfig_path(kubeconfig_path: &Path) -> Resul
         })?;
 
     // Create config from the kubeconfig
-    let config = Config::from_custom_kubeconfig(kubeconfig, &kube::config::KubeConfigOptions::default())
+    let mut config = Config::from_custom_kubeconfig(kubeconfig, &kube::config::KubeConfigOptions::default())
         .await
         .map_err(|e| {
             anyhow::anyhow!(
@@ -428,6 +430,7 @@ pub async fn create_client_from_kubeconfig_path(kubeconfig_path: &Path) -> Resul
         ensure_no_proxy_bypass(host);
     }
 
+    tls::prepare(&mut config);
     let client = Client::try_from(config)?;
     tracing::info!(
         "Kubernetes client created from kubeconfig: {}",
@@ -449,7 +452,7 @@ pub async fn create_client_for_context(context_name: &str) -> Result<Client> {
     }
 
     // Load config with specific context
-    let config = Config::from_kubeconfig(&kube::config::KubeConfigOptions {
+    let mut config = Config::from_kubeconfig(&kube::config::KubeConfigOptions {
         context: Some(context_name.to_string()),
         ..Default::default()
     })
@@ -470,6 +473,7 @@ pub async fn create_client_for_context(context_name: &str) -> Result<Client> {
         ensure_no_proxy_bypass(host);
     }
 
+    tls::prepare(&mut config);
     let client = Client::try_from(config)?;
     tracing::info!("Kubernetes client created for context: {}", context_name);
     Ok(client)

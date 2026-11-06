@@ -107,13 +107,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
-      - name: Build (musl with vendored OpenSSL)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: cargo build --release --target ${{ matrix.target }} --features vendored-openssl
-
-      - name: Build (other targets)
-        if: matrix.target != 'x86_64-unknown-linux-musl'
+      # TLS is rustls, so no target links OpenSSL (no vendoring for musl).
+      - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+
+      # A Homebrew dylib linked from the runner (e.g. openssl@4) breaks the
+      # binary on machines without it: allow only system libraries.
+      - name: Check macOS binary links only system libraries
+        if: runner.os == 'macOS'
+        run: |
+          otool -L target/${{ matrix.target }}/release/flux9s | tail -n +2 | tee /dev/stderr \
+            | awk '{print $1}' | grep -Ev '^(/System/Library/|/usr/lib/)' && exit 1 || true
 
       - name: Create archive (Unix)
         if: matrix.use_tar
@@ -144,12 +148,6 @@ jobs:
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
-
-      - name: Install OpenSSL (Windows)
-        run: |
-          vcpkg install openssl:x64-windows-static-md
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
-          echo "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\packages\openssl_x64-windows-static-md" >> $env:GITHUB_ENV
 
       - name: Cache cargo registry
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

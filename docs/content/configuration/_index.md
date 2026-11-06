@@ -359,6 +359,24 @@ FLUX9S_CONNECT_TIMEOUT=15 flux9s
 
 The timeout must be a positive integer. The default is `10` seconds.
 
+#### TLS and proxies
+
+flux9s connects with [rustls](https://github.com/rustls/rustls) and links no
+system OpenSSL, so its binaries need no extra libraries. It verifies the API server
+the same way `kubectl` does:
+
+- **`certificate-authority` / `certificate-authority-data` set** — only that CA is trusted.
+- **No CA in the kubeconfig** — the operating system's trust store is used (macOS
+  Keychain, Windows certificate store, the system bundle on Linux), so corporate
+  root CAs installed there are trusted.
+- **The server's own certificate in `certificate-authority-data`** (some login
+  tools write it there instead of the CA that issued it) — it can't anchor a
+  chain, so flux9s ignores it and uses the operating system's trust store, as
+  above.
+- **`tls-server-name`** and **`insecure-skip-tls-verify`** are honored.
+- **`proxy-url`** (HTTP or SOCKS5) and the `HTTPS_PROXY` / `NO_PROXY` environment
+  variables are honored.
+
 ---
 
 ### Namespace Hotkeys
