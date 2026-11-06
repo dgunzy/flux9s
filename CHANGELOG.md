@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-11-06
+
+# Version 1.5.2 Changelog
+
+**Added**
+- Enhanced pod and node views with improved UI/UX
+
+**Changed**
+- Upgraded kube dependency from 4.2.0 to 5.0.0
+- Updated Flux CRDs to latest versions
+- Switched CI to use rustls
+
+**Fixed**
+- CI stability improvements
+
 ### Added
 - Curated Pod and Node lists with live CPU/memory usage, namespace-safe metrics,
   explicit resource allocation labels, and all-namespace node-to-pod drill-down.
