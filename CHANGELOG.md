@@ -13,7 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolated terminal smoke tests for navigation, logs, fallback allocations and
   real kubelet usage on the dev clusters.
 
+### Changed
+- TLS uses rustls instead of OpenSSL. Release binaries no longer link a system
+  OpenSSL, so Homebrew installs work without a matching `openssl@N`.
+  Kubeconfigs without a CA are verified against the OS trust store, which picks
+  up corporate root CAs. The `vendored-openssl` feature is now a no-op.
+- kube 5.0 with k8s-openapi 0.29.
+
 ### Fixed
+- macOS release binaries failed to start (`Library not loaded: …/openssl@4/lib/libssl.4.dylib`)
+  on machines without Homebrew's `openssl@4`.
+- Kubeconfigs whose `certificate-authority-data` holds the API server's own
+  certificate (rather than its CA) connect through the OS trust store instead of
+  failing with `UnknownIssuer`.
 - Node drill-down preserves mixed-list history and ignores the session namespace.
 - All-namespace Pod metrics scrape each node once per round without relisting pods.
 

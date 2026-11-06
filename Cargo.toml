@@ -68,11 +68,16 @@ exclude = [
 default = ["tui"]
 # Terminal UI (ratatui + crossterm) — disable for headless library usage
 tui = ["dep:ratatui", "dep:crossterm", "dep:unicode-width"]
-# Vendor OpenSSL for static linking (needed for musl targets)
-vendored-openssl = ["openssl/vendored"]
+# No-op, kept so existing `--features vendored-openssl` builds still work:
+# TLS is rustls now, with no OpenSSL to vendor.
+vendored-openssl = []
 
 [dependencies]
-# Kubernetes client with HTTP proxy support - use openssl-tls for better cert support
+# Kubernetes client with HTTP proxy support. TLS is rustls (ring provider):
+# no system OpenSSL to link, so release binaries are self-contained (a
+# Homebrew install no longer needs a matching `openssl@N`). Clusters whose
+# kubeconfig carries no CA are verified against the OS trust store
+# (rustls-platform-verifier), so corporate root CAs installed there work.
 # NOTE: "http-proxy" and "socks5" look unused to dependency-pruning tools (no
 # code references them) but they gate kubeconfig `proxy-url:` support inside
 # kube itself — removing them breaks proxied clusters at runtime (#202).
@@ -83,10 +88,11 @@ kube = { version = "5.0.0", default-features = false, features = [
     "derive",
     "http-proxy",
     "socks5",
-    "openssl-tls",
+    "rustls-tls",
+    "ring",
 ] }
 # k8s-openapi version feature - must match kube-rs version
-k8s-openapi = { version = "0.28.0", default-features = false, features = [
+k8s-openapi = { version = "0.29.0", default-features = false, features = [
     "v1_36",
 ] }
 
@@ -143,9 +149,6 @@ csscolorparser = "0.9"
 # CLI argument parsing
 clap = { version = "4.6", features = ["derive"] }
 clap_complete = "4.6"
-
-# OpenSSL - explicit dependency for vendored feature support
-openssl = { version = "0.10", optional = true }
 
 # Logging (tracing is already a transitive dependency via kube-rs, but we need it explicitly for macros)
 tracing = "0.1"
