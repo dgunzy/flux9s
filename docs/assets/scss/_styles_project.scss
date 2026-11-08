@@ -438,12 +438,7 @@ code:not(pre code) {
       // Override Docsy's col-xl-8 to use more space
       flex: 0 0 auto;
       width: 70% !important; // Use 70% instead of 66.7%
-      max-width: 70% !important;
-    }
-    
-    @media (min-width: 1400px) {
-      width: 72% !important;
-      max-width: 72% !important;
+      max-width: 70% !important; // with the two 15% sidebars: 100%
     }
   }
   
