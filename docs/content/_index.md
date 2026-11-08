@@ -50,7 +50,7 @@ notoc: true
             <p class="small text-muted">Video playback is not available. The demo shows flux9s navigating resources, viewing details, and managing Flux deployments.</p>
           </div>
         </div>
-        <p class="text-muted small mt-2 text-center">Watch flux9s in action - navigate resources, view details, and manage your Flux deployments</p>
+        <p class="text-muted small mt-2 text-center">Navigating resources, opening details, and running operations</p>
       </div>
     </div>
     
@@ -87,8 +87,8 @@ notoc: true
       <p>flux9s is listed as a community UI in the <a href="https://fluxcd.io/ecosystem/#flux-uis--guis" target="_blank" rel="noopener noreferrer">Flux ecosystem</a>.</p>
 
       <h2>The problem it solves</h2>
-      <p>Flux already provides strong controller APIs, and the <a href="https://fluxoperator.dev/web-ui/" target="_blank" rel="noopener noreferrer">Flux Operator Web UI</a> is an excellent browser-based experience for dashboards and cluster-wide visibility. <code>flux9s</code> was built to complement that workflow, not replace it.</p>
-      <p>Use <code>flux9s</code> when you want to stay in the terminal and:</p>
+      <p>The <a href="https://fluxoperator.dev/web-ui/" target="_blank" rel="noopener noreferrer">Flux Operator Web UI</a> gives you dashboards in the browser. <code>flux9s</code> is for when you'd rather stay in the terminal; it complements the Web UI rather than replacing it.</p>
+      <p>Use <code>flux9s</code> to:</p>
       <ul>
         <li>see Flux reconciliation state update live</li>
         <li>inspect Kustomizations, HelmReleases, sources, and Flux Operator resources in one place</li>
@@ -98,12 +98,12 @@ notoc: true
       </ul>
 
       <h2>Why it stays fast</h2>
-      <p><code>flux9s</code> uses the Kubernetes Watch API for supported Flux resource types instead of repeatedly polling. By default it starts scoped to a namespace, with the default configuration targeting <code>flux-system</code>, and only switches to cluster-wide watches when you explicitly choose <code>all</code>. That keeps API usage and terminal updates lighter on larger clusters.</p>
-      <p>The same watch-driven model is also used to surface Flux controller pod state and deployment metadata in the header, which is how the UI can show controller readiness and the detected Flux bundle version alongside resource health.</p>
+      <p><code>flux9s</code> uses the Kubernetes Watch API for supported Flux resource types instead of repeatedly polling. It starts in one namespace (<code>flux-system</code> by default) and only watches the whole cluster when you choose <code>all</code>, which keeps API load low on large clusters.</p>
+      <p>The header uses the same watches to show controller readiness and the installed Flux version.</p>
 
       <h2>Built for Flux and Flux Operator</h2>
-      <p>Beyond core Flux controller resources, <code>flux9s</code> also understands Flux Operator resources such as <code>FluxInstance</code>, <code>ResourceSet</code>, <code>ResourceSetInputProvider</code>, and <code>FluxReport</code>. That support shows up in practical features, not just extra rows in a table: graph and history views extend to operator-managed resources, and the graph builder follows the same relationship-discovery patterns used by the Flux Operator Web UI.</p>
-      <p>For a deeper code-level walkthrough, see the <a href="{{< relref "developer-guide/" >}}">Developer Guide</a>. If you want to get running quickly, jump to <a href="{{< relref "getting-started/" >}}">Getting Started</a>.</p>
+      <p>Beyond core Flux controller resources, <code>flux9s</code> also understands Flux Operator resources such as <code>FluxInstance</code>, <code>ResourceSet</code>, <code>ResourceSetInputProvider</code>, and <code>FluxReport</code>. Graph and history views cover them too, and the graph follows the same relationships the Flux Operator Web UI does.</p>
+      <p>For how the code fits together, see the <a href="{{< relref "developer-guide/" >}}">Developer Guide</a>. If you want to get running quickly, jump to <a href="{{< relref "getting-started/" >}}">Getting Started</a>.</p>
     </div>
   </div>
 </div>

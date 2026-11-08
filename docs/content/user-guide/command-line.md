@@ -49,7 +49,7 @@ flux9s config list
 flux9s config get readOnly
 flux9s config set readOnly false
 flux9s config set nativeResources true
-flux9s config set ui.skinReadOnly rose-pine
+flux9s config set ui.skinReadOnly rose-pine-moon
 
 # Context- or cluster-specific values
 flux9s config set ui.skin dracula --cluster my-cluster

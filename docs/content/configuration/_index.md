@@ -2,7 +2,7 @@
 title: "Configuration"
 linkTitle: "Configuration"
 weight: 4
-description: "Configure flux9s to suit your needs"
+description: "The config file, every option, views, TLS and proxies, and environment variables"
 toc: true
 type: docs
 ---
@@ -15,7 +15,7 @@ flux9s stores its configuration in a YAML file. The location depends on your ope
 | ----------- | ------------------------------ |
 | **Linux**   | `~/.config/flux9s/config.yaml` |
 | **macOS**   | `~/.config/flux9s/config.yaml` |
-| **Windows** | `%APPDATA%\flux9s\config.yaml` |
+| **Windows** | `%APPDATA%\flux9s\config\config.yaml` |
 
 To find the exact path on your system:
 
@@ -39,7 +39,7 @@ flux9s config path
 | `discoverFluxResources` | boolean | `false` | Opt-in dynamic discovery of Flux-adjacent CRDs (see below); needs `nativeResources: true` |
 | `nativeResources` | boolean | `false` | **Preview.** Browse native Kubernetes resources and CRDs with `:<kind>` ([details](/user-guide/native-resources/#browsing-any-kind)); off keeps flux9s Flux-only — no API discovery or extra watches, including `discoverFluxResources`. Try it per session with `:native` |
 | `metricsSource` | string | `auto` | Pod CPU/memory source: `auto`, `kubelet`, `metrics-server`, `none` (see below) |
-| `editor` | string | *(none)* | Editor command for `e` keybinding; falls back through `$VISUAL`, `$EDITOR`, then `vi` |
+| `editor` | string | *(none)* | Editor for the `e` key; `FLUX9S_EDITOR` overrides it, and without either flux9s uses `$VISUAL`, `$EDITOR`, then `vi` |
 | `ui.enableMouse` | bool | `false` | Enable mouse support |
 | `ui.headless` | bool | `false` | Hide the header bar |
 | `ui.noIcons` | bool | `false` | Disable Unicode icons for terminal compatibility |
@@ -67,10 +67,6 @@ flux9s config set readOnly false
 
 **During a session:**
 Use the `:readonly` command to toggle read-only mode for that session.
-
-{{% alert title="Safety First" color="info" %}}
-Read-only mode is enabled by default. Only disable it when you need to perform write operations.
-{{% /alert %}}
 
 ---
 
@@ -128,8 +124,11 @@ Accepted kinds are any Flux resource type name or alias:
 | `HelmRelease` | `hr`, `helmrelease`, `helmreleases` |
 | `GitRepository` | `gitrepo`, `gitrepository`, `gitrepositories` |
 | `OCIRepository` | `oci`, `ocirepository`, `ocirepositories` |
-| `HelmRepository` | `helmrepository`, `helmrepositories` |
+| `HelmRepository` | `helmrepo`, `helmrepository`, `helmrepositories` |
+| `Bucket` | `bucket`, `buckets` |
 | `HelmChart` | `helmchart`, `helmcharts` |
+| `ExternalArtifact` | `ea`, `externalartifact`, `externalartifacts` |
+| `ArtifactGenerator` | `ag`, `artifactgenerator`, `artifactgenerators` |
 | `Alert` | `alert`, `alerts` |
 | `Provider` | `provider`, `providers` |
 | `Receiver` | `receiver`, `receivers` |
@@ -139,6 +138,7 @@ Accepted kinds are any Flux resource type name or alias:
 | `FluxInstance` | `fi`, `fluxinstance`, `fluxinstances` |
 | `FluxReport` | `fr`, `fluxreport`, `fluxreports` |
 | `ResourceSet` | `rset`, `resourceset`, `resourcesets` |
+| `ResourceSetInputProvider` | `rsip`, `resourcesetinputprovider`, `resourcesetinputproviders` |
 
 You can also change the filter interactively during a session by typing `:ks`, `:hr`, `:ks,hr`, etc. in the TUI, or `:all` to clear it.
 
@@ -300,8 +300,7 @@ Guard rails:
 - When the flag is off (the default), no CRD watch runs and no extra API
   calls are made
 
-Use the `:discover` command to arm or disarm discovery mid-session without a
-restart (the sibling of `:readonly`). The toggle applies to the current
+`:discover` turns discovery on or off without a restart. The toggle applies to the current
 session only — including across a context switch — and never writes the
 config file; set `discoverFluxResources` above to change the default.
 Disabling stops the CRD watch, deregisters the discovered kinds along with
@@ -320,8 +319,8 @@ the same order [ktop](https://github.com/vladimirvivien/ktop) uses:
    isn't permitted.
 3. **none** — no usage; the columns show requests/limits instead.
 
-Every step fails closed: missing permissions or an absent metrics-server just
-move on to the next source, silently. The source in use is shown in the view
+If a source isn't available (no permission, no metrics-server), flux9s
+quietly moves on to the next one. The source in use is shown in the view
 title. Force one with:
 
 ```bash
@@ -329,8 +328,8 @@ flux9s config set metricsSource metrics-server   # auto | kubelet | metrics-serv
 ```
 
 Neither source supports watch, so usage is polled every 15s (both refresh
-about that often), backing off to 2 minutes while requests fail. Opening a
-view hydrates immediately: with the kubelet source, one read of each node's
+about that often), backing off to 2 minutes while requests fail. Usage shows as
+soon as a view opens: with the kubelet source, one read of each node's
 summary (`/stats/summary`, same `nodes/proxy` permission) gives CPU straight
 away instead of waiting for the next counter update.
 
@@ -359,23 +358,27 @@ FLUX9S_CONNECT_TIMEOUT=15 flux9s
 
 The timeout must be a positive integer. The default is `10` seconds.
 
-#### TLS and proxies
+---
 
-flux9s connects with [rustls](https://github.com/rustls/rustls) and links no
-system OpenSSL, so its binaries need no extra libraries. It verifies the API server
-the same way `kubectl` does:
+### TLS and Proxies {#tls-and-proxies}
 
-- **`certificate-authority` / `certificate-authority-data` set** — only that CA is trusted.
-- **No CA in the kubeconfig** — the operating system's trust store is used (macOS
-  Keychain, Windows certificate store, the system bundle on Linux), so corporate
-  root CAs installed there are trusted.
-- **The server's own certificate in `certificate-authority-data`** (some login
-  tools write it there instead of the CA that issued it) — it can't anchor a
-  chain, so flux9s ignores it and uses the operating system's trust store, as
-  above.
-- **`tls-server-name`** and **`insecure-skip-tls-verify`** are honored.
-- **`proxy-url`** (HTTP or SOCKS5) and the `HTTPS_PROXY` / `NO_PROXY` environment
-  variables are honored.
+flux9s reads TLS and proxy settings from your kubeconfig, like `kubectl`. It
+uses [rustls](https://github.com/rustls/rustls), so it doesn't need OpenSSL
+installed.
+
+- **`certificate-authority` / `certificate-authority-data` set:** only that CA is trusted.
+- **No CA in the kubeconfig:** the operating system's trust store is used (macOS
+  Keychain, Windows certificate store, the system bundle on Linux), so a
+  company root CA installed there is trusted.
+- **The server's own certificate in `certificate-authority-data`:** some login
+  tools write this instead of the CA that issued it. `kubectl` accepts it, but
+  it can't verify a chain, so flux9s ignores it and uses the operating
+  system's trust store instead. Run with `RUST_LOG=info` to see when this
+  happens.
+- **`tls-server-name`** and **`insecure-skip-tls-verify`** work as in `kubectl`.
+- **Proxies:** the cluster's `proxy-url` (`http://` or `socks5://`) and the
+  `HTTPS_PROXY` / `NO_PROXY` environment variables are used. `socks5h://` is
+  not supported.
 
 ---
 
@@ -417,7 +420,7 @@ flux9s config restore-namespace-hotkeys
 
 #### Skins / Themes
 
-flux9s includes 17 themes embedded in the binary:
+flux9s includes 18 built-in themes:
 
 - **Dark:** dracula, nord, solarized-dark, monokai, gruvbox-dark, catppuccin-mocha, rose-pine-moon, one-dark, tokyo-night, and more
 - **Light:** default-light, kiss
@@ -431,7 +434,7 @@ flux9s config set ui.skin dracula
 **Set a different skin when in read-only mode:**
 
 ```bash
-flux9s config set ui.skinReadOnly rose-pine
+flux9s config set ui.skinReadOnly rose-pine-moon
 ```
 
 **Interactive theme selection:**
@@ -453,7 +456,7 @@ flux9s config skins set my-skin.yaml
 
 Custom skin files go in:
 - **Linux/macOS:** `~/.config/flux9s/skins/`
-- **Windows:** `%APPDATA%\flux9s\skins\`
+- **Windows:** `%APPDATA%\flux9s\config\skins\`
 
 {{% alert title="Skin Compatibility" color="warning" %}}
 Not all K9s skins work directly with flux9s. The format is similar but may require minor adjustments.
@@ -523,6 +526,10 @@ Environment variables override the config file and are useful for CI, containers
 | `FLUX9S_READ_ONLY` | `readOnly` | `FLUX9S_READ_ONLY=false flux9s` |
 | `FLUX9S_DEFAULT_NAMESPACE` | `defaultNamespace` | `FLUX9S_DEFAULT_NAMESPACE=production flux9s` |
 | `FLUX9S_DEFAULT_RESOURCE_FILTER` | `defaultResourceFilter` | `FLUX9S_DEFAULT_RESOURCE_FILTER=HelmRelease flux9s` |
+| `FLUX9S_CONNECT_TIMEOUT` | `connectTimeoutSeconds` | `FLUX9S_CONNECT_TIMEOUT=30 flux9s` |
+| `FLUX9S_EDITOR` | `editor` | `FLUX9S_EDITOR="code --wait" flux9s` |
+| `FLUX9S_CONFIG_DIR` | Config directory | `FLUX9S_CONFIG_DIR=/tmp/flux9s flux9s` |
+| `FLUX9S_DATA_DIR` | Data directory (cluster configs, update check) | `FLUX9S_DATA_DIR=/tmp/flux9s-data flux9s` |
 
 ---
 

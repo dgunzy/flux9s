@@ -85,7 +85,8 @@ This downloads and installs pre-built binaries without compiling from source.
 
 Download pre-built binaries from the [Releases](https://github.com/dgunzy/flux9s/releases) page:
 
-- **Linux (x86_64)**: `flux9s-linux-x86_64.tar.gz`
+- **Linux (x86_64, glibc)**: `flux9s-linux-x86_64-gnu.tar.gz`
+- **Linux (x86_64, static / musl — Alpine or older distros)**: `flux9s-linux-x86_64-musl.tar.gz`
 - **macOS (Intel)**: `flux9s-macos-x86_64.tar.gz`
 - **macOS (Apple Silicon)**: `flux9s-macos-aarch64.tar.gz`
 - **Windows (x86_64)**: `flux9s-windows-x86_64.zip`
@@ -167,7 +168,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 - `:trace <kind>/<name> [-n <namespace>]` - Trace what manages an object; watching all namespaces, it finds the object without `-n`
 - `:logs [pod]` - Stream a Flux controller pod's logs (submenu without argument)
 - `:skin {skin-name}` - set skin directly
-- `:skin` - open interactive theme selection menu with live preview (17 built-in themes + custom)
+- `:skin` - open interactive theme selection menu with live preview (18 built-in themes + custom)
 - `:discover` - Toggle discovery of Flux-labeled CRDs for this session (runtime `discoverFluxResources`)
 - `:q` or `:q!` - Quit
 - `:help` - Show help
@@ -183,7 +184,7 @@ By default, `flux9s` watches the `flux-system` namespace. Use `:ns all` to view 
 
 - `flux9s config --help` - Show the config options
 - `flux9s config set {KEY} {VALUE}` - set a yaml option with the cli.
-- `config set ui.skinReadOnly rose-pine` - set a skin that is in your systems flux9s/skins dir when readonly enabled.
+- `flux9s config set ui.skinReadOnly rose-pine-moon` - use a different skin while read-only mode is on.
 - `flux9s config set connectTimeoutSeconds 15` - set the startup Kubernetes API health-check timeout.
 - `flux9s config set editor vim` - set the preferred editor for resource editing (overridden by `FLUX9S_EDITOR` env var).
 - `flux9s config skins set navy.yaml` - import a skin, validate, set in config.

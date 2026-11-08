@@ -43,7 +43,7 @@ Install directly from crates.io:
 cargo install flux9s
 ```
 
-Requires Rust toolchain to be installed.
+Needs a Rust toolchain (1.89 or later).
 {{% /blocks/feature %}}
 {{< /blocks/section >}}
 
@@ -51,12 +51,13 @@ Requires Rust toolchain to be installed.
 
 Download pre-built binaries from the [Releases](https://github.com/dgunzy/flux9s/releases) page:
 
-| Platform                  | File                          |
-| ------------------------- | ----------------------------- |
-| **Linux (x86_64)**        | `flux9s-linux-x86_64.tar.gz`  |
-| **macOS (Intel)**         | `flux9s-macos-x86_64.tar.gz`  |
-| **macOS (Apple Silicon)** | `flux9s-macos-aarch64.tar.gz` |
-| **Windows (x86_64)**      | `flux9s-windows-x86_64.zip`   |
+| Platform                          | File                               |
+| --------------------------------- | ---------------------------------- |
+| **Linux (x86_64, glibc)**         | `flux9s-linux-x86_64-gnu.tar.gz`   |
+| **Linux (x86_64, static / musl)** | `flux9s-linux-x86_64-musl.tar.gz`  |
+| **macOS (Intel)**                 | `flux9s-macos-x86_64.tar.gz`       |
+| **macOS (Apple Silicon)**         | `flux9s-macos-aarch64.tar.gz`      |
+| **Windows (x86_64)**              | `flux9s-windows-x86_64.zip`        |
 
 Extract and move the binary to a directory in your `PATH`.
 
@@ -79,14 +80,14 @@ The binary will be available at `target/release/flux9s`.
 - **Rust 1.89+** (if compiling from source)
 - **Kubernetes cluster** with Flux 2.2 or later installed ([tested versions](/user-guide/flux-resources/#flux-versions))
 - **kubeconfig** configured to access your cluster
-  {{% /alert %}}
+{{% /alert %}}
 
 ## Verify Installation
 
-After installation, verify that flux9s is working:
+Check that it's installed:
 
 ```bash
 flux9s --version
 ```
 
-You should see the version number printed.
+Then run `flux9s --check` to test the connection to your cluster without starting the UI.

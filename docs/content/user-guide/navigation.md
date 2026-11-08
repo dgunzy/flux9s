@@ -112,7 +112,7 @@ mode. The current choice is marked `(current)`.
   RBAC can't list namespaces, it shows the Flux namespaces.
 - **Theme (`:skin`)** — themes preview live as you move. `Enter` applies for
   this session; `s` saves to your config (`ui.skin`, or `ui.skinReadOnly` in
-  read-only mode). `Esc` restores the original. 17 themes are built in.
+  read-only mode). `Esc` restores the original. 18 themes are built in.
 
 ![Theme menu with live preview](/images/skin-submenu.png)
 
