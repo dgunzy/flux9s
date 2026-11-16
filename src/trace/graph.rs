@@ -16,6 +16,14 @@ pub const NODE_VERTICAL_SPACING: u16 = 2;
 pub const INVENTORY_GROUP_GAP: u16 = 4;
 /// Border + padding overhead reserved around a node's content, in columns.
 const NODE_HORIZONTAL_CHROME: u16 = 4;
+/// The left and right border of a node box, in columns.
+const NODE_BORDERS: u16 = 2;
+
+/// Columns `text` occupies. Names, kinds, and URLs are ASCII and the status
+/// glyphs (`✓`, `●`) are one column each, so this is the character count.
+fn columns(text: &str) -> u16 {
+    u16::try_from(text.chars().count()).unwrap_or(u16::MAX)
+}
 
 /// A node in the resource graph
 #[derive(Debug, Clone)]
@@ -61,31 +69,98 @@ impl GraphNode {
         }
     }
 
-    /// Width of the widest line of content this node will render, in columns.
-    fn content_width(&self) -> u16 {
-        // Multi-line descriptions render one line at a time, so the widest
-        // single line — not the whole string — is what has to fit.
-        let desc = match (&self.description, self.node_type) {
-            // A resource group displays per-kind counts, not its encoded entries.
-            (Some(desc), NodeType::ResourceGroup) => {
-                crate::kube::inventory::kind_counts_from_description(desc)
-                    .iter()
-                    .map(|(kind, count)| format!("{}: {}", kind, count).len() as u16)
-                    .max()
-                    .unwrap_or(0)
-            }
-            (Some(desc), _) => desc.lines().map(|l| l.len() as u16).max().unwrap_or(0),
-            (None, _) => 0,
-        };
-        (self.name.len() as u16)
-            .max(self.kind.len() as u16)
-            .max(desc)
+    /// Whether this node draws only its title and the group's rows (no type label).
+    pub fn is_group(&self) -> bool {
+        matches!(
+            self.node_type,
+            NodeType::WorkloadGroup | NodeType::ResourceGroup
+        )
     }
 
-    /// Rendered width in columns, clamped to sane bounds and the available width.
-    /// Single source of truth for node width across layout and drawing.
+    /// The muted label above a non-group node's title: its kind in capitals,
+    /// with `→` on nodes that lead somewhere.
+    pub fn type_label(&self) -> String {
+        match self.node_type {
+            NodeType::Upstream => "UPSTREAM".to_string(),
+            NodeType::FluxResource | NodeType::WorkloadGroup | NodeType::ResourceGroup => {
+                format!("{}  →", self.kind.to_uppercase())
+            }
+            NodeType::Source | NodeType::Chain | NodeType::Object | NodeType::Workload => {
+                self.kind.to_uppercase()
+            }
+        }
+    }
+
+    /// The node's title: `namespace/name` (as the Flux Operator Web UI shows
+    /// it), the bare name for cluster-scoped objects and group nodes.
+    pub fn title(&self) -> String {
+        if self.namespace.is_empty() || self.is_group() {
+            self.name.clone()
+        } else {
+            format!("{}/{}", self.namespace, self.name)
+        }
+    }
+
+    /// A workload group's workloads, and whether each shows its namespace
+    /// (only when they don't all share one).
+    pub fn group_workloads(&self) -> (Vec<crate::kube::workloads::WorkloadRef>, bool) {
+        let workloads: Vec<_> = self
+            .description
+            .iter()
+            .flat_map(|desc| desc.lines())
+            .filter_map(crate::kube::workloads::WorkloadRef::parse_graph_line)
+            .collect();
+        let show_namespace = workloads
+            .first()
+            .is_some_and(|first| workloads.iter().any(|w| w.namespace != first.namespace));
+        (workloads, show_namespace)
+    }
+
+    /// Width of the widest line this node draws inside its borders, in columns:
+    /// the same lines `render_node_text` draws, so none of them is clipped.
+    fn content_width(&self) -> u16 {
+        let mut lines = vec![self.title()];
+        if !self.is_group() {
+            lines.push(self.type_label());
+        }
+        match (self.node_type, &self.description) {
+            (NodeType::ResourceGroup, Some(desc)) => lines.extend(
+                crate::kube::inventory::kind_counts_from_description(desc)
+                    .iter()
+                    .map(|(kind, count)| format!("{kind}: {count}")),
+            ),
+            (NodeType::WorkloadGroup, _) => {
+                let (workloads, show_namespace) = self.group_workloads();
+                for w in workloads {
+                    lines.push(w.kind.to_uppercase());
+                    lines.push(format!("{} {}", w.indicator, w.status));
+                    if show_namespace {
+                        lines.push(w.namespace.clone());
+                    }
+                    lines.push(w.name);
+                }
+            }
+            (NodeType::Workload, desc) => {
+                // "● <status>" over the namespace subtitle.
+                lines.extend(desc.iter().map(|d| format!("● {d}")));
+                lines.push(self.namespace.clone());
+            }
+            (_, desc) => {
+                lines.extend(desc.iter().flat_map(|d| d.lines()).map(str::to_string));
+                if self.ready == Some(false) {
+                    lines.push("✗ Not Ready".to_string());
+                }
+            }
+        }
+        lines.iter().map(|l| columns(l)).max().unwrap_or(0)
+    }
+
+    /// Rendered width in columns, borders included, clamped to sane bounds and
+    /// the available width. Single source of truth for node width across
+    /// layout and drawing.
     pub fn render_width(&self, available_width: u16) -> u16 {
         self.content_width()
+            .saturating_add(NODE_BORDERS)
             .clamp(MIN_NODE_WIDTH, MAX_NODE_WIDTH)
             .min(available_width.saturating_sub(NODE_HORIZONTAL_CHROME))
     }
@@ -111,22 +186,12 @@ impl GraphNode {
                 }
             }
             NodeType::WorkloadGroup => {
-                if let Some(desc) = &self.description {
-                    let workloads: Vec<_> = desc
-                        .lines()
-                        .filter_map(crate::kube::workloads::WorkloadRef::parse_graph_line)
-                        .collect();
-                    let count = workloads.len();
-                    if count > 0 {
-                        // A namespace line is shown per workload only when they differ.
-                        let show_namespace = count > 1
-                            && !workloads
-                                .iter()
-                                .all(|w| w.namespace == workloads[0].namespace);
-                        let per_workload = if show_namespace { 4 } else { 3 };
-                        let blanks = count.saturating_sub(1);
-                        height += (count * per_workload + blanks) as u16;
-                    }
+                let (workloads, show_namespace) = self.group_workloads();
+                let count = workloads.len();
+                if count > 0 {
+                    let per_workload = if show_namespace { 4 } else { 3 };
+                    let blanks = count.saturating_sub(1);
+                    height += (count * per_workload + blanks) as u16;
                 }
             }
             NodeType::ResourceGroup => {
@@ -577,6 +642,43 @@ mod tests {
             None,
         );
         assert_eq!(group.render_width(100), MIN_NODE_WIDTH);
+    }
+
+    /// Every line a node draws fits inside its borders (#340).
+    #[test]
+    fn render_width_fits_every_drawn_line_inside_the_borders() {
+        let inner = |node: &GraphNode| node.render_width(200) - NODE_BORDERS;
+
+        // The title is `namespace/name`: the namespace counts too.
+        let mut source = node_with(NodeType::Source, None, Some(true));
+        source.namespace = "flux-resources".to_string();
+        source.name = "flux-resources-podinfo-oci-chart".to_string();
+        assert_eq!(
+            source.title(),
+            "flux-resources/flux-resources-podinfo-oci-chart"
+        );
+        assert_eq!(inner(&source), columns(&source.title()));
+
+        // A description as wide as the box used to lose its end to the borders.
+        let url = "chart: oci://ghcr.io/stefanprodan/charts/podinfo";
+        let release = node_with(NodeType::FluxResource, Some(url), Some(true));
+        assert_eq!(inner(&release), columns(url));
+
+        // Cluster-scoped objects and groups are titled by name alone.
+        let mut cluster_scoped = node_with(NodeType::Object, None, None);
+        cluster_scoped.namespace = String::new();
+        assert_eq!(cluster_scoped.title(), "name");
+        let group = node_with(NodeType::ResourceGroup, None, None);
+        assert_eq!(group.title(), "name");
+
+        // Workload groups are sized by the rows they draw, not the encoded lines.
+        let name = "a-deployment-with-a-name-longer-than-the-minimum";
+        let workloads = node_with(
+            NodeType::WorkloadGroup,
+            Some(&format!("Deployment|{name}|apps|●|Replicas: 1/1|apps/v1")),
+            None,
+        );
+        assert_eq!(inner(&workloads), columns(name));
     }
 
     #[test]
