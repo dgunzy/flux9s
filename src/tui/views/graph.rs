@@ -403,6 +403,16 @@ fn render_fanout(
     }
 }
 
+/// `text` cut to `width` columns, ending in `…` when it doesn't fit.
+fn fit(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(width.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
+
 /// Render node text content at `at`: the node's layout position with the
 /// line scroll already applied (no horizontal scrolling).
 fn render_node_text(
@@ -508,39 +518,19 @@ fn render_node_text(
     // Build node content with type label (like Web UI)
     let mut content = vec![];
 
-    // For WorkloadGroup and ResourceGroup, we don't add type label/name upfront
-    // since their content is already formatted
-    if !matches!(
-        node.node_type,
-        NodeType::WorkloadGroup | NodeType::ResourceGroup
-    ) {
-        // Add type label based on node type (similar to Web UI)
-        // Web UI shows kind in uppercase
-        let type_label = match node.node_type {
-            NodeType::Upstream => "UPSTREAM".to_string(),
-            NodeType::Source => node.kind.to_uppercase(),
-            NodeType::Chain => node.kind.to_uppercase(),
-            NodeType::Object => node.kind.to_uppercase(),
-            NodeType::FluxResource => format!("{}  →", node.kind.to_uppercase()),
-            NodeType::Workload => node.kind.to_uppercase(),
-            NodeType::WorkloadGroup => format!("{}  →", node.kind.to_uppercase()),
-            NodeType::ResourceGroup => format!("{}  →", node.kind.to_uppercase()),
-        };
+    // Lines that don't fit even the widest node end in `…` rather than being
+    // cut off mid-word; `render_width` sizes the node so everything else fits.
+    let inner_width = usize::from(node_area.width.saturating_sub(2));
 
+    // Group nodes draw their own title below; their content is the group's rows.
+    if !node.is_group() {
         // Type label uses text_secondary without DIM modifier (matching Web UI muted text)
         content.push(Line::from(vec![Span::styled(
-            type_label, // Moved ownership instead of borrowing
+            fit(&node.type_label(), inner_width),
             Style::default().fg(theme.text_secondary),
         )]));
-
-        // Add resource name - Web UI shows namespace/name format when namespace is present
-        let display_name = if !node.namespace.is_empty() {
-            format!("{}/{}", node.namespace, node.name)
-        } else {
-            node.name.clone()
-        };
         content.push(Line::from(vec![Span::styled(
-            display_name, // Clone to avoid borrow issues
+            fit(&node.title(), inner_width),
             title_style,
         )]));
     }
@@ -549,12 +539,7 @@ fn render_node_text(
     if matches!(node.node_type, NodeType::Workload) {
         // Add replica/status description with colored dot (like Web UI)
         if let Some(ref desc) = node.description {
-            let max_desc_len = (node_area.width.saturating_sub(4)) as usize; // Reserve space for dot
-            let desc_display: String = if desc.len() > max_desc_len {
-                format!("{}...", &desc[..max_desc_len.saturating_sub(3)])
-            } else {
-                desc.clone()
-            };
+            let desc_display = fit(desc, inner_width.saturating_sub(2)); // "● " before it
 
             // Add status indicator dot (● or ○) based on ready status
             let dot = if node.ready == Some(true) {
@@ -585,28 +570,24 @@ fn render_node_text(
         // Lines are decoded by WorkloadRef — the single source of truth for
         // the format (decoding by hand broke when a field was added).
         // Web UI shows: kind (muted), name (bold), status with dot, namespace only if namespaces differ
-        if let Some(ref desc) = node.description {
-            let workloads: Vec<(String, String, String, String, String)> = desc
-                .lines()
-                .filter_map(crate::kube::workloads::WorkloadRef::parse_graph_line)
-                .map(|w| (w.kind, w.name, w.namespace, w.indicator, w.status))
-                .collect();
+        {
+            let (workloads, show_namespace) = node.group_workloads();
             let is_highlighted = |kind: &str, namespace: &str, name: &str| {
                 highlight.is_some_and(|h| {
                     h.resource_type == kind && h.namespace == namespace && h.name == name
                 })
             };
 
-            // Check if all workloads share the same namespace
-            let show_namespace = if workloads.len() > 1 {
-                let first_namespace = &workloads[0].2;
-                !workloads.iter().all(|w| &w.2 == first_namespace)
-            } else {
-                false // Single workload, don't show namespace
-            };
-
             // Render each workload
-            for (kind, name, namespace, status_indicator, status_text) in &workloads {
+            for crate::kube::workloads::WorkloadRef {
+                kind,
+                name,
+                namespace,
+                indicator: status_indicator,
+                status: status_text,
+                ..
+            } in &workloads
+            {
                 // Line 1: Kind (muted, uppercase like Web UI)
                 content.push(Line::from(vec![Span::styled(
                     kind.to_uppercase(),
@@ -615,7 +596,7 @@ fn render_node_text(
 
                 // Line 2: Name (bold) - Web UI shows just name, not namespace/name
                 content.push(Line::from(vec![Span::styled(
-                    name.clone(),
+                    fit(name, inner_width),
                     if is_highlighted(kind, namespace, name) {
                         highlight_style
                     } else {
@@ -654,18 +635,12 @@ fn render_node_text(
         // The description carries one encoded InventoryEntry per line; the
         // node summarises them as per-kind counts (Enter shows the detail).
         if let Some(ref desc) = node.description {
-            let max_width = (node_area.width.saturating_sub(2)) as usize;
             // The highlighted object's kind line, when it is listed here.
             let highlighted_kind = highlight
                 .filter(|h| node.group_lists(h))
                 .map(|h| h.resource_type.as_str());
             for (kind, count) in crate::kube::inventory::kind_counts_from_description(desc) {
-                let resource_item = format!("{}: {}", kind, count);
-                let item_display: String = if resource_item.len() > max_width {
-                    format!("{}...", &resource_item[..max_width.saturating_sub(3)])
-                } else {
-                    resource_item
-                };
+                let item_display = fit(&format!("{kind}: {count}"), inner_width);
                 content.push(Line::from(vec![Span::styled(
                     item_display,
                     if highlighted_kind == Some(kind.as_str()) {
@@ -679,12 +654,7 @@ fn render_node_text(
     } else {
         // For other non-workload nodes, show description if available
         if let Some(ref desc) = node.description {
-            let max_desc_len = (node_area.width.saturating_sub(2)) as usize;
-            let desc_display: String = if desc.len() > max_desc_len {
-                format!("{}...", &desc[..max_desc_len.saturating_sub(3)])
-            } else {
-                desc.clone()
-            };
+            let desc_display = fit(desc, inner_width);
             content.push(Line::from(vec![Span::styled(
                 desc_display,
                 Style::default()
@@ -887,9 +857,18 @@ fn render_node_text(
 
 #[cfg(test)]
 mod tests {
-    use super::{box_glyph, fanout_routes, follow_focus_scroll, render_graph_nodes_and_edges};
+    use super::{box_glyph, fanout_routes, fit, follow_focus_scroll, render_graph_nodes_and_edges};
     use crate::trace::{GraphEdge, GraphNode, NodeType, RelationshipType, ResourceGraph};
     use crate::tui::theme::Theme;
+
+    #[test]
+    fn fit_cuts_by_character_and_marks_the_cut() {
+        assert_eq!(fit("podinfo", 7), "podinfo");
+        assert_eq!(fit("podinfo", 5), "podi…");
+        // Never splits a multi-byte character (byte slicing used to panic here).
+        assert_eq!(fit("é".repeat(10).as_str(), 4), "ééé…");
+        assert_eq!(fit("anything", 0), "…");
+    }
 
     #[test]
     fn box_glyph_renders_expected_junctions() {
