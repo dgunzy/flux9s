@@ -877,7 +877,7 @@ Pod field selector, always across all namespaces; it is retained in the navigati
 stack and unaffected by session namespace changes.
 
 Run `cargo build --bin flux9s` then
-`python3 scripts/tui-smoke.py --context kind-flux9s-simple` for the real-terminal
+`python3 scripts/tui-smoke.py --context flux9s-simple` for the real-terminal
 smoke test. Add `--metrics-source kubelet` to require measured CPU and memory
 usage; CI runs both modes. It uses an isolated tmux server, config, and kubeconfig; it does not
 modify the cluster or the user's selected context. The live-tests workflow runs

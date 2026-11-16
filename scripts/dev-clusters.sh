@@ -3,7 +3,16 @@
 #
 # Only clusters this script owns (flux9s-*) are ever deleted: each build
 # recreates just its own cluster, and `delete` removes just the flux9s-*
-# clusters. Other kind clusters on the machine are never touched.
+# clusters. Other clusters on the machine are never touched.
+#
+# Provider (FLUX9S_DEV_PROVIDER=apple|kind):
+#   apple — Apple's `container cluster` (macOS on Apple silicon): each node is
+#           a lightweight VM, no Docker needed. Default when `container` is
+#           installed (`brew install container && container system start`).
+#   kind  — kind on Docker. Default everywhere else, including CI.
+# Both run the same kindest/node image, and the kubeconfig context is the
+# cluster name either way (flux9s-simple, …), so tests don't care which.
+# Apple nodes get FLUX9S_DEV_CPUS (default 2) and FLUX9S_DEV_MEMORY (default 3g).
 #
 # Creates three clearly-named clusters:
 #
@@ -23,7 +32,7 @@
 #   ./scripts/dev-clusters.sh legacy       # build flux9s-legacy only
 #   ./scripts/dev-clusters.sh ci           # build simple + legacy (live-test set)
 #   ./scripts/dev-clusters.sh all          # build all three clusters
-#   ./scripts/dev-clusters.sh delete       # delete the flux9s-* kind clusters and exit
+#   ./scripts/dev-clusters.sh delete       # delete the flux9s-* clusters (both providers) and exit
 
 set -euo pipefail
 
@@ -47,6 +56,17 @@ FLUX_OPERATOR_VERSION="0.62.0"
 DEPLOY_WAIT_TIMEOUT="${FLUX9S_DEV_DEPLOY_WAIT_TIMEOUT:-5s}"
 CRD_WAIT_RETRIES="${FLUX9S_DEV_CRD_WAIT_RETRIES:-5}"
 CRD_WAIT_SLEEP_SECONDS="${FLUX9S_DEV_CRD_WAIT_SLEEP_SECONDS:-3}"
+
+if [ -z "${FLUX9S_DEV_PROVIDER:-}" ]; then
+    if [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ] && command -v container &>/dev/null; then
+        FLUX9S_DEV_PROVIDER=apple
+    else
+        FLUX9S_DEV_PROVIDER=kind
+    fi
+fi
+PROVIDER="$FLUX9S_DEV_PROVIDER"
+NODE_CPUS="${FLUX9S_DEV_CPUS:-2}"
+NODE_MEMORY="${FLUX9S_DEV_MEMORY:-3g}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST_DIR="${SCRIPT_DIR}/dev-manifests"
@@ -296,14 +316,46 @@ apply_stress_manifests() {
     success "Applied stress manifests (suffix='${suffix}', ns=${ns})"
 }
 
-# Delete one cluster if it exists (never anything but the named one).
+# ── cluster provider ───────────────────────────────────────────────────────────
+
+# The flux9s-* clusters a provider has (nothing if it isn't installed/running).
+provider_clusters() {
+    case "$1" in
+        apple) command -v container &>/dev/null && container cluster list --quiet 2>/dev/null ;;
+        kind)  command -v kind &>/dev/null && kind get clusters 2>/dev/null ;;
+    esac | grep '^flux9s-' || true
+}
+
+# Create a cluster whose kubeconfig context is the cluster name.
+create_cluster() {
+    local name="$1"
+    case "$PROVIDER" in
+        apple)
+            container cluster create --name "$name" \
+                --cpus "$NODE_CPUS" --memory "$NODE_MEMORY"
+            ;;
+        kind)
+            kind create cluster --name "$name" --wait 60s
+            kubectl config delete-context "$name" &>/dev/null || true
+            kubectl config rename-context "kind-${name}" "$name" >/dev/null
+            ;;
+        *) die "Unknown FLUX9S_DEV_PROVIDER '$PROVIDER' (use apple or kind)" ;;
+    esac
+}
+
+# Delete one cluster from one provider if it exists (never anything else).
 delete_cluster_if_exists() {
-    local cluster_name="$1"
-    if kind get clusters 2>/dev/null | grep -qx "$cluster_name"; then
-        info "Deleting cluster: $cluster_name"
-        kind delete cluster --name "$cluster_name"
-        success "Deleted: $cluster_name"
-    fi
+    local provider="$1" name="$2"
+    provider_clusters "$provider" | grep -qx "$name" || return 0
+    info "Deleting $provider cluster: $name"
+    case "$provider" in
+        apple) container cluster delete --name "$name" ;;
+        kind)
+            kind delete cluster --name "$name"
+            kubectl config delete-context "$name" &>/dev/null || true
+            ;;
+    esac
+    success "Deleted: $name"
 }
 
 run_build() {
@@ -311,7 +363,7 @@ run_build() {
     shift
 
     # Recreate only this cluster.
-    delete_cluster_if_exists "$cluster_name"
+    delete_cluster_if_exists "$PROVIDER" "$cluster_name"
 
     if "$@"; then
         success "Completed build workflow for ${cluster_name}"
@@ -327,8 +379,8 @@ run_build() {
 build_simple_cluster() {
     header "Building  $SIMPLE_CLUSTER  (Flux 2.10.x + source-watcher — current repo CRD baseline)"
 
-    kind create cluster --name "$SIMPLE_CLUSTER" --wait 60s
-    local ctx="kind-${SIMPLE_CLUSTER}"
+    create_cluster "$SIMPLE_CLUSTER"
+    local ctx="$SIMPLE_CLUSTER"
 
     install_flux_operator "$ctx"
     apply_fluxinstance "$ctx" "${MANIFEST_DIR}/fluxinstance.yaml"
@@ -353,15 +405,15 @@ build_simple_cluster() {
 
     success "Cluster $SIMPLE_CLUSTER is ready"
     echo
-    info "Switch to it:  kubectl config use-context kind-${SIMPLE_CLUSTER}"
+    info "Switch to it:  kubectl config use-context ${SIMPLE_CLUSTER}"
     info "Run flux9s:    cargo run"
 }
 
 build_stress_cluster() {
     header "Building  $STRESS_CLUSTER  (Flux 2.7.x — stress/page-scroll testing)"
 
-    kind create cluster --name "$STRESS_CLUSTER" --wait 60s
-    local ctx="kind-${STRESS_CLUSTER}"
+    create_cluster "$STRESS_CLUSTER"
+    local ctx="$STRESS_CLUSTER"
 
     install_flux_operator "$ctx"
     apply_fluxinstance "$ctx" "${MANIFEST_DIR}/fluxinstance-medium.yaml"
@@ -380,7 +432,7 @@ build_stress_cluster() {
 
     success "Cluster $STRESS_CLUSTER is ready with many resources across ${#namespaces[@]} namespaces"
     echo
-    info "Switch to it:  kubectl config use-context kind-${STRESS_CLUSTER}"
+    info "Switch to it:  kubectl config use-context ${STRESS_CLUSTER}"
     info "Run flux9s:    cargo run"
     info "Test paging:   press Ctrl+f / Ctrl+b to page through the list"
 }
@@ -388,8 +440,8 @@ build_stress_cluster() {
 build_legacy_cluster() {
     header "Building  $LEGACY_CLUSTER  (Flux 2.2.x — OCIRepository/Bucket at v1beta2)"
 
-    kind create cluster --name "$LEGACY_CLUSTER" --wait 60s
-    local ctx="kind-${LEGACY_CLUSTER}"
+    create_cluster "$LEGACY_CLUSTER"
+    local ctx="$LEGACY_CLUSTER"
 
     install_flux_operator "$ctx"
     apply_fluxinstance_legacy "$ctx"
@@ -399,7 +451,7 @@ build_legacy_cluster() {
 
     success "Cluster $LEGACY_CLUSTER is ready"
     echo
-    info "Switch to it:  kubectl config use-context kind-${LEGACY_CLUSTER}"
+    info "Switch to it:  kubectl config use-context ${LEGACY_CLUSTER}"
     info "Run flux9s:    cargo run"
     info "Expected:      OCIRepository and Bucket appear via v1beta2 fallback"
     info "               (flux9s tries v1 → 404 → retries as v1beta2 → found)"
@@ -414,13 +466,16 @@ main() {
     header "flux9s dev cluster setup"
     echo "  Clusters: $SIMPLE_CLUSTER  |  $STRESS_CLUSTER  |  $LEGACY_CLUSTER"
     echo "  Mode:     $mode"
+    echo "  Provider: $PROVIDER"
     echo
 
     # ── delete-only mode: this script's clusters, never anyone else's ─────────
     if [ "$mode" = "delete" ]; then
-        header "Deleting flux9s kind clusters"
-        for cluster in "$SIMPLE_CLUSTER" "$STRESS_CLUSTER" "$LEGACY_CLUSTER"; do
-            delete_cluster_if_exists "$cluster"
+        header "Deleting flux9s clusters"
+        for provider in apple kind; do
+            for cluster in "$SIMPLE_CLUSTER" "$STRESS_CLUSTER" "$LEGACY_CLUSTER"; do
+                delete_cluster_if_exists "$provider" "$cluster"
+            done
         done
         success "flux9s clusters deleted. Done."
         return 0
@@ -453,18 +508,18 @@ main() {
 
     header "All done!"
     echo
-    echo "  Available clusters:"
-    kind get clusters 2>/dev/null | sed 's/^/    • kind-/'
+    echo "  Available clusters ($PROVIDER):"
+    provider_clusters "$PROVIDER" | sed 's/^/    • /'
     echo
     echo "  Day-to-day dev (Flux 2.10.x, current repo CRDs):"
-    echo "    kubectl config use-context kind-${SIMPLE_CLUSTER} && cargo run"
+    echo "    kubectl config use-context ${SIMPLE_CLUSTER} && cargo run"
     echo
     echo "  Page-scroll stress testing (Flux 2.7.x):"
-    echo "    kubectl config use-context kind-${STRESS_CLUSTER} && cargo run"
+    echo "    kubectl config use-context ${STRESS_CLUSTER} && cargo run"
     echo "    → Press Ctrl+f / Ctrl+b to page through the list"
     echo
     echo "  Version-fallback testing (Flux 2.2.x, OCIRepository/Bucket at v1beta2):"
-    echo "    kubectl config use-context kind-${LEGACY_CLUSTER} && cargo run"
+    echo "    kubectl config use-context ${LEGACY_CLUSTER} && cargo run"
     echo "    → OCIRepository and Bucket should appear despite v1 being unavailable"
     echo
 }

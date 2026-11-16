@@ -9,7 +9,7 @@
 #
 # Usage:
 #   ./scripts/rbac-test.sh [kube-context] [output-kubeconfig]
-#   ./scripts/rbac-test.sh                       # defaults: kind-flux9s-simple, /tmp/flux9s-restricted.kubeconfig
+#   ./scripts/rbac-test.sh                       # defaults: flux9s-simple, /tmp/flux9s-restricted.kubeconfig
 #
 # Then:
 #   KUBECONFIG=/tmp/flux9s-restricted.kubeconfig cargo run
@@ -18,7 +18,7 @@
 #   Set ui.rbacWarnings=false (flux9s config set ui.rbacWarnings false) to confirm it goes silent.
 set -euo pipefail
 
-CTX="${1:-kind-flux9s-simple}"
+CTX="${1:-flux9s-simple}"
 OUT="${2:-/tmp/flux9s-restricted.kubeconfig}"
 NS="flux-system"
 SA="flux9s-restricted"

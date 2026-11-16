@@ -97,7 +97,7 @@ jobs:
       - name: Exercise TUI against dev clusters
         run: |
           tested=0
-          for ctx in kind-flux9s-simple kind-flux9s-legacy; do
+          for ctx in flux9s-simple flux9s-legacy; do
             kubectl config get-contexts -o name | grep -qx "$ctx" || continue
             python3 scripts/tui-smoke.py --context "$ctx"
             python3 scripts/tui-smoke.py --context "$ctx" --metrics-source kubelet
@@ -111,7 +111,7 @@ jobs:
       - name: Dump cluster diagnostics on failure
         if: failure()
         run: |
-          for ctx in kind-flux9s-simple kind-flux9s-legacy; do
+          for ctx in flux9s-simple flux9s-legacy; do
             kubectl config get-contexts -o name | grep -qx "$ctx" || continue
             echo "════ $ctx ════"
             kubectl --context "$ctx" get fluxinstance,resourcesets,resourcesetinputproviders,kustomizations,gitrepositories,ocirepositories -A 2>/dev/null || true
