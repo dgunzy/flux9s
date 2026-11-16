@@ -20,7 +20,7 @@ def run(*args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--context', default='kind-flux9s-simple')
+    parser.add_argument('--context', default='flux9s-simple')
     parser.add_argument('--binary', default='target/debug/flux9s')
     parser.add_argument('--metrics-source', choices=['none', 'kubelet'], default='none')
     args = parser.parse_args()

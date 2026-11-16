@@ -67,10 +67,23 @@ TUI-specific tests such as `snapshot_tests` and `navigation_tests` are feature-g
 Snapshot files are stored under `tests/snapshots/` and are validated by `snapshot_tests.rs`. When intentional rendering changes occur, review the updated snapshots carefully before accepting them.
 
 Real-terminal smoke coverage: build with `cargo build --bin flux9s`, then run
-`python3 scripts/tui-smoke.py --context kind-flux9s-simple` (or
-`kind-flux9s-legacy`). Requires tmux, Python 3, kubectl and a reachable dev cluster.
+`python3 scripts/tui-smoke.py --context flux9s-simple` (or
+`flux9s-legacy`). Requires tmux, Python 3, kubectl and a reachable dev cluster.
 The harness covers Pod describe/logs, namespace changes, Node drill-down, Back,
 and small-terminal navigation using the real binary with isolated local state.
 
 Add `--metrics-source kubelet` to require live CPU and memory usage. Both modes
 also check that node drill-down from a mixed list returns to that list.
+
+## Dev clusters
+
+`tests/live_tests.rs` and the smoke harness run against clusters built by
+`scripts/dev-clusters.sh` (`ci` builds `flux9s-simple` and `flux9s-legacy`),
+then `just test-live`. The kubeconfig context is the cluster name.
+
+On an Apple silicon Mac with Apple's `container` installed
+(`brew install container && container system start`), the script uses
+`container cluster` — each node a lightweight VM, no Docker. Elsewhere, and in
+CI, it uses kind. Pick one with `FLUX9S_DEV_PROVIDER=apple|kind`; size Apple
+nodes with `FLUX9S_DEV_CPUS` (default 2) and `FLUX9S_DEV_MEMORY` (default 3g).
+`./scripts/dev-clusters.sh delete` removes the flux9s clusters from both.

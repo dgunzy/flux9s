@@ -24,12 +24,12 @@ use std::time::{Duration, Instant};
 
 /// Context of the primary dev cluster (Flux 2.9.x + source-watcher).
 fn simple_context() -> String {
-    std::env::var("FLUX9S_LIVE_SIMPLE_CONTEXT").unwrap_or_else(|_| "kind-flux9s-simple".to_string())
+    std::env::var("FLUX9S_LIVE_SIMPLE_CONTEXT").unwrap_or_else(|_| "flux9s-simple".to_string())
 }
 
 /// Context of the legacy dev cluster (Flux 2.2.x, sources at v1beta2).
 fn legacy_context() -> String {
-    std::env::var("FLUX9S_LIVE_LEGACY_CONTEXT").unwrap_or_else(|_| "kind-flux9s-legacy".to_string())
+    std::env::var("FLUX9S_LIVE_LEGACY_CONTEXT").unwrap_or_else(|_| "flux9s-legacy".to_string())
 }
 
 async fn client_for(context: &str) -> kube::Client {
@@ -64,7 +64,7 @@ where
 /// #204: a step-based ResourceSet's graph includes its downstream inventory —
 /// the staged-rollout ConfigMaps and Jobs aggregate into a resource group.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn resource_set_graph_shows_inventory() {
     use flux9s::trace::{NodeType, build_resource_graph};
 
@@ -96,7 +96,7 @@ async fn resource_set_graph_shows_inventory() {
 /// keep the `step "<name>"` format the detail-view phase parser matches.
 /// Catches upstream flux-operator message-format drift.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn step_failure_condition_matches_parser_format() {
     let client = client_for(&simple_context()).await;
 
@@ -134,7 +134,7 @@ async fn step_failure_condition_matches_parser_format() {
 /// #191: describe data for the deliberately broken Kustomization includes
 /// its Warning events (the field-selector fetch path, live).
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn broken_kustomization_describe_includes_warning_events() {
     let client = client_for(&simple_context()).await;
 
@@ -174,7 +174,7 @@ async fn broken_kustomization_describe_includes_warning_events() {
 /// #192: the pod log API path used by the `:logs` stream returns lines for a
 /// controller pod (snapshot mode — bounded, no follow).
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn controller_log_snapshot_returns_lines() {
     use futures::{AsyncBufReadExt, TryStreamExt};
     use k8s_openapi::api::core::v1::Pod;
@@ -219,7 +219,7 @@ async fn controller_log_snapshot_returns_lines() {
 /// from v1. This is the failure mode that once left all five fallback kinds
 /// silently unwatched — asserting it live keeps the fallback path honest.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-legacy dev cluster"]
+#[ignore = "requires the flux9s-legacy dev cluster"]
 async fn legacy_sources_resolve_via_version_fallback() {
     let client = client_for(&legacy_context()).await;
 
@@ -247,7 +247,7 @@ async fn legacy_sources_resolve_via_version_fallback() {
 /// #194: the workload drill-down fetch returns rollout data, containers, and
 /// pods for a real controller Deployment.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn workload_drilldown_fetches_pods_and_containers() {
     let client = client_for(&simple_context()).await;
 
@@ -298,7 +298,7 @@ async fn workload_drilldown_fetches_pods_and_containers() {
 /// ApiResource — the exact plumbing the dynamic watcher uses. The fixture
 /// (widgets.example.com + two Widget CRs) is planted by dev-clusters.sh.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn labeled_crd_discovers_and_lists_instances() {
     use flux9s::models::extra_kinds::{ExtraKind, PART_OF_LABEL, PART_OF_VALUE};
     use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
@@ -359,7 +359,7 @@ async fn labeled_crd_discovers_and_lists_instances() {
 /// Kind registry + `:<kind>` browser (#267) against a real API server:
 /// discovery wire format, served-version handling, and the live list watch.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn kind_discovery_and_live_kind_list() {
     use flux9s::kube::kind_list::{KindListRequest, watch_kind};
     use flux9s::kube::object_status::ObjectHealth;
@@ -442,7 +442,7 @@ async fn kind_discovery_and_live_kind_list() {
 /// aggregated discovery on current servers, the legacy walk on older ones.
 /// Checked on both dev clusters (different Flux / CRD sets).
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple and kind-flux9s-legacy dev clusters"]
+#[ignore = "requires the flux9s-simple and flux9s-legacy dev clusters"]
 async fn aggregated_and_legacy_discovery_agree() {
     for context in [simple_context(), legacy_context()] {
         let client = client_for(&context).await;
@@ -473,7 +473,7 @@ async fn aggregated_and_legacy_discovery_agree() {
 /// for the owner chain, and the chain (Pod → ReplicaSet → Deployment) then
 /// resolves within the overall bound, reusing cached kind lookups.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn describe_resolves_managed_by_separately_and_within_bound() {
     use k8s_openapi::api::core::v1::Pod;
     use kube::api::ListParams;
@@ -522,7 +522,7 @@ async fn describe_resolves_managed_by_separately_and_within_bound() {
 /// controller Deployment (labelled by the Flux Operator) traces to its
 /// FluxInstance.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn trace_reaches_the_flux_instance_of_a_controller_deployment() {
     let client = client_for(&simple_context()).await;
     let result =
@@ -551,7 +551,7 @@ async fn source_controller_pod(client: &kube::Client) -> String {
 /// #266: a native object traces by apiVersion up its owner chain to the
 /// Flux object managing it — Pod → ReplicaSet → Deployment → FluxInstance.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn trace_walks_a_pod_up_its_owner_chain_to_flux() {
     use flux9s::kube::objects::ObjectRef;
     let client = client_for(&simple_context()).await;
@@ -580,7 +580,7 @@ async fn trace_walks_a_pod_up_its_owner_chain_to_flux() {
 /// #266: cluster-scoped objects trace too (they used to be fetched as
 /// namespaced), and a Helm-installed chain ends at Helm.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn trace_reaches_cluster_scoped_objects_and_stops_at_helm() {
     use flux9s::kube::objects::ObjectRef;
     use flux9s::trace::TraceOutcome;
@@ -626,7 +626,7 @@ async fn trace_reaches_cluster_scoped_objects_and_stops_at_helm() {
 /// #266: `:trace` without `-n` while watching all namespaces finds the
 /// object wherever it lives.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn find_by_name_searches_every_namespace() {
     let client = client_for(&simple_context()).await;
     let found = flux9s::kube::objects::find_by_name(
@@ -655,7 +655,7 @@ async fn find_by_name_searches_every_namespace() {
 /// #266: `g` on a pod opens its manager's graph focused on the Deployment
 /// the manager applied, listed in the workload group.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn graph_locates_a_pod_through_its_deployment() {
     use flux9s::kube::objects::ObjectRef;
     let client = client_for(&simple_context()).await;
@@ -690,7 +690,7 @@ async fn graph_locates_a_pod_through_its_deployment() {
 /// doesn't list is left behind — while Flux-managed objects and Kubernetes'
 /// own never show.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn sweeps_find_unmanaged_and_orphaned_objects() {
     use flux9s::kube::standing::{OrphanReason, Standing};
     use flux9s::kube::sweep::{SweepPhase, SweepRequest, SweepScope, sweep};
@@ -814,7 +814,7 @@ async fn sweeps_find_unmanaged_and_orphaned_objects() {
 /// flux9s's first-choice version is served (no fallback to the deprecated
 /// `v1beta3`), and the generated v1 models read the dev cluster's objects.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+#[ignore = "requires the flux9s-simple dev cluster (Flux 2.10)"]
 async fn notification_kinds_are_read_at_v1_on_flux_2_10() {
     use flux9s::models::FluxResourceKind;
     use flux9s::watcher::{Alert, Provider, Receiver};
@@ -865,7 +865,7 @@ async fn notification_kinds_are_read_at_v1_on_flux_2_10() {
 /// the list shows the chart URL and ref, and the generated source — labelled
 /// for the HelmRelease but never in its inventory — isn't called an orphan.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+#[ignore = "requires the flux9s-simple dev cluster (Flux 2.10)"]
 async fn oci_chart_template_traces_to_its_generated_ocirepository() {
     use flux9s::kube::objects::ObjectRef;
     use flux9s::kube::sweep::{SweepRequest, SweepScope, sweep};
@@ -950,7 +950,7 @@ async fn oci_chart_template_traces_to_its_generated_ocirepository() {
 /// while watching all namespaces) and namespace discovery use the version the
 /// cluster serves — on Flux 2.2, OCIRepository only at `v1beta2`.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-legacy dev cluster"]
+#[ignore = "requires the flux9s-legacy dev cluster"]
 async fn lookups_by_name_and_namespace_discovery_fall_back_on_older_flux() {
     let client = client_for(&legacy_context()).await;
     let found = flux9s::kube::objects::find_by_name(&client, "OCIRepository", None, "podinfo-oci")
@@ -1009,7 +1009,7 @@ async fn watched_kinds(context: &str, expected: &[&str]) -> std::collections::BT
 
 /// Flux 2.10: every kind is read at its current version.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+#[ignore = "requires the flux9s-simple dev cluster (Flux 2.10)"]
 async fn watch_all_reports_every_kind_on_flux_2_10() {
     let expected = [
         "GitRepository",
@@ -1033,7 +1033,7 @@ async fn watch_all_reports_every_kind_on_flux_2_10() {
 /// (HelmRelease v2beta2, OCIRepository / HelmRepository / HelmChart v1beta2,
 /// Alert / Provider v1beta3).
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-legacy dev cluster (Flux 2.2)"]
+#[ignore = "requires the flux9s-legacy dev cluster (Flux 2.2)"]
 async fn watch_all_falls_back_on_older_flux() {
     let expected = [
         "GitRepository",
@@ -1055,7 +1055,7 @@ async fn watch_all_falls_back_on_older_flux() {
 /// the ExternalArtifact it generated in another namespace, in that
 /// namespace (its inventory entry names it).
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+#[ignore = "requires the flux9s-simple dev cluster (Flux 2.10)"]
 async fn artifact_generator_graph_follows_cross_namespace_artifacts() {
     use flux9s::trace::build_resource_graph;
 
@@ -1097,7 +1097,7 @@ async fn artifact_generator_graph_follows_cross_namespace_artifacts() {
 /// (Flux 2.10 `flux suspend artifact generator`): flux9s reads it and its
 /// suspend / resume operations write it.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+#[ignore = "requires the flux9s-simple dev cluster (Flux 2.10)"]
 async fn artifact_generators_suspend_and_resume_through_their_annotation() {
     use flux9s::models::FluxResourceKind;
     use flux9s::operations::{FluxOperation, ResumeOperation, SuspendOperation};
@@ -1131,7 +1131,7 @@ async fn artifact_generators_suspend_and_resume_through_their_annotation() {
 /// Flux 2.2–2.9 serve Alert / Provider at `v1beta3` only (v1 is Flux 2.10):
 /// lookups by name and by discovery both fall back to it.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-legacy dev cluster (Flux 2.2)"]
+#[ignore = "requires the flux9s-legacy dev cluster (Flux 2.2)"]
 async fn notification_kinds_fall_back_to_v1beta3_on_older_flux() {
     use flux9s::models::FluxResourceKind;
 
@@ -1169,7 +1169,7 @@ async fn notification_kinds_fall_back_to_v1beta3_on_older_flux() {
 /// A mixed Flux list's Kubernetes kinds (#304): one combined watch lists
 /// each kind in the namespace and keeps the kinds apart, in order.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster"]
+#[ignore = "requires the flux9s-simple dev cluster"]
 async fn mixed_watch_lists_each_kubernetes_kind() {
     use flux9s::kube::kind_list::{KindListRequest, MixedRequest, watch_kinds};
 
@@ -1242,7 +1242,7 @@ async fn mixed_watch_lists_each_kubernetes_kind() {
 /// source and inventory (its HelmRelease expanded in turn), and a
 /// HelmRelease's generated source, release manifest, and workload pods.
 #[tokio::test]
-#[ignore = "requires the kind-flux9s-simple dev cluster (Flux 2.10)"]
+#[ignore = "requires the flux9s-simple dev cluster (Flux 2.10)"]
 async fn app_trees_follow_inventories_sources_and_pods() {
     use flux9s::kube::app::{AppRequest, AppRole, resolve};
     use flux9s::watcher::ResourceKey;
