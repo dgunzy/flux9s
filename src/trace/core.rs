@@ -6,9 +6,11 @@ use serde_json::Value;
 use crate::kube::conditions;
 use crate::kube::objects::ObjectRef;
 use crate::kube::ownership::Manager;
+use crate::kube::sources;
 use crate::models::FluxResourceKind;
 use crate::trace::models::{
-    SourceRef, TraceNode, TraceOutcome, TraceResult, TraceSpec, TraceStatus, is_flux_kind,
+    SourceRef, TraceNode, TraceOutcome, TraceResult, TraceSource, TraceSpec, TraceStatus,
+    is_flux_kind,
 };
 use crate::watcher::ResourceKey;
 
@@ -31,73 +33,177 @@ pub async fn trace_object(
     .await
 }
 
-/// Trace any object up to what manages it (#266): its controller owners
-/// (Pod → ReplicaSet → Deployment), the Flux object that manages the chain,
-/// and that object's source. Native objects resolve by `apiVersion`, so
-/// CRDs and cluster-scoped kinds work too. Argo CD, Helm, and unmanaged
-/// chains end the trace at that manager ([`TraceOutcome`]).
+/// Trace any object up its delivery pipeline, as the Flux Operator's trace
+/// does (#266): its controller owners (Pod → ReplicaSet → Deployment) to
+/// the object Flux labels claim, then every Flux object managing it, up to
+/// the top. The source is the one pulled by the **nearest applier** — the
+/// object itself when it has a source (a Kustomization applied by another
+/// still shows its own `sourceRef`), else its nearest manager with one —
+/// followed to the ExternalArtifact's producer and what that is built from.
+/// Native objects resolve by `apiVersion`, so CRDs and cluster-scoped
+/// kinds work too. Argo CD, Helm, and unmanaged chains end the trace at
+/// that manager ([`TraceOutcome`]).
 pub async fn trace_target(client: &kube::Client, target: &ObjectRef) -> Result<TraceResult> {
     let obj_value = fetch_value(client, target)
         .await
         .context("Failed to fetch object")?;
-    let current_ns = target.namespace.clone();
-    let initial_node = create_trace_node(&obj_value)?;
+    let object = create_trace_node(&obj_value)?;
 
-    // A Kustomization or HelmRelease: first check whether another Flux
-    // resource manages it (a Kustomization applying a Kustomization). The
-    // traced object is shown as "Object", so only its managers join the
-    // chain (as the Flux CLI does).
-    let initial_kind =
-        FluxResourceKind::parse_optional(&initial_node.kind).filter(|_| initial_node.is_flux());
-    if initial_kind.is_some_and(|kind| kind.has_source_ref()) {
-        let (walked_chain, walked_source, _) =
-            walk_owner_chain(client, Vec::new(), obj_value, current_ns.clone()).await?;
-        if walked_source.is_some() || !walked_chain.is_empty() {
-            return Ok(TraceResult {
-                object: initial_node,
-                chain: walked_chain,
-                source: walked_source,
-                outcome: TraceOutcome::Flux,
-            });
-        }
-
-        // Not managed by another: resolve its own source.
-        let mut chain_for_source = Vec::new();
-        let source =
-            resolve_source(client, &mut chain_for_source, &initial_node, &current_ns).await?;
-        return Ok(TraceResult {
-            object: initial_node,
-            chain: chain_for_source,
-            source,
-            outcome: TraceOutcome::Flux,
-        });
-    }
-
-    // Anything else starts the chain with itself and walks up.
-    let (chain, source, outcome) =
-        walk_owner_chain(client, vec![initial_node.clone()], obj_value, current_ns).await?;
-    let outcome = if initial_kind.is_some() {
+    let (above, outcome) =
+        walk_owner_chain(client, &object, obj_value.clone(), target.namespace.clone()).await;
+    let outcome = if object.is_flux() {
         TraceOutcome::Flux
     } else {
         outcome
     };
+
+    // An unreadable source ends the search, as in the Operator's trace: a
+    // manager's source isn't this applier's.
+    let source = match nearest_applier_source(&(object.clone(), obj_value), &above) {
+        Some((applier, source_key)) => match resolve_through(client, source_key).await {
+            Ok((_, (source_node, source_value))) => {
+                Some(trace_source(client, applier.key(), source_node, &source_value).await)
+            }
+            Err(e) => {
+                tracing::warn!("Couldn't read the source of {}: {:#}", applier.key(), e);
+                None
+            }
+        },
+        None => None,
+    };
+
     Ok(TraceResult {
-        object: initial_node,
-        chain,
+        object,
+        chain: above.into_iter().map(|(node, _)| node).collect(),
         source,
         outcome,
     })
 }
 
-/// Walk up from `current` — Flux ownership labels first, then controller
-/// owner references — until a Kustomization / HelmRelease (whose source is
-/// resolved), another manager (Argo CD, Helm), or the top of the chain.
+/// The nearest applier with a source and the source it names: the object
+/// itself when it has one, else the nearest Flux object above it that does
+/// (the walk may top out at a ResourceSet or FluxInstance, which have none).
+fn nearest_applier_source<'a>(
+    object: &'a (TraceNode, Value),
+    above: &'a [(TraceNode, Value)],
+) -> Option<(&'a TraceNode, ResourceKey)> {
+    std::iter::once(object)
+        .chain(above)
+        .find_map(|(node, value)| {
+            let kind = FluxResourceKind::parse_optional(&node.kind).filter(|_| node.is_flux())?;
+            sources::source_ref(kind, value, &node.namespace).map(|key| (node, key))
+        })
+}
+
+/// A resolved source with what it came from: an ExternalArtifact's
+/// producer (and the sources that combines), or a producer source's own
+/// `spec.sources`.
+async fn trace_source(
+    client: &kube::Client,
+    resolved_for: ResourceKey,
+    node: TraceNode,
+    value: &Value,
+) -> TraceSource {
+    let mut source = TraceSource {
+        resolved_for,
+        node,
+        produced_by: None,
+        built_from: Vec::new(),
+    };
+    let Some(kind) = FluxResourceKind::parse_optional(&source.node.kind) else {
+        return source;
+    };
+    let mut builder = (kind, value.clone(), source.node.namespace.clone());
+    if let Some(producer_key) = sources::producer_ref(kind, value, &source.node.namespace) {
+        let Some((producer, producer_value)) =
+            fetch_node(client, &ObjectRef::from(producer_key)).await
+        else {
+            return source;
+        };
+        let Some(producer_kind) = FluxResourceKind::parse_optional(&producer.kind) else {
+            return source;
+        };
+        builder = (producer_kind, producer_value, producer.namespace.clone());
+        source.produced_by = Some(producer);
+    }
+    let (kind, value, namespace) = builder;
+    for key in sources::built_from(kind, &value, &namespace) {
+        if let Some((upstream, _)) = fetch_node(client, &ObjectRef::from(key)).await {
+            source.built_from.push(upstream);
+        }
+    }
+    source
+}
+
+/// Fetch the source `key` names, resolving through intermediates (a
+/// HelmRelease's HelmChart) to the source that holds the artifact:
+/// `(intermediates, source)`, each with its JSON.
+async fn resolve_through(
+    client: &kube::Client,
+    mut key: ResourceKey,
+) -> Result<(Vec<(TraceNode, Value)>, (TraceNode, Value))> {
+    let mut intermediates: Vec<(TraceNode, Value)> = Vec::new();
+    loop {
+        let value = fetch_value(client, &ObjectRef::from(key.clone()))
+            .await
+            .with_context(|| format!("Failed to fetch source {key}"))?;
+        let node = create_trace_node(&value)?;
+        let next = FluxResourceKind::parse_optional(&node.kind)
+            .filter(|kind| sources::is_intermediate(*kind))
+            .and_then(|kind| sources::source_ref(kind, &value, &node.namespace));
+        let Some(next) = next.filter(|_| intermediates.len() < MAX_TRACE_DEPTH) else {
+            return Ok((intermediates, (node, value)));
+        };
+        intermediates.push((node, value));
+        key = next;
+    }
+}
+
+/// An object's **own** source, through any intermediates (a HelmChart
+/// between a HelmRelease and its repository): `(intermediates, source)`.
+/// `None` when it pulls from no source. The graph draws these; the trace
+/// resolves through them.
+pub async fn own_source(
+    client: &kube::Client,
+    kind: &str,
+    namespace: &str,
+    name: &str,
+) -> Result<(Vec<TraceNode>, Option<TraceNode>)> {
+    let target = ObjectRef::from(ResourceKey::new(kind, namespace, name));
+    let obj = fetch_value(client, &target)
+        .await
+        .context("Failed to fetch object")?;
+    let node = create_trace_node(&obj)?;
+    let Some(kind) = FluxResourceKind::parse_optional(&node.kind).filter(|_| node.is_flux()) else {
+        return Ok((Vec::new(), None));
+    };
+    let Some(source_key) = sources::source_ref(kind, &obj, &node.namespace) else {
+        return Ok((Vec::new(), None));
+    };
+    let (intermediates, (source, _)) = resolve_through(client, source_key).await?;
+    Ok((
+        intermediates.into_iter().map(|(node, _)| node).collect(),
+        Some(source),
+    ))
+}
+
+/// Walk up from `object` — Flux ownership labels first, then controller
+/// owner references — through every manager to the top, or to another
+/// manager (Argo CD, Helm) or an unreadable owner. Returns what is above
+/// the object, nearest first, each with its JSON.
 async fn walk_owner_chain(
     client: &kube::Client,
-    mut chain: Vec<TraceNode>,
+    object: &TraceNode,
     mut current: Value,
     mut current_ns: String,
-) -> Result<(Vec<TraceNode>, Option<TraceNode>, TraceOutcome)> {
+) -> (Vec<(TraceNode, Value)>, TraceOutcome) {
+    let mut chain: Vec<(TraceNode, Value)> = Vec::new();
+    let seen = |chain: &[(TraceNode, Value)], node: &TraceNode| {
+        node.same_object(object) || chain.iter().any(|(n, _)| n.same_object(node))
+    };
+    let nodes = |chain: &[(TraceNode, Value)]| -> Vec<TraceNode> {
+        chain.iter().map(|(n, _)| n.clone()).collect()
+    };
     for _ in 0..MAX_TRACE_DEPTH {
         // Flux labels (kustomize.toolkit.fluxcd.io/name, …) name the manager.
         if let Some(flux_owner) = find_flux_owner_from_labels(&current) {
@@ -111,60 +217,42 @@ async fn walk_owner_chain(
                 &owner_ns,
                 &flux_owner.name,
             ));
-            let already_in_chain = chain.iter().any(|node| {
-                node.kind == flux_owner.kind
-                    && node.name == flux_owner.name
-                    && node.namespace == owner_ns
-            });
-
-            if !already_in_chain {
-                // Flux claims the object but its manager can't be read (RBAC,
-                // or deleted and the object orphaned): say so, rather than
-                // walking past the claim to a misleading "not managed".
-                let Some((owner_node, owner_obj)) = fetch_node(client, &owner).await else {
-                    return Ok((
-                        chain,
-                        None,
-                        TraceOutcome::OwnerUnreadable(format!(
-                            "{}/{}",
-                            flux_owner.kind, flux_owner.name
-                        )),
-                    ));
-                };
-                chain.push(owner_node.clone());
-
-                // A Kustomization or HelmRelease: resolve its source and stop.
-                if FluxResourceKind::parse_optional(&flux_owner.kind)
-                    .is_some_and(|kind| kind.has_source_ref())
-                {
-                    let source = resolve_source(client, &mut chain, &owner_node, &owner_ns).await?;
-                    return Ok((chain, source, TraceOutcome::Flux));
-                }
-
-                // ResourceSet / FluxInstance: keep walking from it.
-                current = owner_obj;
-                current_ns = owner_ns;
-                continue;
+            // Flux claims the object but its manager can't be read (RBAC,
+            // or deleted and the object orphaned): say so, rather than
+            // walking past the claim to a misleading "not managed".
+            let Some((owner_node, owner_obj)) = fetch_node(client, &owner).await else {
+                let outcome = TraceOutcome::OwnerUnreadable(format!(
+                    "{}/{}",
+                    flux_owner.kind, flux_owner.name
+                ));
+                return (chain, outcome);
+            };
+            if seen(&chain, &owner_node) {
+                break; // A label cycle: the chain is complete.
             }
+            chain.push((owner_node, owner_obj.clone()));
+            // Keep walking: the manager may itself be managed.
+            current = owner_obj;
+            current_ns = owner_ns;
+            continue;
         }
 
         // Another definitive manager (Argo CD): the trace stops there.
         if let Some(manager) = crate::kube::ownership::detect_manager(&current)
             && !matches!(manager, Manager::Flux { .. })
         {
-            return Ok((chain, None, TraceOutcome::Other(manager)));
+            return (chain, TraceOutcome::Other(manager));
         }
 
         // The controller owner — the same one MANAGED-BY follows.
         let Some(owner_ref) = crate::kube::ownership::controller_owner(&current) else {
-            let outcome = top_of_chain_outcome(&chain, &current);
-            return Ok((chain, None, outcome));
+            let outcome = top_of_chain_outcome(&nodes(&chain), &current);
+            return (chain, outcome);
         };
         // Flux kinds (by kind *and* API group) go through the Flux fetch path
         // (version fallback); everything else by the owner's own apiVersion,
         // so cluster-scoped owners and CRDs resolve too.
-        let owner_is_flux = is_flux_kind(&owner_ref.kind, Some(&owner_ref.api_version));
-        let owner = if owner_is_flux {
+        let owner = if is_flux_kind(&owner_ref.kind, Some(&owner_ref.api_version)) {
             ObjectRef::from(ResourceKey::new(
                 &owner_ref.kind,
                 &current_ns,
@@ -181,7 +269,7 @@ async fn walk_owner_chain(
         let unreadable =
             || TraceOutcome::OwnerUnreadable(format!("{}/{}", owner_ref.kind, owner_ref.name));
         let Some((owner_node, owner_obj)) = fetch_node(client, &owner).await else {
-            return Ok((chain, None, unreadable()));
+            return (chain, unreadable());
         };
 
         // A recreated owner with the same name isn't this owner.
@@ -197,24 +285,17 @@ async fn walk_owner_chain(
                 owner_ref.uid,
                 obj_uid
             );
-            return Ok((chain, None, unreadable()));
+            return (chain, unreadable());
         }
 
-        if !chain.iter().any(|n| n.same_object(&owner_node)) {
-            chain.push(owner_node.clone());
+        if seen(&chain, &owner_node) {
+            break; // An owner reference cycle.
         }
-        if owner_is_flux
-            && FluxResourceKind::parse_optional(&owner_ref.kind)
-                .is_some_and(|kind| kind.has_source_ref())
-        {
-            let source = resolve_source(client, &mut chain, &owner_node, &current_ns).await?;
-            return Ok((chain, source, TraceOutcome::Flux));
-        }
+        chain.push((owner_node, owner_obj.clone()));
         current = owner_obj;
     }
-    tracing::warn!("Trace stopped after {MAX_TRACE_DEPTH} owner hops");
-    let outcome = top_of_chain_outcome(&chain, &current);
-    Ok((chain, None, outcome))
+    let outcome = top_of_chain_outcome(&nodes(&chain), &current);
+    (chain, outcome)
 }
 
 /// How a chain that ran out of owners ended: Flux when a Flux object is in
@@ -232,267 +313,6 @@ fn top_of_chain_outcome(chain: &[TraceNode], top: &Value) -> TraceOutcome {
         crate::kube::ownership::Ownership::Managed(manager) => TraceOutcome::Other(manager),
         _ => TraceOutcome::Unmanaged,
     }
-}
-
-/// Resolve the source for a Kustomization or HelmRelease
-/// Adds intermediate resources (like HelmChart) to the chain
-async fn resolve_source(
-    client: &kube::Client,
-    chain: &mut Vec<TraceNode>,
-    node: &TraceNode,
-    default_ns: &str,
-) -> Result<Option<TraceNode>> {
-    use crate::models::FluxResourceKind;
-
-    match FluxResourceKind::parse_optional(&node.kind) {
-        Some(FluxResourceKind::Kustomization) => {
-            resolve_kustomization_source(client, node, default_ns).await
-        }
-        Some(FluxResourceKind::HelmRelease) => {
-            resolve_helmrelease_source(client, chain, node, default_ns).await
-        }
-        _ => Ok(None),
-    }
-}
-
-/// Resolve source for a Kustomization
-async fn resolve_kustomization_source(
-    client: &kube::Client,
-    node: &TraceNode,
-    default_ns: &str,
-) -> Result<Option<TraceNode>> {
-    // Fetch the Kustomization object to get its spec
-    let ks_value = fetch_object(client, &node.kind, &node.namespace, &node.name).await?;
-
-    // Extract sourceRef from spec
-    let source_ref = ks_value
-        .get("spec")
-        .and_then(|s| s.get("sourceRef"))
-        .and_then(|sr| sr.as_object());
-
-    if let Some(sr) = source_ref {
-        let source_kind = sr
-            .get("kind")
-            .and_then(|k| k.as_str())
-            .context("sourceRef missing kind")?;
-        let source_name = sr
-            .get("name")
-            .and_then(|n| n.as_str())
-            .context("sourceRef missing name")?;
-        let source_ns = sr
-            .get("namespace")
-            .and_then(|n| n.as_str())
-            .unwrap_or(default_ns);
-
-        // Handle ExternalArtifact - validate it has sourceRef
-        if source_kind == "ExternalArtifact" {
-            let ea_value = fetch_object(client, source_kind, source_ns, source_name).await?;
-            if ea_value
-                .get("spec")
-                .and_then(|s| s.get("sourceRef"))
-                .is_none()
-            {
-                return Err(anyhow::anyhow!(
-                    "ExternalArtifact {}/{} is missing spec.sourceRef",
-                    source_ns,
-                    source_name
-                ));
-            }
-        }
-
-        return fetch_and_trace_flux_resource(client, source_kind, source_ns, source_name).await;
-    }
-
-    Ok(None)
-}
-
-/// Resolve source for a HelmRelease
-/// Handles:
-/// 1. HelmRelease.status.helmChart -> HelmChart -> source, or (Flux 2.10+)
-///    the generated OCIRepository
-/// 2. HelmRelease.spec.chartRef -> OCIRepository/ExternalArtifact
-/// 3. HelmRelease.spec.chart.spec.sourceRef -> GitRepository/HelmRepository
-async fn resolve_helmrelease_source(
-    client: &kube::Client,
-    chain: &mut Vec<TraceNode>,
-    node: &TraceNode,
-    default_ns: &str,
-) -> Result<Option<TraceNode>> {
-    // Fetch the HelmRelease object
-    let hr_value = fetch_object(client, &node.kind, &node.namespace, &node.name).await?;
-
-    // First, check the source object the controller generated, named in status.
-    // Since Flux 2.10 a `chart` template can generate an OCIRepository instead
-    // of a HelmChart, and status then names its kind.
-    if let Some(helm_chart_ref) = hr_value
-        .get("status")
-        .and_then(|s| s.get("helmChart"))
-        .and_then(|hc| hc.as_str())
-    {
-        let ResourceKey {
-            resource_type: generated_kind,
-            namespace: chart_ns,
-            name: chart_name,
-        } = crate::kube::standing::generated_chart_source(helm_chart_ref, default_ns);
-        match FluxResourceKind::parse_optional(&generated_kind) {
-            Some(kind @ (FluxResourceKind::HelmChart | FluxResourceKind::OCIRepository)) => {
-                if let Some(generated) =
-                    fetch_and_trace_flux_resource(client, kind.as_str(), &chart_ns, &chart_name)
-                        .await?
-                {
-                    if kind == FluxResourceKind::OCIRepository {
-                        return Ok(Some(generated)); // the source itself
-                    }
-                    // A HelmChart sits between the release and its source.
-                    chain.push(generated.clone());
-                    return resolve_helmchart_source(client, &generated, &chart_ns).await;
-                }
-            }
-            _ => tracing::warn!("Unsupported status.helmChart kind: {}", generated_kind),
-        }
-    }
-
-    // Check spec.chartRef (for OCIRepository, ExternalArtifact, or HelmChart)
-    if let Some(chart_ref) = hr_value
-        .get("spec")
-        .and_then(|s| s.get("chartRef"))
-        .and_then(|cr| cr.as_object())
-    {
-        let chart_ref_kind = chart_ref
-            .get("kind")
-            .and_then(|k| k.as_str())
-            .context("chartRef missing kind")?;
-        let chart_ref_name = chart_ref
-            .get("name")
-            .and_then(|n| n.as_str())
-            .context("chartRef missing name")?;
-        let chart_ref_ns = chart_ref
-            .get("namespace")
-            .and_then(|n| n.as_str())
-            .unwrap_or(default_ns);
-
-        match FluxResourceKind::parse_optional(chart_ref_kind) {
-            Some(FluxResourceKind::HelmChart) => {
-                // If chartRef points to HelmChart, add it to chain and resolve its source
-                if let Some(chart_node) = fetch_and_trace_flux_resource(
-                    client,
-                    chart_ref_kind,
-                    chart_ref_ns,
-                    chart_ref_name,
-                )
-                .await?
-                {
-                    // Add HelmChart to chain
-                    chain.push(chart_node.clone());
-                    return resolve_helmchart_source(client, &chart_node, chart_ref_ns).await;
-                }
-            }
-            Some(FluxResourceKind::OCIRepository) => {
-                // Direct source reference
-                return fetch_and_trace_flux_resource(
-                    client,
-                    chart_ref_kind,
-                    chart_ref_ns,
-                    chart_ref_name,
-                )
-                .await;
-            }
-            Some(FluxResourceKind::ExternalArtifact) => {
-                // Validate ExternalArtifact has sourceRef
-                let ea_value =
-                    fetch_object(client, chart_ref_kind, chart_ref_ns, chart_ref_name).await?;
-                if ea_value
-                    .get("spec")
-                    .and_then(|s| s.get("sourceRef"))
-                    .is_none()
-                {
-                    return Err(anyhow::anyhow!(
-                        "ExternalArtifact {}/{} is missing spec.sourceRef",
-                        chart_ref_ns,
-                        chart_ref_name
-                    ));
-                }
-                // Direct source reference
-                return fetch_and_trace_flux_resource(
-                    client,
-                    chart_ref_kind,
-                    chart_ref_ns,
-                    chart_ref_name,
-                )
-                .await;
-            }
-            _ => {
-                tracing::warn!("Unsupported chartRef kind: {}", chart_ref_kind);
-            }
-        }
-    }
-
-    // Check spec.chart.spec.sourceRef (for GitRepository or HelmRepository)
-    if let Some(chart_spec) = hr_value
-        .get("spec")
-        .and_then(|s| s.get("chart"))
-        .and_then(|c| c.get("spec"))
-        .and_then(|cs| cs.as_object())
-        && let Some(source_ref) = chart_spec.get("sourceRef").and_then(|sr| sr.as_object())
-    {
-        let source_kind = source_ref
-            .get("kind")
-            .and_then(|k| k.as_str())
-            .context("chart.spec.sourceRef missing kind")?;
-        let source_name = source_ref
-            .get("name")
-            .and_then(|n| n.as_str())
-            .context("chart.spec.sourceRef missing name")?;
-        let source_ns = source_ref
-            .get("namespace")
-            .and_then(|n| n.as_str())
-            .unwrap_or(default_ns);
-
-        return fetch_and_trace_flux_resource(client, source_kind, source_ns, source_name).await;
-    }
-
-    Ok(None)
-}
-
-/// Resolve source for a HelmChart
-async fn resolve_helmchart_source(
-    client: &kube::Client,
-    chart_node: &TraceNode,
-    default_ns: &str,
-) -> Result<Option<TraceNode>> {
-    // Fetch the HelmChart object to get its spec
-    let chart_value = fetch_object(
-        client,
-        &chart_node.kind,
-        &chart_node.namespace,
-        &chart_node.name,
-    )
-    .await?;
-
-    // Extract sourceRef from spec
-    let source_ref = chart_value
-        .get("spec")
-        .and_then(|s| s.get("sourceRef"))
-        .and_then(|sr| sr.as_object());
-
-    if let Some(sr) = source_ref {
-        let source_kind = sr
-            .get("kind")
-            .and_then(|k| k.as_str())
-            .context("HelmChart sourceRef missing kind")?;
-        let source_name = sr
-            .get("name")
-            .and_then(|n| n.as_str())
-            .context("HelmChart sourceRef missing name")?;
-        let source_ns = sr
-            .get("namespace")
-            .and_then(|n| n.as_str())
-            .unwrap_or(default_ns);
-
-        return fetch_and_trace_flux_resource(client, source_kind, source_ns, source_name).await;
-    }
-
-    Ok(None)
 }
 
 /// The Flux object an object's labels name as its manager — the same
@@ -514,17 +334,6 @@ fn find_flux_owner_from_labels(obj: &Value) -> Option<SourceRef> {
         }),
         _ => None,
     }
-}
-
-/// Fetch and trace a Flux resource
-async fn fetch_and_trace_flux_resource(
-    client: &kube::Client,
-    kind: &str,
-    namespace: &str,
-    name: &str,
-) -> Result<Option<TraceNode>> {
-    let target = ObjectRef::from(ResourceKey::new(kind, namespace, name));
-    Ok(fetch_node(client, &target).await.map(|(node, _)| node))
 }
 
 /// Fetch an object and its trace node; `None` (logged) when it can't be read.
@@ -554,20 +363,6 @@ async fn fetch_value(client: &kube::Client, target: &ObjectRef) -> Result<Value>
         .await
         .with_context(|| format!("Failed to fetch {target}"))?;
     serde_json::to_value(&obj).context("Failed to serialize object to JSON")
-}
-
-/// Fetch a Flux resource (or built-in kind) by name.
-async fn fetch_object(
-    client: &kube::Client,
-    kind: &str,
-    namespace: &str,
-    name: &str,
-) -> Result<Value> {
-    fetch_value(
-        client,
-        &ObjectRef::from(ResourceKey::new(kind, namespace, name)),
-    )
-    .await
 }
 
 /// Create a trace node from a JSON object. Its namespace is the object's own
@@ -740,11 +535,10 @@ mod tests {
             "name": "settings", "namespace": "apps", "labels": {
                 "kustomize.toolkit.fluxcd.io/name": "apps",
                 "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}}});
-        let (chain, source, outcome) =
-            walk_owner_chain(&client, Vec::new(), labelled.clone(), "apps".into())
-                .await
-                .unwrap();
-        assert!(chain.is_empty() && source.is_none());
+        let object = create_trace_node(&labelled).unwrap();
+        let (chain, outcome) =
+            walk_owner_chain(&client, &object, labelled.clone(), "apps".into()).await;
+        assert!(chain.is_empty());
         assert_eq!(
             outcome,
             TraceOutcome::OwnerUnreadable("Kustomization/apps".into())
@@ -754,6 +548,205 @@ mod tests {
             top_of_chain_outcome(&[], &labelled),
             TraceOutcome::OwnerUnreadable("Kustomization/apps".into())
         );
+    }
+
+    fn applier(kind: &str, namespace: &str, name: &str, spec: Value) -> (TraceNode, Value) {
+        let api_version = crate::kube::api::api_resource_for_kind(kind)
+            .unwrap()
+            .api_version;
+        let value = json!({"apiVersion": api_version, "kind": kind,
+            "metadata": {"name": name, "namespace": namespace}, "spec": spec});
+        (create_trace_node(&value).unwrap(), value)
+    }
+
+    /// The user-reported case (and the Flux Operator's rule): a
+    /// Kustomization applied by another resolves to its **own** source,
+    /// not to its parent's GitRepository.
+    #[test]
+    fn a_managed_kustomization_resolves_its_own_source() {
+        let child = applier(
+            "Kustomization",
+            "team-a",
+            "apps",
+            json!({"sourceRef":
+            {"kind": "ExternalArtifact", "name": "apps", "namespace": "flux-system"}}),
+        );
+        let parent = applier(
+            "Kustomization",
+            "flux-system",
+            "flux-system",
+            json!({"sourceRef": {"kind": "GitRepository", "name": "flux-system"}}),
+        );
+        let (resolved_for, key) =
+            nearest_applier_source(&child, std::slice::from_ref(&parent)).unwrap();
+        assert_eq!(resolved_for.name, "apps");
+        assert_eq!(
+            key,
+            ResourceKey::new("ExternalArtifact", "flux-system", "apps")
+        );
+    }
+
+    /// A workload has no source of its own: the nearest manager's is used,
+    /// skipping managers without one (a ResourceSet).
+    #[test]
+    fn a_workload_resolves_its_nearest_appliers_source() {
+        let deployment = (node("Deployment"), json!({"kind": "Deployment"}));
+        let release = applier(
+            "HelmRelease",
+            "apps",
+            "podinfo",
+            json!({"chartRef":
+            {"kind": "OCIRepository", "name": "podinfo"}}),
+        );
+        let rset = applier("ResourceSet", "flux-system", "apps", json!({}));
+        let above = [release, rset.clone()];
+        let (resolved_for, key) = nearest_applier_source(&deployment, &above).unwrap();
+        assert_eq!(resolved_for.kind, "HelmRelease");
+        assert_eq!(key, ResourceKey::new("OCIRepository", "apps", "podinfo"));
+
+        let top = applier(
+            "Kustomization",
+            "flux-system",
+            "tenants",
+            json!({"sourceRef": {"kind": "GitRepository", "name": "tenants"}}),
+        );
+        let above = [rset.clone(), top];
+        let (resolved_for, _) = nearest_applier_source(&deployment, &above).unwrap();
+        assert_eq!(resolved_for.name, "tenants", "past the ResourceSet");
+        assert!(nearest_applier_source(&deployment, &[rset]).is_none());
+    }
+
+    use crate::kube::fake_api::{FakeCluster, fixtures, flux};
+
+    fn names(nodes: &[TraceNode]) -> Vec<String> {
+        nodes
+            .iter()
+            .map(|n| format!("{}/{}/{}", n.kind, n.namespace, n.name))
+            .collect()
+    }
+
+    /// The user-reported shape, through the real walk: the parent is the
+    /// manager, but the source is the child's own ExternalArtifact — with
+    /// its producer and what that is built from — never the parent's
+    /// `fleet` repository.
+    #[tokio::test]
+    async fn a_managed_kustomization_traces_to_its_own_artifact_and_producer() {
+        let cluster = FakeCluster::new(fixtures::external_artifact_pipeline());
+        let trace = trace_object(&cluster.client(), "Kustomization", "team-a", "apps")
+            .await
+            .unwrap();
+        assert_eq!(
+            names(&trace.chain),
+            ["Kustomization/flux-system/flux-system"]
+        );
+        assert_eq!(trace.outcome, TraceOutcome::Flux);
+        let source = trace.source.unwrap();
+        assert_eq!(
+            source.resolved_for,
+            ResourceKey::new("Kustomization", "team-a", "apps")
+        );
+        assert_eq!(names(&[source.node]), ["ExternalArtifact/flux-system/apps"]);
+        assert_eq!(
+            names(&source.produced_by.into_iter().collect::<Vec<_>>()),
+            ["ArtifactGenerator/flux-system/gen"]
+        );
+        assert_eq!(
+            names(&source.built_from),
+            ["GitRepository/flux-system/repo"]
+        );
+        assert!(cluster.writes().is_empty(), "a trace only reads");
+    }
+
+    /// A Pod walks its controller owners to the HelmRelease Flux labels
+    /// name, keeps going to the Kustomization that applied that, and takes
+    /// the nearest applier's source — the release's — resolved through the
+    /// generated HelmChart to the repository.
+    #[tokio::test]
+    async fn a_pod_traces_through_owners_and_every_manager_to_its_releases_repository() {
+        let cluster = FakeCluster::new(fixtures::helm_pipeline());
+        let pod = ObjectRef::native("v1", "Pod", "apps", "web-abc");
+        let trace = trace_target(&cluster.client(), &pod).await.unwrap();
+        assert_eq!(
+            names(&trace.chain),
+            [
+                "ReplicaSet/apps/web-7b5",
+                "Deployment/apps/web",
+                "HelmRelease/apps/web",
+                "Kustomization/flux-system/flux-system",
+            ]
+        );
+        assert_eq!(trace.outcome, TraceOutcome::Flux);
+        let source = trace.source.unwrap();
+        assert_eq!(
+            source.resolved_for,
+            ResourceKey::new("HelmRelease", "apps", "web")
+        );
+        assert_eq!(
+            names(&[source.node]),
+            ["HelmRepository/flux-system/charts"],
+            "resolved through the HelmChart"
+        );
+        assert!(source.produced_by.is_none() && source.built_from.is_empty());
+    }
+
+    /// `spec.sourceRef` is optional on an ExternalArtifact: one naming no
+    /// producer is still the source, with nothing above it.
+    #[tokio::test]
+    async fn an_external_artifact_without_a_producer_is_still_the_source() {
+        let mut objects = fixtures::external_artifact_pipeline();
+        for obj in &mut objects {
+            if obj["kind"] == "ExternalArtifact" {
+                obj["spec"] = json!({});
+            }
+        }
+        let cluster = FakeCluster::new(objects);
+        let trace = trace_object(&cluster.client(), "Kustomization", "team-a", "apps")
+            .await
+            .unwrap();
+        let source = trace.source.unwrap();
+        assert_eq!(names(&[source.node]), ["ExternalArtifact/flux-system/apps"]);
+        assert!(source.produced_by.is_none() && source.built_from.is_empty());
+    }
+
+    /// The applier's source can't be read: no source — not a manager's,
+    /// which isn't this applier's — and the chain still shows.
+    #[tokio::test]
+    async fn an_unreadable_source_is_not_replaced_by_a_managers() {
+        let objects: Vec<Value> = fixtures::external_artifact_pipeline()
+            .into_iter()
+            .filter(|obj| obj["kind"] != "ExternalArtifact")
+            .collect();
+        let cluster = FakeCluster::new(objects);
+        let trace = trace_object(&cluster.client(), "Kustomization", "team-a", "apps")
+            .await
+            .unwrap();
+        assert_eq!(
+            names(&trace.chain),
+            ["Kustomization/flux-system/flux-system"]
+        );
+        assert!(trace.source.is_none(), "{:?}", trace.source);
+    }
+
+    /// Two Kustomizations labelled as applying each other: the walk stops
+    /// instead of looping, with each listed once.
+    #[tokio::test]
+    async fn a_label_cycle_ends_the_walk() {
+        let labelled = |name: &str, by: &str| {
+            flux(
+                "Kustomization",
+                "apps",
+                name,
+                json!({
+                "metadata": {"labels": {"kustomize.toolkit.fluxcd.io/name": by,
+                    "kustomize.toolkit.fluxcd.io/namespace": "apps"}},
+                "spec": {"sourceRef": {"kind": "GitRepository", "name": "missing"}}}),
+            )
+        };
+        let cluster = FakeCluster::new([labelled("a", "b"), labelled("b", "a")]);
+        let trace = trace_object(&cluster.client(), "Kustomization", "apps", "a")
+            .await
+            .unwrap();
+        assert_eq!(names(&trace.chain), ["Kustomization/apps/b"]);
     }
 
     #[test]

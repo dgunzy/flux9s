@@ -299,7 +299,7 @@ mod tests {
     fn usage_matches_both_namespace_and_name_and_missing_usage_keeps_requests() {
         let columns = vec![Column::Native(NativeColumn::Cpu)];
         let row = |ns| {
-            super::super::kind_list::kind_row(&columns, &json!({"kind":"Pod", "metadata":{"name":"web", "namespace":ns}, "spec":{"containers":[{"resources":{"requests":{"cpu":"100m"}}}]}}), chrono::Utc::now()).unwrap()
+            super::super::kind_list::kind_row(&columns, &json!({"kind":"Pod", "metadata":{"name":"web", "namespace":ns}, "spec":{"containers":[{"resources":{"requests":{"cpu":"100m"}}}]}}), jiff::Timestamp::now()).unwrap()
         };
         let mut snapshot = KindListSnapshot {
             columns: columns.clone(),
@@ -335,7 +335,7 @@ mod tests {
             Column::Native(NativeColumn::Cpu),
             Column::Native(NativeColumn::Pods),
         ];
-        let row = super::super::kind_list::kind_row(&columns, &json!({"kind":"Node", "metadata":{"name":"worker"}, "status":{"allocatable":{"cpu":"2"}}}), chrono::Utc::now()).unwrap();
+        let row = super::super::kind_list::kind_row(&columns, &json!({"kind":"Node", "metadata":{"name":"worker"}, "status":{"allocatable":{"cpu":"2"}}}), jiff::Timestamp::now()).unwrap();
         let mut snapshot = KindListSnapshot {
             columns,
             rows: vec![row],

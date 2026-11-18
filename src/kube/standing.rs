@@ -40,7 +40,7 @@ use crate::watcher::ResourceKey;
 /// Objects younger than this are never judged "not in inventory": Flux
 /// applies an object before it records it, so a brand-new object would
 /// otherwise flash as orphaned.
-pub const ORPHAN_GRACE: chrono::Duration = chrono::Duration::minutes(2);
+pub const ORPHAN_GRACE: jiff::SignedDuration = jiff::SignedDuration::from_mins(2);
 /// How long a read owner is trusted before it's read again.
 pub const OWNER_TTL: Duration = Duration::from_secs(30);
 /// Per-owner read cap.
@@ -205,10 +205,10 @@ fn prune_disabled(obj: &Value) -> bool {
 }
 
 /// Whether `obj` is younger than [`ORPHAN_GRACE`] at `now`.
-fn is_new(obj: &Value, now: chrono::DateTime<chrono::Utc>) -> bool {
+fn is_new(obj: &Value, now: jiff::Timestamp) -> bool {
     string_at(obj, "/metadata/creationTimestamp")
-        .and_then(|t| t.parse::<chrono::DateTime<chrono::Utc>>().ok())
-        .is_some_and(|created| now - created < ORPHAN_GRACE)
+        .and_then(|t| t.parse::<jiff::Timestamp>().ok())
+        .is_some_and(|created| now.duration_since(created) < ORPHAN_GRACE)
 }
 
 /// Why a Flux-labelled object is orphaned, if it is. `None` means managed,
@@ -218,7 +218,7 @@ pub fn orphan_reason(
     group: &str,
     kind: &str,
     owner: &OwnerState,
-    now: chrono::DateTime<chrono::Utc>,
+    now: jiff::Timestamp,
 ) -> Option<OrphanReason> {
     // Never for a brand-new object (Flux may not have recorded it, or its
     // owner may be appearing too) or a Helm hook (never in a release
@@ -309,7 +309,7 @@ pub async fn check_orphan(client: &kube::Client, obj: &Value) -> Option<(Manager
     .unwrap_or(OwnerState::Unknown);
     let group = group_of(string_at(obj, "/apiVersion")?);
     let kind = string_at(obj, "/kind")?;
-    let reason = orphan_reason(obj, group, kind, &owner, chrono::Utc::now())?;
+    let reason = orphan_reason(obj, group, kind, &owner, jiff::Timestamp::now())?;
     Some((manager, reason))
 }
 
@@ -582,7 +582,7 @@ pub fn assess(
     group: &str,
     kind: &str,
     owner_of: impl Fn(&ResourceKey) -> Option<OwnerState>,
-    now: chrono::DateTime<chrono::Utc>,
+    now: jiff::Timestamp,
 ) -> Option<Standing> {
     if let Some(reason) = system_reason(obj, group, kind) {
         return Some(Standing::System(reason));
@@ -713,7 +713,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn now() -> chrono::DateTime<chrono::Utc> {
+    fn now() -> jiff::Timestamp {
         "2026-10-25T12:00:00Z".parse().unwrap()
     }
 

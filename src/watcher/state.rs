@@ -65,7 +65,7 @@ impl fmt::Display for ResourceKey {
 /// Reconciliation event tracking
 #[derive(Debug, Clone)]
 pub struct ReconciliationEvent {
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub timestamp: jiff::Timestamp,
     pub revision: Option<String>,
     pub status: String, // "Success", "Failed", "Unknown"
     pub message: Option<String>,
@@ -78,7 +78,7 @@ pub struct ResourceInfo {
     pub namespace: String,
     pub resource_type: String,
     /// Creation timestamp (from `metadata.creationTimestamp`), shown as the AGE column
-    pub age: Option<chrono::DateTime<chrono::Utc>>,
+    pub age: Option<jiff::Timestamp>,
     // Common status fields across Flux CRDs
     pub suspended: Option<bool>,
     pub ready: Option<bool>,
@@ -88,7 +88,7 @@ pub struct ResourceInfo {
     pub labels: HashMap<String, String>,
     pub annotations: HashMap<String, String>,
     // Reconciliation tracking
-    pub last_reconciled: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_reconciled: Option<jiff::Timestamp>,
     pub reconciliation_history: Vec<ReconciliationEvent>, // Limited to last N events
     /// The API group of a Kubernetes row in a mixed Flux list (#304);
     /// `None` for watched Flux resources. With kind, namespace, and name it
@@ -132,14 +132,11 @@ pub fn extract_labels(obj: &serde_json::Value) -> HashMap<String, String> {
 /// Extract the creation timestamp from a Kubernetes resource JSON object.
 ///
 /// Reads `metadata.creationTimestamp` (RFC 3339); used for the AGE column.
-pub fn extract_creation_timestamp(
-    obj: &serde_json::Value,
-) -> Option<chrono::DateTime<chrono::Utc>> {
+pub fn extract_creation_timestamp(obj: &serde_json::Value) -> Option<jiff::Timestamp> {
     obj.get("metadata")
         .and_then(|m| m.get("creationTimestamp"))
         .and_then(|v| v.as_str())
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .and_then(|s| s.parse::<jiff::Timestamp>().ok())
 }
 
 /// Extract annotations from a Kubernetes resource JSON object

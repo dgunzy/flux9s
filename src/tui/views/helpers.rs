@@ -147,24 +147,39 @@ pub fn create_themed_block<'a>(title: &'a str, theme: &Theme) -> Block<'a> {
 
 /// A resource age (creation timestamp) as a compact k9s-style duration
 /// ([`crate::age::since`]); `-` when unknown.
-pub fn format_age(age: Option<chrono::DateTime<chrono::Utc>>) -> String {
+pub fn format_age(age: Option<jiff::Timestamp>) -> String {
     crate::age::since(age)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, Utc};
+    use jiff::{SignedDuration as Duration, Timestamp};
 
     #[test]
     fn test_format_age_units() {
         assert_eq!(format_age(None), "-");
-        assert_eq!(format_age(Some(Utc::now())), "0s");
-        assert_eq!(format_age(Some(Utc::now() - Duration::seconds(42))), "42s");
-        assert_eq!(format_age(Some(Utc::now() - Duration::minutes(5))), "5m");
-        assert_eq!(format_age(Some(Utc::now() - Duration::hours(3))), "3h");
-        assert_eq!(format_age(Some(Utc::now() - Duration::days(12))), "12d");
-        assert_eq!(format_age(Some(Utc::now() - Duration::days(800))), "2y");
+        assert_eq!(format_age(Some(Timestamp::now())), "0s");
+        assert_eq!(
+            format_age(Some(Timestamp::now() - Duration::from_secs(42))),
+            "42s"
+        );
+        assert_eq!(
+            format_age(Some(Timestamp::now() - Duration::from_mins(5))),
+            "5m"
+        );
+        assert_eq!(
+            format_age(Some(Timestamp::now() - Duration::from_hours(3))),
+            "3h"
+        );
+        assert_eq!(
+            format_age(Some(Timestamp::now() - Duration::from_hours(12 * 24))),
+            "12d"
+        );
+        assert_eq!(
+            format_age(Some(Timestamp::now() - Duration::from_hours(800 * 24))),
+            "2y"
+        );
     }
 
     #[test]
@@ -223,6 +238,9 @@ mod tests {
     #[test]
     fn test_format_age_future_timestamp_clamps_to_zero() {
         // Clock skew between client and API server should not render negative ages
-        assert_eq!(format_age(Some(Utc::now() + Duration::seconds(30))), "0s");
+        assert_eq!(
+            format_age(Some(Timestamp::now() + Duration::from_secs(30))),
+            "0s"
+        );
     }
 }

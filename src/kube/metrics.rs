@@ -509,7 +509,7 @@ async fn kubelet_usage(
     }
 
     trackers.retain(|pod, _| names.contains(pod));
-    let now_ms = chrono::Utc::now().timestamp_millis() as f64;
+    let now_ms = jiff::Timestamp::now().as_millisecond() as f64;
     let mut usage = HashMap::new();
     for (pod, total) in totals {
         let cpu_millicores = total.cpu_seconds.and_then(|cpu| {
@@ -1252,7 +1252,7 @@ pub async fn watch_list_metrics(
                                     cpu,
                                     total
                                         .cpu_timestamp_ms
-                                        .unwrap_or(chrono::Utc::now().timestamp_millis() as f64),
+                                        .unwrap_or(jiff::Timestamp::now().as_millisecond() as f64),
                                 ))
                             });
                             usage.insert(

@@ -134,7 +134,7 @@ pub fn render_ownership_list(
             .fg(theme.table_header)
             .add_modifier(Modifier::BOLD),
     );
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     let table_rows: Vec<Row> = rows
         .iter()
         .enumerate()
@@ -159,7 +159,7 @@ pub fn render_ownership_list(
                 Cell::from(sanitize_cell(&row.name)),
                 Cell::from(
                     row.created
-                        .map(|t| crate::age::compact(now - t))
+                        .map(|t| crate::age::compact(now.duration_since(t)))
                         .unwrap_or_default(),
                 ),
                 Cell::from(sanitize_cell(&row.standing.detail())),

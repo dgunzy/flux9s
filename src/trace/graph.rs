@@ -288,9 +288,17 @@ impl ResourceGraph {
         self.nodes.push(node);
     }
 
-    /// Add an edge to the graph
+    /// Add an edge to the graph,
+    /// once: the same relationship found two ways (a manager's label and its
+    /// owner reference) draws one connector.
     pub fn add_edge(&mut self, edge: GraphEdge) {
-        self.edges.push(edge);
+        let duplicate = self
+            .edges
+            .iter()
+            .any(|e| e.from == edge.from && e.to == edge.to && e.relationship == edge.relationship);
+        if !duplicate {
+            self.edges.push(edge);
+        }
     }
 
     /// Vertical layer a node type occupies in the layout, used to order keyboard
@@ -309,11 +317,105 @@ impl ResourceGraph {
     }
 
     /// Node indices in visual top-to-bottom order, used for keyboard focus
-    /// navigation. Within a layer, insertion order is preserved (stable sort).
+    /// navigation. Upstream nodes follow their rows ([`Self::upstream_ranks`]);
+    /// within a layer or row, insertion order is preserved (stable sort).
     pub fn focus_order(&self) -> Vec<usize> {
+        let ranks = self.upstream_ranks();
         let mut order: Vec<usize> = (0..self.nodes.len()).collect();
-        order.sort_by_key(|&i| (Self::node_layer(self.nodes[i].node_type), i));
+        order.sort_by_key(|&i| {
+            let layer = Self::node_layer(self.nodes[i].node_type);
+            match ranks.get(&i) {
+                // Upstream rows top-down; within a row, sources before managers.
+                Some(&rank) => (0, std::cmp::Reverse(rank), layer, i),
+                None => (layer, std::cmp::Reverse(0), 0, i),
+            }
+        });
         order
+    }
+
+    /// Whether a node sits above the object: its source lineage (upstream,
+    /// sources, intermediates like a HelmChart) and its managers.
+    fn is_upstream(node_type: NodeType) -> bool {
+        matches!(
+            node_type,
+            NodeType::Upstream | NodeType::Source | NodeType::Chain
+        )
+    }
+
+    /// The row of every upstream node, counted up from the object: 1 for what
+    /// points at the object directly (its source, its manager), one more for
+    /// each hop further up (ExternalArtifact → ArtifactGenerator → its
+    /// sources → their Git origin). Ranking by edges rather than node type
+    /// keeps a parent above its child, and siblings (a manager beside the
+    /// source, an ArtifactGenerator's several sources) side by side, so no
+    /// connector runs behind an unrelated node.
+    fn upstream_ranks(&self) -> HashMap<usize, u16> {
+        fn rank_of(
+            graph: &ResourceGraph,
+            idx: usize,
+            ranks: &mut HashMap<usize, u16>,
+            visiting: &mut Vec<usize>,
+        ) -> u16 {
+            if let Some(&rank) = ranks.get(&idx) {
+                return rank;
+            }
+            if visiting.contains(&idx) {
+                return 1; // A cycle: cut it here.
+            }
+            visiting.push(idx);
+            let id = &graph.nodes[idx].id;
+            let mut rank = 1;
+            for edge in graph.edges.iter().filter(|e| &e.from == id) {
+                if let Some(&child) = graph.node_index.get(&edge.to)
+                    && ResourceGraph::is_upstream(graph.nodes[child].node_type)
+                {
+                    rank = rank.max(1 + rank_of(graph, child, ranks, visiting));
+                }
+            }
+            visiting.pop();
+            ranks.insert(idx, rank);
+            rank
+        }
+
+        let mut ranks = HashMap::new();
+        for idx in 0..self.nodes.len() {
+            if Self::is_upstream(self.nodes[idx].node_type) {
+                rank_of(self, idx, &mut ranks, &mut Vec::new());
+            }
+        }
+        ranks
+    }
+
+    /// Lay `indices` out as one centered row starting at `*current_y`, or as a
+    /// centered stack when the row doesn't fit the width.
+    fn row_centered(
+        &mut self,
+        indices: &[usize],
+        available_width: u16,
+        center_x: u16,
+        current_y: &mut u16,
+    ) {
+        let widths: Vec<u16> = indices
+            .iter()
+            .filter_map(|&idx| self.nodes.get(idx))
+            .map(|node| node.render_width(available_width))
+            .collect();
+        let gaps = INVENTORY_GROUP_GAP * (widths.len().saturating_sub(1) as u16);
+        let total = widths.iter().sum::<u16>() + gaps;
+        if indices.len() < 2 || total > available_width {
+            self.stack_centered(indices, available_width, center_x, current_y);
+            return;
+        }
+        let mut x = center_x.saturating_sub(total / 2);
+        let mut height = 0;
+        for (&idx, width) in indices.iter().zip(widths) {
+            if let Some(node) = self.nodes.get_mut(idx) {
+                node.position = Some((x, *current_y));
+                height = height.max(node.render_height());
+            }
+            x += width + INVENTORY_GROUP_GAP;
+        }
+        *current_y += height + NODE_VERTICAL_SPACING;
     }
 
     /// The node showing `key` (#266): its own node, else the workload or
@@ -386,18 +488,14 @@ impl ResourceGraph {
         // Bucket node indices by type so each layer can be positioned in turn.
         // Individual Workload nodes are never placed directly (they're aggregated
         // into a WorkloadGroup by the builder), so they're intentionally skipped.
-        let mut upstream = Vec::new();
-        let mut sources = Vec::new();
-        let mut chain = Vec::new();
         let mut object = Vec::new();
         let mut flux = Vec::new();
         let mut workload_groups = Vec::new();
         let mut resource_groups = Vec::new();
         for (idx, node) in self.nodes.iter().enumerate() {
             match node.node_type {
-                NodeType::Upstream => upstream.push(idx),
-                NodeType::Source => sources.push(idx),
-                NodeType::Chain => chain.push(idx),
+                // Placed by rank below.
+                NodeType::Upstream | NodeType::Source | NodeType::Chain => {}
                 NodeType::Object => object.push(idx),
                 NodeType::FluxResource => flux.push(idx),
                 NodeType::WorkloadGroup => workload_groups.push(idx),
@@ -409,8 +507,22 @@ impl ResourceGraph {
         let center_x = available_width / 2;
         let mut current_y = 1u16;
 
+        // Upstream rows, furthest from the object first.
+        let ranks = self.upstream_ranks();
+        let top_rank = ranks.values().copied().max().unwrap_or(0);
+        for rank in (1..=top_rank).rev() {
+            let mut row: Vec<usize> = ranks
+                .iter()
+                .filter(|&(_, &r)| r == rank)
+                .map(|(&idx, _)| idx)
+                .collect();
+            // Sources on the left, managers beside them (as focus orders them).
+            row.sort_unstable_by_key(|&idx| (Self::node_layer(self.nodes[idx].node_type), idx));
+            self.row_centered(&row, available_width, center_x, &mut current_y);
+        }
+
         // Centered single-column layers, top to bottom.
-        for layer in [&upstream, &sources, &chain, &object, &flux] {
+        for layer in [&object, &flux] {
             self.stack_centered(layer, available_width, center_x, &mut current_y);
         }
 
@@ -551,6 +663,51 @@ mod tests {
 
         // Expected visual order: upstream, source, object, workload group.
         assert_eq!(graph.focus_order(), vec![3, 1, 0, 2]);
+    }
+
+    fn edge(from: &str, to: &str, relationship: RelationshipType) -> GraphEdge {
+        GraphEdge {
+            from: from.into(),
+            to: to.into(),
+            relationship,
+        }
+    }
+
+    /// The user-reported shape: a Kustomization sourced from an
+    /// ExternalArtifact, applied by a parent Kustomization. Each lineage hop
+    /// gets its own row above the object, the manager shares the source's
+    /// row, and focus walks the rows top-down.
+    #[test]
+    fn upstream_lineage_is_ranked_into_rows_above_the_object() {
+        let mut graph = ResourceGraph::new();
+        graph.add_node(node("ks", NodeType::Object)); // 0
+        graph.add_node(node("artifact", NodeType::Source)); // 1
+        graph.add_node(node("generator", NodeType::Source)); // 2
+        graph.add_node(node("repo", NodeType::Source)); // 3
+        graph.add_node(node("origin", NodeType::Upstream)); // 4
+        graph.add_node(node("parent", NodeType::Chain)); // 5
+        graph.add_edge(edge("artifact", "ks", RelationshipType::SourcedFrom));
+        graph.add_edge(edge("generator", "artifact", RelationshipType::SourcedFrom));
+        graph.add_edge(edge("repo", "generator", RelationshipType::SourcedFrom));
+        graph.add_edge(edge("origin", "repo", RelationshipType::SourcedFrom));
+        graph.add_edge(edge("parent", "ks", RelationshipType::ManagedBy));
+        graph.calculate_layout(120, 60);
+
+        let pos = |i: usize| graph.nodes[i].position.unwrap();
+        let y = |i: usize| pos(i).1;
+        assert!(y(4) < y(3) && y(3) < y(2) && y(2) < y(1) && y(1) < y(0));
+        assert_eq!(y(5), y(1), "the manager sits beside the source");
+        assert!(pos(1).0 < pos(5).0, "source left, manager right");
+        assert_eq!(graph.focus_order(), vec![4, 3, 2, 1, 5, 0]);
+    }
+
+    #[test]
+    fn an_edge_found_twice_is_drawn_once() {
+        let mut graph = ResourceGraph::new();
+        graph.add_edge(edge("parent", "ks", RelationshipType::ManagedBy));
+        graph.add_edge(edge("parent", "ks", RelationshipType::ManagedBy));
+        graph.add_edge(edge("parent", "ks", RelationshipType::Owns));
+        assert_eq!(graph.edges.len(), 2);
     }
 
     #[test]

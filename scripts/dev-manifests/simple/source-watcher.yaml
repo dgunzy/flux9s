@@ -87,3 +87,32 @@ spec:
       copy:
         - from: "@repo/apps/base/**"
           to: "@artifact/"
+---
+# A Kustomization consuming an ExternalArtifact from another namespace,
+# applied by a Kustomization there — the graph must show its own lineage
+# (ExternalArtifact ─► ArtifactGenerator ─► GitRepository), with the parent
+# beside it as manager, not the parent's source. Suspended: only its spec
+# matters (apps-base would collide with the apps Kustomization's podinfo),
+# and the manager labels stand in for the parent having applied it.
+#
+#   GitRepository/flux-system ─► ArtifactGenerator/example-apps ─► ExternalArtifact/apps-base
+#                                                                       │
+#                        Kustomization/flux-resources/infra-configs ──► Kustomization/flux-artifacts/shared-apps
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: shared-apps
+  namespace: flux-artifacts
+  labels:
+    app.kubernetes.io/managed-by: flux9s-dev
+    kustomize.toolkit.fluxcd.io/name: infra-configs
+    kustomize.toolkit.fluxcd.io/namespace: flux-resources
+spec:
+  suspend: true
+  interval: 10m
+  prune: false
+  path: ./
+  sourceRef:
+    kind: ExternalArtifact
+    name: apps-base
+    namespace: flux-resources

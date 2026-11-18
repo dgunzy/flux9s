@@ -200,7 +200,7 @@ pub struct PodRow {
     pub ready: String,
     /// Total container restarts.
     pub restarts: i64,
-    pub age: Option<chrono::DateTime<chrono::Utc>>,
+    pub age: Option<jiff::Timestamp>,
     /// Summed container requests/limits, for the usage columns (#265).
     pub resources: crate::kube::metrics::PodResources,
 }
@@ -506,7 +506,7 @@ fn pod_row_from_json(pod: &Value) -> Option<PodRow> {
     let age = pod
         .pointer("/metadata/creationTimestamp")
         .and_then(Value::as_str)
-        .and_then(|ts| ts.parse::<chrono::DateTime<chrono::Utc>>().ok());
+        .and_then(|ts| ts.parse::<jiff::Timestamp>().ok());
 
     Some(PodRow {
         namespace: pod

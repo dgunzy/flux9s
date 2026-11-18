@@ -6,191 +6,36 @@ use flux9s::trace::{
     GraphEdge, GraphNode, NodeType, RelationshipType, ResourceGraph, is_resource_type_with_graph,
 };
 
-#[test]
-fn test_graph_creation() {
-    let graph = ResourceGraph::new();
-    assert!(graph.nodes.is_empty());
-    assert!(graph.edges.is_empty());
-    assert!(graph.node_index.is_empty());
-}
-
-#[test]
-fn test_add_node() {
-    let mut graph = ResourceGraph::new();
-
-    let node = GraphNode {
-        id: "test-node".to_string(),
-        kind: "Kustomization".to_string(),
-        name: "test-app".to_string(),
-        namespace: "default".to_string(),
-        node_type: NodeType::Object,
-        ready: Some(true),
-        position: None,
-        description: Some("Test description".to_string()),
-    };
-
-    graph.add_node(node);
-
-    assert_eq!(graph.nodes.len(), 1);
-    assert_eq!(graph.node_index.len(), 1);
-    assert!(graph.node_index.contains_key("test-node"));
-}
-
-#[test]
-fn test_add_edge() {
-    let mut graph = ResourceGraph::new();
-
-    let from_node = GraphNode {
-        id: "from-node".to_string(),
-        kind: "Kustomization".to_string(),
-        name: "from-app".to_string(),
-        namespace: "default".to_string(),
-        node_type: NodeType::Object,
-        ready: Some(true),
-        position: None,
-        description: None,
-    };
-
-    let to_node = GraphNode {
-        id: "to-node".to_string(),
-        kind: "Deployment".to_string(),
-        name: "to-app".to_string(),
-        namespace: "default".to_string(),
-        node_type: NodeType::Workload,
-        ready: Some(true),
-        position: None,
-        description: None,
-    };
-
-    graph.add_node(from_node);
-    graph.add_node(to_node);
-    graph.add_edge(GraphEdge {
-        from: "from-node".to_string(),
-        to: "to-node".to_string(),
-        relationship: RelationshipType::Owns,
-    });
-
-    assert_eq!(graph.edges.len(), 1);
-    assert_eq!(graph.edges[0].from, "from-node");
-    assert_eq!(graph.edges[0].to, "to-node");
-    assert_eq!(graph.edges[0].relationship, RelationshipType::Owns);
-}
-
-#[test]
-fn test_calculate_layout() {
-    let mut graph = ResourceGraph::new();
-
-    // Add a Kustomization node
-    let kustomization = GraphNode {
-        id: "ks-1".to_string(),
-        kind: "Kustomization".to_string(),
-        name: "test-app".to_string(),
-        namespace: "default".to_string(),
-        node_type: NodeType::Object,
-        ready: Some(true),
-        position: None,
-        description: Some("./apps".to_string()),
-    };
-    graph.add_node(kustomization);
-
-    // Add a WorkloadGroup node
-    let workload_group = GraphNode {
-        id: "workloadgroup:default".to_string(),
-        kind: "Workloads".to_string(),
-        name: "Workloads (2)".to_string(),
-        namespace: "default".to_string(),
-        node_type: NodeType::WorkloadGroup,
-        ready: None,
-        position: None,
-        description: Some(
-            "Deployment|app1|default|●|Replicas: 1/1\nDeployment|app2|default|●|Replicas: 2/2"
-                .to_string(),
-        ),
-    };
-    graph.add_node(workload_group);
-
-    // Add a ResourceGroup node
-    let resource_group = GraphNode {
-        id: "resourcegroup:default".to_string(),
-        kind: "Resources".to_string(),
-        name: "Resources (3)".to_string(),
-        namespace: "default".to_string(),
-        node_type: NodeType::ResourceGroup,
-        ready: None,
-        position: None,
-        description: Some(
-            "ConfigMap|default|cm-1|v1\nSecret|default|sec-1|v1\nSecret|default|sec-2|v1"
-                .to_string(),
-        ),
-    };
-    graph.add_node(resource_group);
-
-    // Add edges
-    graph.add_edge(GraphEdge {
-        from: "ks-1".to_string(),
-        to: "workloadgroup:default".to_string(),
-        relationship: RelationshipType::Owns,
-    });
-    graph.add_edge(GraphEdge {
-        from: "ks-1".to_string(),
-        to: "resourcegroup:default".to_string(),
-        relationship: RelationshipType::Owns,
-    });
-
-    // Calculate layout
-    let (_width, height) = graph.calculate_layout(100, 50);
-
-    // Verify layout was calculated
-    assert!(height > 0);
-
-    // Verify all nodes have positions
-    for node in &graph.nodes {
-        assert!(
-            node.position.is_some(),
-            "Node {} should have a position",
-            node.id
-        );
-    }
-}
-
+/// A workload group grows by 3 rows per workload (kind, name, status), 4 when
+/// the workloads span namespaces (each shows its own), plus a blank between
+/// them — and the layout reserves all of it.
 #[test]
 fn test_workload_group_height_calculation() {
-    let mut graph = ResourceGraph::new();
-
-    // Add WorkloadGroup with 2 workloads
-    let workload_group = GraphNode {
+    let group = |lines: &str| GraphNode {
         id: "workloadgroup:test".to_string(),
         kind: "Workloads".to_string(),
-        name: "Workloads (2)".to_string(),
+        name: "Workloads".to_string(),
         namespace: "test".to_string(),
         node_type: NodeType::WorkloadGroup,
         ready: None,
         position: None,
-        description: Some(
-            "Deployment|app1|ns1|●|Replicas: 1/1\nDeployment|app2|ns2|●|Replicas: 2/2".to_string(),
-        ),
+        description: Some(lines.to_string()),
     };
-    graph.add_node(workload_group);
+    let one_namespace = group(
+        "Deployment|app1|ns1|●|Replicas: 1/1|apps/v1\nDeployment|app2|ns1|●|Replicas: 2/2|apps/v1",
+    );
+    let two_namespaces = group(
+        "Deployment|app1|ns1|●|Replicas: 1/1|apps/v1\nDeployment|app2|ns2|●|Replicas: 2/2|apps/v1",
+    );
+    // 4 rows of chrome + 2 workloads + 1 blank between them.
+    assert_eq!(one_namespace.render_height(), 4 + 2 * 3 + 1);
+    assert_eq!(two_namespaces.render_height(), 4 + 2 * 4 + 1);
 
+    let mut graph = ResourceGraph::new();
+    graph.add_node(two_namespaces);
     let (_width, height) = graph.calculate_layout(100, 50);
-
-    // Find the workload group node
-    let wg_node = graph
-        .nodes
-        .iter()
-        .find(|n| n.id == "workloadgroup:test")
-        .unwrap();
-
-    // Verify it has a position (layout was calculated)
-    assert!(wg_node.position.is_some());
-
-    // The height should account for:
-    // - Base: name (1) + separator (1) + borders (2) = 4
-    // - Content: 2 workloads * 4 lines (kind + name + status + namespace) + 1 blank = 9
-    // Total should be at least 13
-    // But we can't directly test the height here since it's calculated internally
-    // We just verify the layout succeeds
-    assert!(height >= 4);
+    let (_, y) = graph.nodes[0].position.unwrap();
+    assert!(height >= y + graph.nodes[0].render_height());
 }
 
 #[test]
@@ -325,38 +170,21 @@ fn test_side_by_side_layout() {
         "WorkloadGroup and ResourceGroup should be at the same Y level"
     );
 
-    // They should be at different X positions (side-by-side)
-    assert_ne!(
-        wg_x, rg_x,
-        "WorkloadGroup and ResourceGroup should be at different X positions"
+    // Side by side without overlapping.
+    let (left, right) = if wg_x < rg_x {
+        (wg_node, rg_x)
+    } else {
+        (rg_node, wg_x)
+    };
+    assert!(
+        left.position.unwrap().0 + left.render_width(100) <= right,
+        "the groups overlap"
     );
-}
 
-#[test]
-fn test_node_types() {
-    // Test that all node types are properly defined
-    assert!(matches!(NodeType::Object, NodeType::Object));
-    assert!(matches!(NodeType::WorkloadGroup, NodeType::WorkloadGroup));
-    assert!(matches!(NodeType::ResourceGroup, NodeType::ResourceGroup));
-    assert!(matches!(NodeType::Source, NodeType::Source));
-    assert!(matches!(NodeType::Chain, NodeType::Chain));
-    assert!(matches!(NodeType::Upstream, NodeType::Upstream));
-    assert!(matches!(NodeType::FluxResource, NodeType::FluxResource));
-    assert!(matches!(NodeType::Workload, NodeType::Workload));
-}
-
-#[test]
-fn test_relationship_types() {
-    // Test that all relationship types are properly defined
-    assert!(matches!(RelationshipType::Owns, RelationshipType::Owns));
-    assert!(matches!(
-        RelationshipType::SourcedFrom,
-        RelationshipType::SourcedFrom
-    ));
-    assert!(matches!(
-        RelationshipType::ManagedBy,
-        RelationshipType::ManagedBy
-    ));
+    // Both below the object they belong to, clear of it.
+    let ks_node = graph.nodes.iter().find(|n| n.id == "ks-1").unwrap();
+    let (_, ks_y) = ks_node.position.unwrap();
+    assert!(wg_y >= ks_y + ks_node.render_height());
 }
 
 #[test]

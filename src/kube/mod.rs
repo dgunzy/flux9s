@@ -16,6 +16,8 @@ pub mod app;
 pub mod conditions;
 pub mod discovery;
 pub mod events;
+#[cfg(test)]
+pub mod fake_api;
 pub mod fetch;
 pub mod health;
 pub mod helm_values;
@@ -28,6 +30,7 @@ pub mod native_lists;
 pub mod object_status;
 pub mod objects;
 pub mod ownership;
+pub mod sources;
 pub mod standing;
 pub mod sweep;
 pub mod tls;

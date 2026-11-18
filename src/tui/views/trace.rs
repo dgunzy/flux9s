@@ -20,8 +20,15 @@ const ARROW_HEIGHT: u16 = 3;
 /// One block of the trace view.
 #[derive(Debug, Clone)]
 pub(crate) enum TraceBlock {
-    /// An object on the path, or the source.
+    /// An object on the path, or what the source came from.
     Node(Box<TraceNode>),
+    /// The source, and the applier it was resolved for (the object, or a
+    /// manager above it) — named so a source below a manager chain isn't
+    /// read as the top manager's.
+    Source {
+        node: Box<TraceNode>,
+        resolved_for: String,
+    },
     /// Where the trace stopped short of Flux (#266): what manages the chain
     /// instead, or why it ends.
     Stop { title: String, detail: String },
@@ -31,8 +38,11 @@ impl TraceBlock {
     /// Whether any of the block's displayed text matches the search query.
     fn matches(&self, query_lower: &str) -> bool {
         let haystacks: Vec<&str> = match self {
-            TraceBlock::Node(node) => {
+            TraceBlock::Node(node) | TraceBlock::Source { node, .. } => {
                 let mut haystacks: Vec<&str> = vec![&node.kind, &node.name, &node.namespace];
+                if let TraceBlock::Source { resolved_for, .. } = self {
+                    haystacks.push(resolved_for);
+                }
                 if let Some(ref spec) = node.spec {
                     haystacks.extend(spec.path.as_deref());
                     haystacks.extend(spec.url.as_deref());
@@ -56,6 +66,17 @@ impl TraceBlock {
     fn lines(&self, is_primary: bool, theme: &Theme) -> Vec<Line<'static>> {
         match self {
             TraceBlock::Node(node) => node_lines(node, is_primary, theme),
+            TraceBlock::Source { node, resolved_for } => {
+                let mut lines = node_lines(node, is_primary, theme);
+                lines.insert(
+                    1,
+                    Line::from(vec![
+                        Span::styled("Source of: ", Style::default().fg(theme.text_label)),
+                        Span::styled(resolved_for.clone(), Style::default().fg(theme.text_value)),
+                    ]),
+                );
+                lines
+            }
             TraceBlock::Stop { title, detail } => vec![
                 Line::from(Span::styled(
                     title.clone(),
@@ -277,10 +298,29 @@ pub(crate) fn trace_blocks(result: &TraceResult) -> Vec<(TraceBlock, &'static st
         })
         .collect();
     if let Some(source) = &result.source {
+        let resolved_for = &source.resolved_for;
         blocks.push((
-            TraceBlock::Node(Box::new(sanitized(source))),
+            TraceBlock::Source {
+                node: Box::new(sanitized(&source.node)),
+                resolved_for: sanitize_cell(&format!(
+                    "{}/{}/{}",
+                    resolved_for.resource_type, resolved_for.namespace, resolved_for.name
+                )),
+            },
             "sourced from",
         ));
+        if let Some(producer) = &source.produced_by {
+            blocks.push((
+                TraceBlock::Node(Box::new(sanitized(producer))),
+                "produced by",
+            ));
+        }
+        for upstream in &source.built_from {
+            blocks.push((
+                TraceBlock::Node(Box::new(sanitized(upstream))),
+                "built from",
+            ));
+        }
     }
     let top = path
         .last()
@@ -418,13 +458,16 @@ mod tests {
                 node("Deployment", "web"),
                 node("Kustomization", "apps"),
             ],
-            source: Some(node("GitRepository", "flux-system")),
+            source: Some(crate::trace::TraceSource::of(
+                &node("Kustomization", "apps"),
+                node("GitRepository", "flux-system"),
+            )),
             outcome: TraceOutcome::Flux,
         };
         let labels: Vec<(String, &str)> = trace_blocks(&pod)
             .into_iter()
             .map(|(block, rel)| match block {
-                TraceBlock::Node(n) => (n.kind, rel),
+                TraceBlock::Node(n) | TraceBlock::Source { node: n, .. } => (n.kind, rel),
                 TraceBlock::Stop { title, .. } => (title, rel),
             })
             .collect();
@@ -520,6 +563,53 @@ mod tests {
             .collect()
     }
 
+    /// A managed Kustomization sourced from an ExternalArtifact: the source
+    /// names whose it is (the child, not the parent above it), then its
+    /// producer and what that is built from, each drawn on screen.
+    #[test]
+    fn a_source_block_names_its_applier_then_producer_and_built_from() {
+        let child = node("Kustomization", "apps");
+        let mut source = crate::trace::TraceSource::of(&child, node("ExternalArtifact", "apps"));
+        source.produced_by = Some(node("ArtifactGenerator", "gen"));
+        source.built_from = vec![
+            node("GitRepository", "repo"),
+            node("OCIRepository", "charts"),
+        ];
+        let result = TraceResult {
+            object: child,
+            chain: vec![node("Kustomization", "flux-system")],
+            source: Some(source),
+            outcome: crate::trace::TraceOutcome::Flux,
+        };
+        let labels: Vec<(String, &str)> = trace_blocks(&result)
+            .into_iter()
+            .map(|(block, rel)| match block {
+                TraceBlock::Node(n) | TraceBlock::Source { node: n, .. } => (n.kind, rel),
+                TraceBlock::Stop { title, .. } => (title, rel),
+            })
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("Kustomization".to_string(), "Object"),
+                ("Kustomization".to_string(), "managed by"),
+                ("ExternalArtifact".to_string(), "sourced from"),
+                ("ArtifactGenerator".to_string(), "produced by"),
+                ("GitRepository".to_string(), "built from"),
+                ("OCIRepository".to_string(), "built from"),
+            ]
+        );
+
+        let text = screen(&result, 80, 60, 0).join("\n");
+        assert!(
+            text.contains("Source of: Kustomization/flux-system/apps"),
+            "{text}"
+        );
+        for drawn in ["produced by", "built from", "ArtifactGenerator: gen"] {
+            assert!(text.contains(drawn), "{drawn} missing:\n{text}");
+        }
+    }
+
     fn long_chain() -> TraceResult {
         TraceResult {
             object: node("Pod", "web-abc"),
@@ -529,7 +619,10 @@ mod tests {
                 node("Deployment", "web"),
                 node("Kustomization", "apps"),
             ],
-            source: Some(node("GitRepository", "flux-system")),
+            source: Some(crate::trace::TraceSource::of(
+                &node("Kustomization", "apps"),
+                node("GitRepository", "flux-system"),
+            )),
             outcome: crate::trace::TraceOutcome::Flux,
         }
     }

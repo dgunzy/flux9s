@@ -34,7 +34,7 @@ pub struct KubeEventInfo {
     /// Number of occurrences (deduplicated events aggregate here).
     pub count: i64,
     /// Most recent occurrence.
-    pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_seen: Option<jiff::Timestamp>,
     /// Reporting component (e.g. "kustomize-controller").
     pub source: String,
 }
@@ -78,7 +78,7 @@ impl KubeEventInfo {
             .find_map(|value| {
                 value
                     .as_str()
-                    .and_then(|ts| ts.parse::<chrono::DateTime<chrono::Utc>>().ok())
+                    .and_then(|ts| ts.parse::<jiff::Timestamp>().ok())
             });
         let count = event_json["count"]
             .as_i64()
@@ -189,10 +189,7 @@ mod tests {
         assert_eq!(info.involved_namespace, "flux-system");
         assert_eq!(info.count, 4);
         assert_eq!(info.source, "kustomize-controller");
-        assert_eq!(
-            info.last_seen.unwrap().to_rfc3339(),
-            "2026-07-01T12:30:00+00:00"
-        );
+        assert_eq!(info.last_seen.unwrap().to_string(), "2026-07-01T12:30:00Z");
     }
 
     #[test]
@@ -214,10 +211,7 @@ mod tests {
         assert_eq!(info.count, 7);
         assert_eq!(info.source, "helm-controller");
         // eventTime is preferred over series.lastObservedTime
-        assert_eq!(
-            info.last_seen.unwrap().to_rfc3339(),
-            "2026-07-02T08:00:00+00:00"
-        );
+        assert_eq!(info.last_seen.unwrap().to_string(), "2026-07-02T08:00:00Z");
         // involvedObject.namespace falls back to the event's namespace
         assert_eq!(info.involved_namespace, "default");
     }

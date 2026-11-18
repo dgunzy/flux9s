@@ -17,6 +17,12 @@ downstream. Managed objects are grouped: Flux resources a ResourceSet
 produces appear as their own nodes, workloads gather in a **workload group**,
 and everything else in a **resource group** counted by kind.
 
+Upstream is the resource's own source and what that source is built from: a
+HelmRelease's HelmChart and repository, or an ExternalArtifact's
+ArtifactGenerator and the sources it reads, in whatever namespaces they live.
+The Flux object that applied the resource (a parent Kustomization) sits
+beside its source as its manager.
+
 - `j` / `k` move the focus between nodes; the view follows it.
 - `Enter` opens the focused node; `y` / `d` show its YAML / describe output.
 - `Esc` returns to the graph from anything you opened there.
@@ -97,14 +103,20 @@ keep a set of apps one command away, name it in a
 
 ## Trace (`t`)
 
-What manages a resource, step by step: its controller owners
-(`Pod → ReplicaSet → Deployment`, the same chain MANAGED-BY follows), the Flux object that applies it
-(Kustomization, HelmRelease, ResourceSet, or FluxInstance), and that object's
-source and revision. A HelmRelease's source is the one helm-controller
-generated for it — a HelmChart and its repository, or (for a Flux 2.10
-OCIRepository chart template) the generated OCIRepository. When something other than Flux manages the chain —
-Argo CD, Helm, another tool — or nothing does, the trace ends there and says
-so.
+What manages a resource, step by step, the way the Flux Operator traces it:
+its controller owners (`Pod → ReplicaSet → Deployment`, the same chain
+MANAGED-BY follows), then every Flux object managing it up to the top
+(Kustomization, HelmRelease, ResourceSet, FluxInstance).
+
+The source is the one the **nearest applier** pulls from — the resource
+itself when it has one, so a Kustomization applied by another shows its own
+`sourceRef`, not its parent's — and its block names whose source it is. A
+HelmRelease's source is resolved through the HelmChart helm-controller
+generated to the repository (or, for a `chartRef` or an OCIRepository chart
+template, that OCIRepository). An ExternalArtifact source continues to the
+ArtifactGenerator that **produced** it and the sources it is **built from**.
+When something other than Flux manages the chain — Argo CD, Helm, another
+tool — or nothing does, the trace ends there and says so.
 
 `t` traces the selected resource, and any Kubernetes object Flux manages
 ([native resources](../native-resources/#to-the-flux-manager)). On a native

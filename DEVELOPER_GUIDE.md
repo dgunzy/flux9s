@@ -160,6 +160,23 @@ Terminal user interface built with ratatui.
 - Graph view separates pure layout/geometry from drawing: node sizing lives on
   `GraphNode::render_width`/`render_height`, and connector routing is computed by
   the `Frame`-free `fanout_routes()` so it can be unit tested
+- **Source relationships are read in one place: `kube::sources`**
+  (`source_ref` — an exhaustive match over `FluxResourceKind` —
+  `producer_ref`, `built_from`, `origin_url`, `is_intermediate`). Trace,
+  graph, the app tree (`kube::app::source_refs`), and reconcile-with-source
+  all use it; never read `spec.sourceRef` / `chartRef` by hand. It mirrors
+  the Flux Operator's `sourceRefOf` / `traceBuiltFrom`.
+- Trace follows the Flux Operator: the whole manager chain, then the source
+  of the **nearest applier** (the object itself first —
+  `nearest_applier_source`), resolved through intermediates (HelmChart),
+  with an ExternalArtifact's producer and its `spec.sources`
+  (`TraceSource`).
+- Graph upstream is the object's own source (`trace::own_source`, drawing
+  the intermediates) followed up its lineage (producer → `spec.sources` →
+  origin); the Flux manager from its labels is a separate `ManagedBy` node. Upstream
+  nodes are laid out in rows ranked by edge distance to the object
+  (`upstream_ranks`), so siblings sit side by side and no connector runs
+  behind an unrelated node; meeting connectors merge glyphs (`put_glyph`)
 - Graph view supports keyboard focus navigation (`j`/`k` move focus, `Enter`
   opens the focused node, `Esc` returns to the graph)
 
@@ -342,7 +359,6 @@ flux9s/
 │   ├── resource_registry.rs   # Registry tests
 │   ├── model_compatibility.rs # Model tests
 │   ├── field_extraction.rs    # Field extraction tests
-│   ├── trace_tests.rs         # Trace operation tests
 │   ├── unit/                  # Unit test helpers
 │   └── README.md
 ├── examples/                   # Example files
@@ -899,10 +915,9 @@ cargo test --test crd_compatibility
 cargo test --test resource_registry
 cargo test --test model_compatibility
 cargo test --test field_extraction
-cargo test --test trace_tests
 
 # Run integration tests
-cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction --test trace_tests
+cargo test --test crd_compatibility --test resource_registry --test model_compatibility --test field_extraction
 ```
 
 ### Test Organization
@@ -916,7 +931,7 @@ cargo test --test crd_compatibility --test resource_registry --test model_compat
 - **Resource Registry** (`tests/resource_registry.rs`) - Verifies all resource types are registered and have command aliases
 - **Model Compatibility** (`tests/model_compatibility.rs`) - Ensures generated models compile and API versions are correct
 - **Field Extraction** (`tests/field_extraction.rs`) - Tests resource-specific field extraction
-- **Trace Tests** (`tests/trace_tests.rs`) - Tests trace operation functionality
+- **Trace / graph / operations** (unit tests in `src/trace/`, `src/operations.rs`) - Run the real trace walk, graph discovery, and writes against `kube::fake_api::FakeCluster`, an in-process API server with canned fixtures
 
 ### CI/CD Testing
 

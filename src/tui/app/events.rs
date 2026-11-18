@@ -470,7 +470,8 @@ impl App {
             ));
             return;
         }
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        // RFC 3339 to the second, `Z`-suffixed (as `flux` writes it).
+        let now = format!("{:.0}", jiff::Timestamp::now());
         let patch = match spec.patch_document(&now) {
             Some(Ok(patch)) => patch,
             Some(Err(e)) => {

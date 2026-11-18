@@ -15,7 +15,6 @@ tests/
 ├── reconciliation_history_tests.rs
 ├── resource_registry.rs
 ├── snapshot_tests.rs
-├── trace_tests.rs
 └── snapshots/
     └── *.snap
 ```
@@ -25,13 +24,18 @@ Test binaries here are top-level integration-style tests, not nested `tests/unit
 `#[cfg(test)] mod tests` block — the standard Rust convention, and the only way to reach
 private items.
 
+Code that talks to the cluster (trace, graph, operations) is unit-tested against
+`kube::fake_api::FakeCluster`, an in-process API server serving canned objects
+(`fake_api::fixtures` holds shared pipelines). Test the real function against it rather
+than asserting on a hand-built result — a test that builds the answer and checks it
+against itself proves nothing.
+
 ## What Each Test Covers
 
 - `crd_compatibility.rs`: status extraction and CRD compatibility expectations
 - `model_compatibility.rs`: generated model deserialization compatibility
 - `resource_registry.rs`: watcher/resource registry completeness
 - `field_extraction.rs`: per-resource field extraction behavior
-- `trace_tests.rs`: trace chain discovery
 - `graph_tests.rs`: graph building and graph support rules
 - `reconciliation_history_tests.rs`: `status.history` extraction behavior
 - `favorites_tests.rs`: favorites persistence behavior

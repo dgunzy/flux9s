@@ -1011,8 +1011,10 @@ mod tests {
             "type": "Normal",
             "reason": "Test",
             "message": "test event",
-            "lastTimestamp": (chrono::Utc::now() - chrono::Duration::seconds(seconds_ago))
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "lastTimestamp": format!(
+                "{:.0}",
+                jiff::Timestamp::now() - jiff::SignedDuration::from_secs(seconds_ago)
+            ),
         }))
         .expect("test event should parse")
     }

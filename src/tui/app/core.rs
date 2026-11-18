@@ -1400,7 +1400,7 @@ mod tests {
         resource_type: &str,
         ready: Option<bool>,
         suspended: Option<bool>,
-        age: Option<chrono::DateTime<chrono::Utc>>,
+        age: Option<jiff::Timestamp>,
     ) -> crate::watcher::ResourceInfo {
         crate::watcher::ResourceInfo {
             api_group: None,
@@ -1454,7 +1454,7 @@ mod tests {
             "Kustomization",
             None,
             None,
-            Some(chrono::Utc::now() - chrono::Duration::hours(5)),
+            Some(jiff::Timestamp::now() - jiff::SignedDuration::from_hours(5)),
         );
         let new = make_resource(
             "new",
@@ -1462,7 +1462,7 @@ mod tests {
             "Kustomization",
             None,
             None,
-            Some(chrono::Utc::now()),
+            Some(jiff::Timestamp::now()),
         );
         let unknown = make_resource("unknown", "ns", "Kustomization", None, None, None);
 
