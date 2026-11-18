@@ -225,6 +225,8 @@ mod tests {
 
 - `status.conditions`: `crate::kube::conditions` (`find`, `is_true`, `is_ready`, `Condition`)
 - Ages: `crate::age::compact` / `crate::age::since`
+- Source references (`sourceRef`, `chartRef`, generated HelmChart, ExternalArtifact
+  producer, `spec.sources`, artifact origin): `crate::kube::sources` — never read them by hand
 
 ### Resource Key Format
 

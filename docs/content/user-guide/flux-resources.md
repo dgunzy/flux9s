@@ -15,7 +15,7 @@ Select a resource in the list (or open its detail, YAML, or graph) and press:
 | `s` | Suspend reconciliation | Every kind with `spec.suspend` (sources, Kustomization, HelmRelease, image kinds, Alert, Provider, Receiver); Flux Operator kinds and ArtifactGenerator use their reconcile annotation, as `flux suspend` does. Not ExternalArtifact or FluxReport |
 | `r` | Resume reconciliation | Same as suspend |
 | `R` | Reconcile now | All Flux resources (not while suspended) |
-| `W` | Reconcile with its source | Kustomization, HelmRelease |
+| `W` | Reconcile with its source | Kustomization, HelmRelease — the source it pulls from (a HelmRelease's generated HelmChart or OCIRepository, or its `chartRef`), as `flux reconcile --with-source` does. An ExternalArtifact source is left to its producer: only the resource is reconciled |
 | `Ctrl+d` | Delete (asks first) | All Flux resources |
 
 Read-only mode (`readOnly: true`, or `:readonly` for the session) blocks every

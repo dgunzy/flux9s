@@ -5,7 +5,7 @@
 //! Based on Flux Operator Web UI graph implementation patterns.
 
 use crate::kube::get_api_resource_with_fallback;
-use crate::kube::inventory::{extract_inventory, extract_upstream, group_inventory};
+use crate::kube::inventory::{extract_inventory, group_inventory};
 use crate::models::FluxResourceKind;
 use crate::trace::graph::{GraphEdge, GraphNode, NodeType, RelationshipType, ResourceGraph};
 use anyhow::{Context, Result};
@@ -13,6 +13,8 @@ use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use kube::{Api, core::DynamicObject};
 use serde_json::Value;
+
+use crate::watcher::ResourceKey;
 
 /// Check if a resource type supports the graph view
 ///
@@ -92,7 +94,14 @@ pub async fn build_resource_graph(
     Ok(graph)
 }
 
-/// Discover upstream resources (sources, parent Flux resources)
+/// Hops of source lineage the graph follows above the object's source
+/// (ExternalArtifact → ArtifactGenerator → GitRepository → Git origin is 3);
+/// bounds a reference cycle.
+const MAX_LINEAGE_DEPTH: usize = 8;
+
+/// Discover upstream resources: the object's own source (through any
+/// intermediates and that source's own lineage) and the Flux object that
+/// manages it.
 async fn discover_upstream_resources(
     client: &kube::Client,
     graph: &mut ResourceGraph,
@@ -100,139 +109,76 @@ async fn discover_upstream_resources(
     namespace: &str,
     from_node_id: &str,
 ) -> Result<()> {
-    // Use trace_object to discover upstream relationships
-    // This reuses the existing trace logic
-    use crate::trace::trace_object;
-
-    // Check if this is a Kustomization or HelmRelease
     let kind = obj_value.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+    let name = obj_value
+        .pointer("/metadata/name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
 
-    let flux_kind = FluxResourceKind::parse_optional(kind);
-
-    if flux_kind.is_some_and(|kind| kind.has_source_ref()) {
-        // Use trace_object to discover upstream relationships
-        // This reuses the existing trace logic
-        let resource_name = obj_value
-            .get("metadata")
-            .and_then(|m| m.get("name"))
-            .and_then(|n| n.as_str())
-            .unwrap_or("");
-
-        if let Ok(trace_result) = trace_object(client, kind, namespace, resource_name).await {
-            // Add source node if present
-            if let Some(source) = &trace_result.source {
-                let source_id = format!("{}:{}:{}", source.kind, source.namespace, source.name);
-
-                if !graph.node_index.contains_key(&source_id) {
-                    // Extract description from source spec
-                    let description = source
-                        .spec
-                        .as_ref()
-                        .and_then(|spec| spec.url.clone().or_else(|| spec.path.clone()));
-
-                    let source_node = GraphNode {
-                        id: source_id.clone(),
-                        kind: source.kind.clone(),
-                        name: source.name.clone(),
-                        namespace: source.namespace.clone(),
-                        node_type: NodeType::Source,
-                        ready: source.status.as_ref().and_then(|s| s.ready),
-                        position: None,
-                        description: description.clone(),
-                    };
-                    graph.add_node(source_node);
-
-                    // Fetch the actual source resource to check for upstream
-                    if let Ok(source_api_resource) = get_api_resource_with_fallback(
-                        client,
-                        &source.kind,
-                        &source.namespace,
-                        &source.name,
-                    )
-                    .await
+    // Its own source — not its manager's (see `own_source`): source → any
+    // intermediates (HelmChart) → object.
+    let mut lineage: Vec<(ResourceKey, String)> = Vec::new();
+    if FluxResourceKind::parse_optional(kind).is_some_and(|kind| kind.has_source_ref()) {
+        match crate::trace::own_source(client, kind, namespace, name).await {
+            Ok((chain, source)) => {
+                let mut child = from_node_id.to_string();
+                for intermediate in &chain {
+                    let key = intermediate.key();
+                    let id = graph_id(&key);
+                    if let Some(node) = fetch_graph_node(client, &key, NodeType::Chain)
+                        .await
+                        .map(|(n, _)| n)
                     {
-                        let source_api: Api<DynamicObject> = Api::namespaced_with(
-                            client.clone(),
-                            &source.namespace,
-                            &source_api_resource,
-                        );
-                        if let Ok(source_obj) = source_api.get(&source.name).await
-                            && let Ok(source_value) = serde_json::to_value(&source_obj)
-                        {
-                            // Check for upstream node (external source like GitHub URL)
-                            if let Some((upstream_name, upstream_url)) =
-                                extract_upstream(&source_value)
-                            {
-                                let upstream_id = format!("upstream:{}", upstream_name);
-                                if !graph.node_index.contains_key(&upstream_id) {
-                                    let upstream_node = GraphNode {
-                                        id: upstream_id.clone(),
-                                        kind: "GitHub".to_string(),
-                                        name: upstream_name,
-                                        namespace: source.namespace.clone(),
-                                        node_type: NodeType::Upstream,
-                                        ready: None,
-                                        position: None,
-                                        description: Some(upstream_url),
-                                    };
-                                    graph.add_node(upstream_node);
-
-                                    // Add edge from upstream to source (top-down flow)
-                                    graph.add_edge(GraphEdge {
-                                        from: upstream_id,
-                                        to: source_id.clone(),
-                                        relationship: RelationshipType::SourcedFrom,
-                                    });
-                                }
-                            }
-                        }
+                        add_node_once(graph, node);
+                        graph.add_edge(GraphEdge {
+                            from: id.clone(),
+                            to: child,
+                            relationship: RelationshipType::SourcedFrom,
+                        });
+                        child = id;
                     }
                 }
-
-                // Add edge from source to main node (top-down flow)
-                graph.add_edge(GraphEdge {
-                    from: source_id,
-                    to: from_node_id.to_string(),
-                    relationship: RelationshipType::SourcedFrom,
-                });
-            }
-
-            // Add chain nodes (intermediate resources like HelmChart)
-            for chain_node in &trace_result.chain {
-                let chain_id = format!(
-                    "{}:{}:{}",
-                    chain_node.kind, chain_node.namespace, chain_node.name
-                );
-
-                if !graph.node_index.contains_key(&chain_id) {
-                    // Extract description from chain node spec
-                    let description = chain_node
-                        .spec
-                        .as_ref()
-                        .and_then(|spec| spec.url.clone().or_else(|| spec.path.clone()));
-
-                    let graph_node = GraphNode {
-                        id: chain_id.clone(),
-                        kind: chain_node.kind.clone(),
-                        name: chain_node.name.clone(),
-                        namespace: chain_node.namespace.clone(),
-                        node_type: NodeType::Chain,
-                        ready: chain_node.status.as_ref().and_then(|s| s.ready),
-                        position: None,
-                        description,
-                    };
-                    graph.add_node(graph_node);
+                if let Some(source) = source {
+                    lineage.push((source.key(), child));
                 }
-
-                // Add edge from source/parent to chain to main node (top-down flow)
-                // Chain nodes are intermediate - they connect source to object
-                // For now, we'll connect chain to object (reverse this later based on trace structure)
-                graph.add_edge(GraphEdge {
-                    from: chain_id,
-                    to: from_node_id.to_string(),
-                    relationship: RelationshipType::ManagedBy,
-                });
             }
+            Err(e) => tracing::warn!("Couldn't resolve the source of {kind}/{name}: {e:#}"),
+        }
+    } else {
+        // A source-like object (ArtifactGenerator, ExternalArtifact): what it
+        // is built from sits above it.
+        lineage.extend(
+            lineage_refs(obj_value)
+                .into_iter()
+                .map(|key| (key, from_node_id.to_string())),
+        );
+        add_origin(graph, obj_value, from_node_id);
+    }
+    add_lineage(client, graph, lineage).await;
+
+    // The Flux object that applied this one (its labels), beside the source.
+    if let Some(crate::kube::ownership::Manager::Flux {
+        kind: manager_kind,
+        namespace: manager_ns,
+        name: manager_name,
+    }) = crate::kube::ownership::detect_manager(obj_value)
+    {
+        let manager_ns = if manager_ns.is_empty() {
+            namespace.to_string()
+        } else {
+            manager_ns
+        };
+        let key = ResourceKey::new(manager_kind.as_str(), &manager_ns, &manager_name);
+        let id = graph_id(&key);
+        if id != from_node_id
+            && let Some((node, _)) = fetch_graph_node(client, &key, NodeType::Chain).await
+        {
+            add_node_once(graph, node);
+            graph.add_edge(GraphEdge {
+                from: id,
+                to: from_node_id.to_string(),
+                relationship: RelationshipType::ManagedBy,
+            });
         }
     }
 
@@ -755,7 +701,9 @@ fn node_description(kind: &str, obj: &Value) -> Option<String> {
             .map(str::to_string)
     };
     match FluxResourceKind::parse_optional(kind)? {
-        FluxResourceKind::GitRepository | FluxResourceKind::OCIRepository => spec_str("url"),
+        FluxResourceKind::GitRepository
+        | FluxResourceKind::OCIRepository
+        | FluxResourceKind::HelmRepository => spec_str("url"),
         FluxResourceKind::Kustomization => spec_str("path"),
         FluxResourceKind::HelmRelease => {
             let fields = FluxResourceKind::HelmRelease.extract_fields(obj);
@@ -947,7 +895,264 @@ async fn fetch_workload_status(
     Ok((ready, description))
 }
 
+/// The graph id of a resource (`kind:namespace:name`).
+fn graph_id(key: &ResourceKey) -> String {
+    key.to_key_string()
+}
+
+/// Add `node` unless the graph already has it.
+fn add_node_once(graph: &mut ResourceGraph, node: GraphNode) {
+    if !graph.node_index.contains_key(&node.id) {
+        graph.add_node(node);
+    }
+}
+
+/// Fetch a Flux resource as a graph node of `node_type`, with its JSON;
+/// `None` (logged) when it can't be read.
+async fn fetch_graph_node(
+    client: &kube::Client,
+    key: &ResourceKey,
+    node_type: NodeType,
+) -> Option<(GraphNode, Value)> {
+    let fetched = async {
+        let api_resource =
+            get_api_resource_with_fallback(client, &key.resource_type, &key.namespace, &key.name)
+                .await?;
+        let api: Api<DynamicObject> =
+            Api::namespaced_with(client.clone(), &key.namespace, &api_resource);
+        let obj = api.get(&key.name).await?;
+        let value = serde_json::to_value(&obj)?;
+        let node = create_graph_node_from_value(&value, &key.namespace, node_type)?;
+        anyhow::Ok((node, value))
+    }
+    .await;
+    match fetched {
+        Ok(fetched) => Some(fetched),
+        Err(e) => {
+            tracing::warn!("Graph: couldn't read {}: {:#}", key.to_key_string(), e);
+            None
+        }
+    }
+}
+
+/// What a source-like object comes from ([`crate::kube::sources`]): an
+/// ExternalArtifact's producer, a producer's `spec.sources`.
+fn lineage_refs(obj: &Value) -> Vec<ResourceKey> {
+    use crate::kube::sources;
+    let Some(kind) = obj
+        .get("kind")
+        .and_then(Value::as_str)
+        .and_then(FluxResourceKind::parse_optional)
+    else {
+        return Vec::new();
+    };
+    let namespace = obj
+        .pointer("/metadata/namespace")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    sources::producer_ref(kind, obj, namespace)
+        .into_iter()
+        .chain(sources::built_from(kind, obj, namespace))
+        .collect()
+}
+
+/// Add the source lineage above each `(source, child id)`: the source as a
+/// node feeding the child, then (breadth-first, bounded by
+/// [`MAX_LINEAGE_DEPTH`]) whatever that source is built from, and the Git
+/// origin of each.
+async fn add_lineage(
+    client: &kube::Client,
+    graph: &mut ResourceGraph,
+    start: Vec<(ResourceKey, String)>,
+) {
+    let mut queue: std::collections::VecDeque<(ResourceKey, String, usize)> = start
+        .into_iter()
+        .map(|(key, child)| (key, child, 0))
+        .collect();
+    while let Some((key, child, depth)) = queue.pop_front() {
+        let id = graph_id(&key);
+        let known = graph.node_index.contains_key(&id);
+        if !known {
+            let Some((node, value)) = fetch_graph_node(client, &key, NodeType::Source).await else {
+                continue;
+            };
+            graph.add_node(node);
+            add_origin(graph, &value, &id);
+            if depth < MAX_LINEAGE_DEPTH {
+                queue.extend(
+                    lineage_refs(&value)
+                        .into_iter()
+                        .map(|parent| (parent, id.clone(), depth + 1)),
+                );
+            }
+        }
+        graph.add_edge(GraphEdge {
+            from: id,
+            to: child,
+            relationship: RelationshipType::SourcedFrom,
+        });
+    }
+}
+
+/// The external origin an artifact records
+/// ([`crate::kube::sources::origin_url`]) as an upstream node above it —
+/// named by the URL's last path segment, as the Flux Operator Web UI does.
+fn add_origin(graph: &mut ResourceGraph, value: &Value, node_id: &str) {
+    let Some(url) = crate::kube::sources::origin_url(value) else {
+        return;
+    };
+    let name = url
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or(&url)
+        .to_string();
+    let upstream_id = format!("upstream:{url}");
+    if !graph.node_index.contains_key(&upstream_id) {
+        graph.add_node(GraphNode {
+            id: upstream_id.clone(),
+            kind: "Upstream".to_string(),
+            name,
+            namespace: String::new(),
+            node_type: NodeType::Upstream,
+            ready: None,
+            position: None,
+            description: Some(url),
+        });
+    }
+    graph.add_edge(GraphEdge {
+        from: upstream_id,
+        to: node_id.to_string(),
+        relationship: RelationshipType::SourcedFrom,
+    });
+}
+
 /// Check if a resource kind is a Flux resource
 fn is_flux_resource(kind: &str) -> bool {
     FluxResourceKind::parse_optional(kind).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    use crate::kube::fake_api::{FakeCluster, fixtures, flux};
+
+    /// Every edge above the object (inventory edges left out), sorted.
+    fn upstream_edges(graph: &ResourceGraph) -> Vec<String> {
+        let mut edges: Vec<String> = graph
+            .edges
+            .iter()
+            .filter(|e| e.relationship != RelationshipType::Owns)
+            .map(|e| format!("{} -> {} ({:?})", e.from, e.to, e.relationship))
+            .collect();
+        edges.sort();
+        edges
+    }
+
+    /// The user-reported graph: the child's own lineage — artifact ←
+    /// generator ← repository — with the parent beside it as manager, and
+    /// no edge from the parent's `fleet` repository.
+    #[tokio::test]
+    async fn a_managed_kustomizations_graph_shows_its_own_lineage_and_its_manager() {
+        let cluster = FakeCluster::new(fixtures::external_artifact_pipeline());
+        let graph = build_resource_graph(&cluster.client(), "Kustomization", "team-a", "apps")
+            .await
+            .unwrap();
+        assert_eq!(
+            upstream_edges(&graph),
+            [
+                "ArtifactGenerator:flux-system:gen -> ExternalArtifact:flux-system:apps (SourcedFrom)",
+                "ExternalArtifact:flux-system:apps -> Kustomization:team-a:apps (SourcedFrom)",
+                "GitRepository:flux-system:repo -> ArtifactGenerator:flux-system:gen (SourcedFrom)",
+                "Kustomization:flux-system:flux-system -> Kustomization:team-a:apps (ManagedBy)",
+            ]
+        );
+        assert!(
+            !graph
+                .node_index
+                .contains_key("GitRepository:flux-system:fleet")
+        );
+    }
+
+    /// A HelmRelease's generated HelmChart sits between it and the
+    /// repository (not beside them), and a repository keeps its URL.
+    #[tokio::test]
+    async fn a_helm_releases_graph_runs_through_its_helm_chart() {
+        let cluster = FakeCluster::new(fixtures::helm_pipeline());
+        let graph = build_resource_graph(&cluster.client(), "HelmRelease", "apps", "web")
+            .await
+            .unwrap();
+        assert_eq!(
+            upstream_edges(&graph),
+            [
+                "HelmChart:flux-system:apps-web -> HelmRelease:apps:web (SourcedFrom)",
+                "HelmRepository:flux-system:charts -> HelmChart:flux-system:apps-web (SourcedFrom)",
+                "Kustomization:flux-system:flux-system -> HelmRelease:apps:web (ManagedBy)",
+            ]
+        );
+        let repo = &graph.nodes[graph.node_index["HelmRepository:flux-system:charts"]];
+        assert_eq!(
+            repo.description.as_deref(),
+            Some("https://charts.example.com")
+        );
+    }
+
+    /// The origin an OCI artifact records becomes an Upstream node above
+    /// its repository, named by the URL's last segment.
+    #[tokio::test]
+    async fn an_artifacts_recorded_origin_is_an_upstream_node() {
+        let cluster = FakeCluster::new([
+            flux(
+                "OCIRepository",
+                "apps",
+                "podinfo",
+                json!({
+                "spec": {"url": "oci://ghcr.io/stefanprodan/charts/podinfo"},
+                "status": {"artifact": {"metadata": {
+                    "org.opencontainers.image.source": "https://github.com/stefanprodan/podinfo"}}}}),
+            ),
+            flux(
+                "Kustomization",
+                "apps",
+                "podinfo",
+                json!({"spec":
+                {"sourceRef": {"kind": "OCIRepository", "name": "podinfo"}}}),
+            ),
+        ]);
+        let graph = build_resource_graph(&cluster.client(), "Kustomization", "apps", "podinfo")
+            .await
+            .unwrap();
+        let origin = "upstream:https://github.com/stefanprodan/podinfo";
+        assert_eq!(
+            upstream_edges(&graph),
+            [
+                "OCIRepository:apps:podinfo -> Kustomization:apps:podinfo (SourcedFrom)"
+                    .to_string(),
+                format!("{origin} -> OCIRepository:apps:podinfo (SourcedFrom)"),
+            ]
+        );
+        let node = &graph.nodes[graph.node_index[origin]];
+        assert_eq!(
+            (node.kind.as_str(), node.name.as_str()),
+            ("Upstream", "podinfo")
+        );
+    }
+
+    /// An ArtifactGenerator's own graph shows what it is built from above it.
+    #[tokio::test]
+    async fn a_generators_graph_shows_its_sources_above_it() {
+        let cluster = FakeCluster::new(fixtures::external_artifact_pipeline());
+        let graph =
+            build_resource_graph(&cluster.client(), "ArtifactGenerator", "flux-system", "gen")
+                .await
+                .unwrap();
+        assert_eq!(
+            upstream_edges(&graph),
+            ["GitRepository:flux-system:repo -> ArtifactGenerator:flux-system:gen (SourcedFrom)"]
+        );
+    }
 }

@@ -222,7 +222,7 @@ pub struct SweepRow {
     pub namespace: String,
     pub name: String,
     pub standing: Standing,
-    pub created: Option<chrono::DateTime<chrono::Utc>>,
+    pub created: Option<jiff::Timestamp>,
 }
 
 impl SweepRow {
@@ -489,7 +489,7 @@ pub async fn sweep(
     let mut owners = FluxOwners::default();
     owners.refresh(client, &owner_keys).await;
 
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     for object in objects {
         let spec = &object.spec;
         // Helm's release storage (revision Secrets) belongs to its release,

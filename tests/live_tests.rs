@@ -920,7 +920,7 @@ async fn oci_chart_template_traces_to_its_generated_ocirepository() {
     );
     let source = trace.source.as_ref().expect("a source");
     assert_eq!(
-        (source.kind.as_str(), source.name.as_str()),
+        (source.node.kind.as_str(), source.node.name.as_str()),
         ("OCIRepository", "flux-resources-podinfo-oci-chart"),
         "the generated OCIRepository, from status.helmChart"
     );
@@ -1091,6 +1091,101 @@ async fn artifact_generator_graph_follows_cross_namespace_artifacts() {
         )),
         "the artifact is in its own namespace: {nodes:?}"
     );
+}
+
+/// A Kustomization sourced from an ExternalArtifact in another namespace,
+/// applied by a parent Kustomization: its graph shows its *own* lineage
+/// (ExternalArtifact ← ArtifactGenerator ← GitRepository) and the parent as
+/// its manager — not the parent's GitRepository as its source, which is
+/// what reusing the manager-first trace drew.
+#[tokio::test]
+#[ignore = "requires the flux9s-simple dev cluster (Flux 2.10)"]
+async fn graph_follows_an_external_artifact_to_its_generator_not_the_manager() {
+    use flux9s::trace::{RelationshipType, build_resource_graph};
+
+    let client = client_for(&simple_context()).await;
+    let graph = build_resource_graph(&client, "Kustomization", "flux-artifacts", "shared-apps")
+        .await
+        .unwrap_or_else(|e| panic!("graph: {e:#}"));
+    let edges: Vec<(String, String, RelationshipType)> = graph
+        .edges
+        .iter()
+        .map(|e| (e.from.clone(), e.to.clone(), e.relationship))
+        .collect();
+    let has = |from: &str, to: &str, relationship: RelationshipType| {
+        edges.contains(&(from.to_string(), to.to_string(), relationship))
+    };
+    let object = "Kustomization:flux-artifacts:shared-apps";
+    let artifact = "ExternalArtifact:flux-resources:apps-base";
+    let generator = "ArtifactGenerator:flux-resources:example-apps";
+    let repo = "GitRepository:flux-resources:flux-system";
+    let parent = "Kustomization:flux-resources:infra-configs";
+
+    assert!(
+        has(artifact, object, RelationshipType::SourcedFrom),
+        "{edges:?}"
+    );
+    assert!(
+        has(generator, artifact, RelationshipType::SourcedFrom),
+        "{edges:?}"
+    );
+    assert!(
+        has(repo, generator, RelationshipType::SourcedFrom),
+        "{edges:?}"
+    );
+    assert!(
+        has(parent, object, RelationshipType::ManagedBy),
+        "{edges:?}"
+    );
+    assert!(
+        !edges
+            .iter()
+            .any(|(from, to, _)| from == repo && to == object),
+        "the parent's source isn't this Kustomization's: {edges:?}"
+    );
+}
+
+/// The trace of that Kustomization follows the Flux Operator: its managers
+/// up the chain, and the source of the nearest applier — itself — followed
+/// to the ArtifactGenerator that produced it and what that is built from.
+#[tokio::test]
+#[ignore = "requires the flux9s-simple dev cluster (Flux 2.10)"]
+async fn trace_resolves_a_managed_kustomizations_own_source_like_the_operator() {
+    let client = client_for(&simple_context()).await;
+    let trace =
+        flux9s::trace::trace_object(&client, "Kustomization", "flux-artifacts", "shared-apps")
+            .await
+            .unwrap_or_else(|e| panic!("trace: {e:#}"));
+    assert_eq!(
+        trace
+            .flux_manager()
+            .map(|n| (n.kind.as_str(), n.name.as_str())),
+        Some(("Kustomization", "infra-configs"))
+    );
+    let source = trace.source.as_ref().expect("a source");
+    assert_eq!(
+        source.resolved_for.name, "shared-apps",
+        "its own, not the parent's"
+    );
+    assert_eq!(
+        (
+            source.node.kind.as_str(),
+            source.node.namespace.as_str(),
+            source.node.name.as_str()
+        ),
+        ("ExternalArtifact", "flux-resources", "apps-base")
+    );
+    let producer = source.produced_by.as_ref().expect("a producer");
+    assert_eq!(
+        (producer.kind.as_str(), producer.name.as_str()),
+        ("ArtifactGenerator", "example-apps")
+    );
+    let built_from: Vec<_> = source
+        .built_from
+        .iter()
+        .map(|n| (n.kind.as_str(), n.name.as_str()))
+        .collect();
+    assert_eq!(built_from, [("GitRepository", "flux-system")]);
 }
 
 /// ArtifactGenerators suspend through `source.extensions.fluxcd.io/reconcile`

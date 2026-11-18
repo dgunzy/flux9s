@@ -3762,7 +3762,10 @@ fn native_trace() -> crate::trace::TraceResult {
             trace_node("Deployment", "apps", "web"),
             trace_node("Kustomization", "flux-system", "apps"),
         ],
-        source: Some(trace_node("GitRepository", "flux-system", "flux-system")),
+        source: Some(crate::trace::TraceSource::of(
+            &trace_node("Kustomization", "flux-system", "apps"),
+            trace_node("GitRepository", "flux-system", "flux-system"),
+        )),
         outcome: crate::trace::TraceOutcome::Flux,
     }
 }

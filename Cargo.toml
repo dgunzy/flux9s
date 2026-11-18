@@ -140,7 +140,9 @@ base64 = "0.23"
 flate2 = "1.1"
 
 # Utilities
-chrono = { version = "0.4", features = ["serde"] }
+# Timestamps and durations (chrono is unmaintained, RUSTSEC-2026-0543). Already in
+# the tree through k8s-openapi, so it adds no crates.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 url = "2.5"
 tempfile = "3.27"
 directories = "6.0"
@@ -161,6 +163,9 @@ update-informer = "1.3"
 # Testing
 mockall = "0.15"
 insta = "1.49.0"
+# Already in the tree through kube; `util` gives `service_fn` for the
+# in-process fake API server (src/kube/fake_api.rs).
+tower = { version = "0.5", default-features = false, features = ["util"] }
 
 [package.metadata.binstall]
 # cargo-binstall configuration for pre-built binary installation
@@ -200,10 +205,6 @@ path = "tests/resource_registry.rs"
 [[test]]
 name = "field_extraction"
 path = "tests/field_extraction.rs"
-
-[[test]]
-name = "trace_tests"
-path = "tests/trace_tests.rs"
 
 # Live-cluster regression tests — every test is #[ignore]d; run via
 # `just test-live` after `./scripts/dev-clusters.sh ci`, or by the

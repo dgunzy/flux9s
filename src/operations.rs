@@ -66,18 +66,21 @@ fn is_resource_suspended(obj: &DynamicObject, resource_type: &str) -> bool {
 }
 
 /// Helper to get or create annotations map from a resource
+/// The object's annotations. A `DynamicObject` keeps `metadata` apart from
+/// `data` — reading `data["metadata"]` (as this once did) always found none.
 fn get_annotations(obj: &DynamicObject) -> serde_json::Map<String, serde_json::Value> {
-    obj.data
-        .get("metadata")
-        .and_then(|m| m.get("annotations"))
-        .and_then(|a| a.as_object())
-        .cloned()
-        .unwrap_or_else(serde_json::Map::new)
+    obj.metadata
+        .annotations
+        .iter()
+        .flatten()
+        .map(|(key, value)| (key.clone(), json!(value)))
+        .collect()
 }
 
 /// Helper to add reconcile annotation to a resource
 fn add_reconcile_annotation(annotations: &mut serde_json::Map<String, serde_json::Value>) {
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    // RFC 3339 with nanoseconds, `Z`-suffixed.
+    let now = format!("{:.9}", jiff::Timestamp::now());
     annotations.insert("reconcile.fluxcd.io/requestedAt".to_string(), json!(now));
 }
 
@@ -478,179 +481,39 @@ impl FluxOperation for ReconcileWithSourceOperation {
             ));
         }
 
-        // Extract sourceRef
-        let source_ref = obj
-            .data
-            .get("spec")
-            .and_then(|s| s.get("sourceRef"))
-            .and_then(|sr| sr.as_object())
+        // The source it pulls from — the same reading as trace and graph.
+        let value = serde_json::to_value(&obj).context("Failed to serialize resource")?;
+        let source = kind
+            .and_then(|kind| crate::kube::sources::source_ref(kind, &value, namespace))
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "{}/{} in namespace {} has no sourceRef",
+                    "{}/{} in namespace {} has no source",
                     resource_type,
                     name,
                     namespace
                 )
             })?;
 
-        let source_kind = source_ref
-            .get("kind")
-            .and_then(|k| k.as_str())
-            .ok_or_else(|| anyhow::anyhow!("{}/{} sourceRef missing kind", resource_type, name))?;
-        let source_name = source_ref
-            .get("name")
-            .and_then(|n| n.as_str())
-            .ok_or_else(|| anyhow::anyhow!("{}/{} sourceRef missing name", resource_type, name))?;
-        let source_namespace = source_ref
-            .get("namespace")
-            .and_then(|n| n.as_str())
-            .unwrap_or(namespace);
-
-        tracing::debug!(
-            "Found source reference: {}/{} in namespace {}",
-            source_kind,
-            source_name,
-            source_namespace
-        );
-
-        // Step 1: Reconcile the source first
-        let source_api =
-            get_resource_api(client, source_kind, source_namespace, source_name).await?;
-
-        // Get source object
-        let source_obj = source_api.get(source_name).await.with_context(|| {
-            format!(
-                "Failed to fetch source {}/{} in namespace {}",
-                source_kind, source_name, source_namespace
-            )
-        })?;
-
-        // Check if source is suspended
-        if is_resource_suspended(&source_obj, source_kind) {
-            tracing::warn!(
-                "Cannot reconcile: source {}/{} in namespace {} is suspended",
-                source_kind,
-                source_name,
-                source_namespace
+        // An ExternalArtifact is written by its producer, not reconciled on
+        // request: like `flux reconcile --with-source`, reconcile only the
+        // object then.
+        if FluxResourceKind::parse_optional(&source.resource_type)
+            == Some(FluxResourceKind::ExternalArtifact)
+        {
+            tracing::info!(
+                "Source {} is an ExternalArtifact; reconciling {}/{} only",
+                source,
+                resource_type,
+                name
             );
-            return Err(anyhow::anyhow!(
-                "Cannot reconcile: source {}/{} in namespace {} is suspended",
-                source_kind,
-                source_name,
-                source_namespace
-            ));
-        }
-
-        // Get current annotations and add reconcile annotation to source
-        let mut source_annotations = get_annotations(&source_obj);
-        add_reconcile_annotation(&mut source_annotations);
-
-        // Patch source with reconcile annotation
-        let source_patch = json!({
-            "metadata": {
-                "annotations": source_annotations
-            }
-        });
-        source_api
-            .patch(
-                source_name,
-                &PatchParams::default(),
-                &Patch::Merge(source_patch),
+        } else {
+            reconcile_source_and_wait(
+                client,
+                &source.resource_type,
+                &source.namespace,
+                &source.name,
             )
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to trigger reconciliation on source {}/{} in namespace {}",
-                    source_kind, source_name, source_namespace
-                )
-            })?;
-
-        tracing::info!(
-            "Triggered reconciliation on source {}/{} in namespace {}",
-            source_kind,
-            source_name,
-            source_namespace
-        );
-
-        // Step 2: Wait for source reconciliation to complete
-        // Poll until lastHandledReconcileAt matches our requestedAt
-        // Note: We wait a short time to allow the source to start reconciling,
-        // but we don't wait for completion - we proceed after a brief delay
-        let mut attempts = 0;
-        let max_attempts = 10; // 10 seconds max wait (reduced from 60)
-        let mut source_reconciled = false;
-
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            attempts += 1;
-
-            let current_source = match source_api.get(source_name).await {
-                Ok(obj) => obj,
-                Err(e) => {
-                    // If we can't fetch the source, log but continue
-                    tracing::warn!("Failed to fetch source during polling: {}", e);
-                    break;
-                }
-            };
-
-            let current_requested_at = current_source
-                .data
-                .get("metadata")
-                .and_then(|m| m.get("annotations"))
-                .and_then(|a| a.as_object())
-                .and_then(|a| a.get("reconcile.fluxcd.io/requestedAt"))
-                .and_then(|t| t.as_str());
-
-            let last_handled = current_source
-                .data
-                .get("status")
-                .and_then(|s| s.get("lastHandledReconcileAt"))
-                .and_then(|t| t.as_str());
-
-            // Check if source is ready
-            let is_ready = crate::kube::conditions::is_ready(&current_source.data).unwrap_or(false);
-
-            // Check if lastHandledReconcileAt matches requestedAt
-            // We check if the requestedAt annotation exists and if lastHandled matches it
-            if let Some(requested_at) = current_requested_at
-                && let Some(handled_at) = last_handled
-            {
-                // Compare timestamps - they should match if reconciliation completed
-                if handled_at == requested_at {
-                    source_reconciled = true;
-                    // Also check if ready, but don't require it if reconciliation completed
-                    if is_ready {
-                        break;
-                    } else {
-                        // Source reconciled but not ready - wait a bit more
-                        if attempts >= 5 {
-                            // Give up waiting for ready state after 5 seconds
-                            tracing::info!(
-                                "Source {} reconciled but not ready, proceeding anyway",
-                                source_kind
-                            );
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // If we've waited long enough, proceed anyway
-            // The source reconciliation might take longer, but we'll reconcile the resource
-            if attempts >= max_attempts {
-                if source_reconciled {
-                    tracing::info!(
-                        "Source {} reconciliation in progress, proceeding with resource reconciliation",
-                        source_kind
-                    );
-                } else {
-                    tracing::warn!(
-                        "Timeout waiting for source {} reconciliation, proceeding anyway",
-                        source_kind
-                    );
-                }
-                break;
-            }
+            .await?;
         }
 
         // Step 3: Reconcile the Kustomization/HelmRelease
@@ -712,6 +575,161 @@ impl FluxOperation for ReconcileWithSourceOperation {
     fn applies_to(&self, kind: FluxResourceKind) -> bool {
         kind.has_source_ref()
     }
+}
+
+/// Steps 1–2 of reconcile-with-source: request a reconcile of the source
+/// and wait briefly for the controller to handle it.
+async fn reconcile_source_and_wait(
+    client: &kube::Client,
+    source_kind: &str,
+    source_namespace: &str,
+    source_name: &str,
+) -> Result<()> {
+    tracing::debug!(
+        "Found source reference: {}/{} in namespace {}",
+        source_kind,
+        source_name,
+        source_namespace
+    );
+
+    // Step 1: Reconcile the source first
+    let source_api = get_resource_api(client, source_kind, source_namespace, source_name).await?;
+
+    // Get source object
+    let source_obj = source_api.get(source_name).await.with_context(|| {
+        format!(
+            "Failed to fetch source {}/{} in namespace {}",
+            source_kind, source_name, source_namespace
+        )
+    })?;
+
+    // Check if source is suspended
+    if is_resource_suspended(&source_obj, source_kind) {
+        tracing::warn!(
+            "Cannot reconcile: source {}/{} in namespace {} is suspended",
+            source_kind,
+            source_name,
+            source_namespace
+        );
+        return Err(anyhow::anyhow!(
+            "Cannot reconcile: source {}/{} in namespace {} is suspended",
+            source_kind,
+            source_name,
+            source_namespace
+        ));
+    }
+
+    // Get current annotations and add reconcile annotation to source
+    let mut source_annotations = get_annotations(&source_obj);
+    add_reconcile_annotation(&mut source_annotations);
+
+    // Patch source with reconcile annotation
+    let source_patch = json!({
+        "metadata": {
+            "annotations": source_annotations
+        }
+    });
+    source_api
+        .patch(
+            source_name,
+            &PatchParams::default(),
+            &Patch::Merge(source_patch),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to trigger reconciliation on source {}/{} in namespace {}",
+                source_kind, source_name, source_namespace
+            )
+        })?;
+
+    tracing::info!(
+        "Triggered reconciliation on source {}/{} in namespace {}",
+        source_kind,
+        source_name,
+        source_namespace
+    );
+
+    // Step 2: Wait for source reconciliation to complete
+    // Poll until lastHandledReconcileAt matches our requestedAt
+    // Note: We wait a short time to allow the source to start reconciling,
+    // but we don't wait for completion - we proceed after a brief delay
+    let mut attempts = 0;
+    let max_attempts = 10; // 10 seconds max wait (reduced from 60)
+    let mut source_reconciled = false;
+
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        attempts += 1;
+
+        let current_source = match source_api.get(source_name).await {
+            Ok(obj) => obj,
+            Err(e) => {
+                // If we can't fetch the source, log but continue
+                tracing::warn!("Failed to fetch source during polling: {}", e);
+                break;
+            }
+        };
+
+        let current_requested_at = current_source
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get("reconcile.fluxcd.io/requestedAt"))
+            .map(String::as_str);
+
+        let last_handled = current_source
+            .data
+            .get("status")
+            .and_then(|s| s.get("lastHandledReconcileAt"))
+            .and_then(|t| t.as_str());
+
+        // Check if source is ready
+        let is_ready = crate::kube::conditions::is_ready(&current_source.data).unwrap_or(false);
+
+        // Check if lastHandledReconcileAt matches requestedAt
+        // We check if the requestedAt annotation exists and if lastHandled matches it
+        if let Some(requested_at) = current_requested_at
+            && let Some(handled_at) = last_handled
+        {
+            // Compare timestamps - they should match if reconciliation completed
+            if handled_at == requested_at {
+                source_reconciled = true;
+                // Also check if ready, but don't require it if reconciliation completed
+                if is_ready {
+                    break;
+                } else {
+                    // Source reconciled but not ready - wait a bit more
+                    if attempts >= 5 {
+                        // Give up waiting for ready state after 5 seconds
+                        tracing::info!(
+                            "Source {} reconciled but not ready, proceeding anyway",
+                            source_kind
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If we've waited long enough, proceed anyway
+        // The source reconciliation might take longer, but we'll reconcile the resource
+        if attempts >= max_attempts {
+            if source_reconciled {
+                tracing::info!(
+                    "Source {} reconciliation in progress, proceeding with resource reconciliation",
+                    source_kind
+                );
+            } else {
+                tracing::warn!(
+                    "Timeout waiting for source {} reconciliation, proceeding anyway",
+                    source_kind
+                );
+            }
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// Apply a full resource YAML via Server Side Apply.
@@ -820,6 +838,96 @@ impl Default for OperationRegistry {
 
 #[cfg(test)]
 mod tests {
+    use crate::kube::fake_api::{FakeCluster, fixtures};
+
+    /// The resources a run patched, as their `plural/name`, in order.
+    fn patched(cluster: &FakeCluster) -> Vec<String> {
+        cluster
+            .writes()
+            .into_iter()
+            .map(|(method, path)| {
+                assert_eq!(method, "PATCH");
+                let mut segments = path.rsplit('/');
+                let name = segments.next().unwrap_or_default();
+                let plural = segments.next().unwrap_or_default();
+                format!("{plural}/{name}")
+            })
+            .collect()
+    }
+
+    /// The reconcile request is an RFC 3339 UTC timestamp with nanoseconds,
+    /// as `flux reconcile` writes it (it moved from chrono to jiff).
+    #[test]
+    fn the_reconcile_request_is_an_rfc3339_utc_timestamp() {
+        let mut annotations = serde_json::Map::new();
+        add_reconcile_annotation(&mut annotations);
+        let requested = annotations["reconcile.fluxcd.io/requestedAt"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(requested.ends_with('Z'), "{requested}");
+        let fraction = requested.rsplit('.').next().unwrap().trim_end_matches('Z');
+        assert_eq!(fraction.len(), 9, "{requested}");
+        assert!(requested.parse::<jiff::Timestamp>().is_ok());
+    }
+
+    /// `W` on a HelmRelease reconciles the HelmChart helm-controller
+    /// generated (as `flux reconcile hr --with-source` does), then the
+    /// release. It used to read `spec.sourceRef`, which a HelmRelease
+    /// doesn't have, and always failed.
+    #[tokio::test]
+    async fn reconcile_with_source_reconciles_a_releases_generated_chart_first() {
+        let cluster = FakeCluster::new(fixtures::helm_pipeline());
+        let started = std::time::Instant::now();
+        ReconcileWithSourceOperation
+            .execute(&cluster.client(), "HelmRelease", "apps", "web")
+            .await
+            .unwrap();
+        assert_eq!(
+            patched(&cluster),
+            ["helmcharts/apps-web", "helmreleases/web"]
+        );
+        // The source reports the reconcile handled on the first poll, so `W`
+        // moves on then. It used to read annotations from `data`, never saw
+        // the request handled, and always waited out its 10s timeout.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "waited {:?} for a source that was already reconciled",
+            started.elapsed()
+        );
+    }
+
+    /// An ExternalArtifact is written by its producer, not reconciled on
+    /// request: like the flux CLI, only the Kustomization is reconciled.
+    #[tokio::test]
+    async fn reconcile_with_source_leaves_an_external_artifact_to_its_producer() {
+        let cluster = FakeCluster::new(fixtures::external_artifact_pipeline());
+        ReconcileWithSourceOperation
+            .execute(&cluster.client(), "Kustomization", "team-a", "apps")
+            .await
+            .unwrap();
+        assert_eq!(patched(&cluster), ["kustomizations/apps"]);
+    }
+
+    /// A Kustomization's GitRepository is reconciled before it.
+    #[tokio::test]
+    async fn reconcile_with_source_reconciles_a_kustomizations_repository_first() {
+        let cluster = FakeCluster::new(fixtures::external_artifact_pipeline());
+        ReconcileWithSourceOperation
+            .execute(
+                &cluster.client(),
+                "Kustomization",
+                "flux-system",
+                "flux-system",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            patched(&cluster),
+            ["gitrepositories/fleet", "kustomizations/flux-system"]
+        );
+    }
+
     use super::*;
     use crate::watcher::ResourceInfo;
 

@@ -85,7 +85,7 @@ pub struct KindRow {
     pub annotations: std::collections::HashMap<String, String>,
     pub cells: Vec<String>,
     /// Creation time, so AGE cells can be refreshed without the object.
-    pub created: Option<chrono::DateTime<chrono::Utc>>,
+    pub created: Option<jiff::Timestamp>,
     /// Who manages it, per its own metadata — owner chains are resolved
     /// separately and applied at snapshot time.
     pub ownership: Ownership,
@@ -328,11 +328,7 @@ pub fn eval_path(obj: &Value, path: &str) -> String {
 
 /// Build a row. `obj` must carry `apiVersion`/`kind` — watched objects don't,
 /// so [`watch_kind`] stamps them first (kind-specific health keys on it).
-pub fn kind_row(
-    columns: &[Column],
-    obj: &Value,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Option<KindRow> {
+pub fn kind_row(columns: &[Column], obj: &Value, now: jiff::Timestamp) -> Option<KindRow> {
     let name = sanitize_cell(obj.pointer("/metadata/name")?.as_str()?);
     let namespace = sanitize_cell(
         obj.pointer("/metadata/namespace")
@@ -342,7 +338,7 @@ pub fn kind_row(
     let created = obj
         .pointer("/metadata/creationTimestamp")
         .and_then(Value::as_str)
-        .and_then(|c| c.parse::<chrono::DateTime<chrono::Utc>>().ok());
+        .and_then(|c| c.parse::<jiff::Timestamp>().ok());
     let status = compute_object_status(obj);
     let owned = ownership(obj);
     let group = standing::group_of(
@@ -370,7 +366,7 @@ pub fn kind_row(
                 sanitize_cell(status.message.lines().next().unwrap_or_default())
             }
             Column::Builtin(BuiltinColumn::Age) => created
-                .map(|t| crate::age::compact(now - t))
+                .map(|t| crate::age::compact(now.duration_since(t)))
                 .unwrap_or_default(),
             Column::Builtin(BuiltinColumn::ManagedBy) => sanitize_cell(&managed_text),
             Column::Native(column) => sanitize_cell(&column.cell(obj)),
@@ -479,7 +475,7 @@ fn row_for(spec: &KindSpec, columns: &[Column], obj: &DynamicObject) -> Option<K
         map.insert("apiVersion".into(), spec.gvk.api_version().into());
         map.insert("kind".into(), spec.gvk.kind.clone().into());
     }
-    kind_row(columns, &value, chrono::Utc::now())
+    kind_row(columns, &value, jiff::Timestamp::now())
 }
 
 /// The watched objects of one list, **as rows**. Pure, so the watch event
@@ -542,7 +538,7 @@ impl KindStore {
     fn snapshot(
         &self,
         columns: &[Column],
-        now: chrono::DateTime<chrono::Utc>,
+        now: jiff::Timestamp,
         owners: &OwnerResolver,
         flux_owners: &FluxOwners,
     ) -> KindListSnapshot {
@@ -565,7 +561,7 @@ impl KindStore {
                 if let Some(created) = row.created {
                     for &i in &age_cells {
                         if let Some(cell) = row.cells.get_mut(i) {
-                            *cell = crate::age::compact(now - created);
+                            *cell = crate::age::compact(now.duration_since(created));
                         }
                     }
                 }
@@ -808,7 +804,7 @@ async fn watch_kind_with(
                     flux_owners.retain(&keys);
                     if flux_owners.refresh(&client, &keys).await
                         && tx
-                            .send(Ok(store.snapshot(&columns, chrono::Utc::now(), &owners, &flux_owners)))
+                            .send(Ok(store.snapshot(&columns, jiff::Timestamp::now(), &owners, &flux_owners)))
                             .is_err()
                     {
                         return; // List closed
@@ -871,7 +867,7 @@ async fn watch_kind_with(
             if tx
                 .send(Ok(store.snapshot(
                     &columns,
-                    chrono::Utc::now(),
+                    jiff::Timestamp::now(),
                     &owners,
                     &flux_owners,
                 )))
@@ -900,7 +896,7 @@ async fn watch_kind_with(
                 if tx
                     .send(Ok(store.snapshot(
                         &columns,
-                        chrono::Utc::now(),
+                        jiff::Timestamp::now(),
                         &owners,
                         &flux_owners,
                     )))
@@ -916,7 +912,7 @@ async fn watch_kind_with(
                 && tx
                     .send(Ok(store.snapshot(
                         &columns,
-                        chrono::Utc::now(),
+                        jiff::Timestamp::now(),
                         &owners,
                         &flux_owners,
                     )))
@@ -979,7 +975,7 @@ mod tests {
 
     #[test]
     fn rows_use_kind_specific_health_and_columns() {
-        let now: chrono::DateTime<chrono::Utc> = "2026-09-29T12:00:00Z".parse().unwrap();
+        let now: jiff::Timestamp = "2026-09-29T12:00:00Z".parse().unwrap();
         let obj = json!({
             "apiVersion": "apps/v1",
             "kind": "Deployment",
@@ -999,7 +995,7 @@ mod tests {
     /// values cut.
     #[test]
     fn rows_keep_labels_and_capped_annotations() {
-        let now: chrono::DateTime<chrono::Utc> = "2026-09-29T12:00:00Z".parse().unwrap();
+        let now: jiff::Timestamp = "2026-09-29T12:00:00Z".parse().unwrap();
         let long = "x".repeat(10_000);
         let obj = json!({
             "apiVersion": "apps/v1",
@@ -1099,7 +1095,7 @@ mod tests {
             &s.columns,
             watcher::Event::Apply(dynamic("a", "api", 0))
         ));
-        let now: chrono::DateTime<chrono::Utc> = "2026-09-29T12:00:00Z".parse().unwrap();
+        let now: jiff::Timestamp = "2026-09-29T12:00:00Z".parse().unwrap();
         let snapshot = store.snapshot(
             &s.columns,
             now,
@@ -1191,7 +1187,7 @@ mod tests {
         store.apply(&s, &s.columns, watcher::Event::InitDone);
         let snapshot = store.snapshot(
             &s.columns,
-            chrono::Utc::now(),
+            jiff::Timestamp::now(),
             &OwnerResolver::default(),
             &FluxOwners::default(),
         );
@@ -1210,7 +1206,7 @@ mod tests {
         assert!(capped.ends_with('…'));
 
         // Printer-column values from the cluster go through it.
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let obj = json!({"metadata": {"name": "x"}, "spec": {"v": "a\u{1b}]0;pwned\u{7}b"}});
         let columns = vec![Column::JsonPath {
             name: "V".into(),
@@ -1248,7 +1244,7 @@ mod tests {
         .unwrap();
         store.apply(&s, &s.columns, watcher::Event::Apply(pod));
         store.listed = true;
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
 
         let mut owners = OwnerResolver::default();
         assert_eq!(store.pending_owners(&owners).len(), 1);
@@ -1295,7 +1291,7 @@ mod tests {
         let owner = ResourceKey::new("Kustomization", "flux-system", "apps");
         assert_eq!(store.flux_owner_keys(), [owner.clone()].into());
 
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let unread = store.snapshot(
             &s.columns,
             now,
@@ -1332,7 +1328,7 @@ mod tests {
 
     #[test]
     fn kubernetes_builtins_and_helm_storage_say_so() {
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let columns = [Column::Builtin(BuiltinColumn::ManagedBy)];
         let row = |obj: Value| kind_row(&columns, &obj, now).unwrap().cells[0].clone();
         assert_eq!(

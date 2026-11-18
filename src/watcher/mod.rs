@@ -935,9 +935,7 @@ pub fn extract_reconciliation_info(
         .or_else(|| status.get("lastReconciled"))
         .and_then(|v| v.as_str())?;
 
-    let timestamp = chrono::DateTime::parse_from_rfc3339(last_reconciled_str)
-        .ok()?
-        .with_timezone(&chrono::Utc);
+    let timestamp = last_reconciled_str.parse::<jiff::Timestamp>().ok()?;
 
     // Extract revision
     let revision = status

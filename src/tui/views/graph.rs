@@ -273,37 +273,63 @@ fn draw_vline(f: &mut Frame, area: Rect, x: u16, y: u16, height: u16, color: Col
     if height == 0 || x >= area.width || y >= area.height {
         return;
     }
-    let h = height.min(area.height - y);
-    let rect = Rect {
-        x: area.x + x,
-        y: area.y + y,
-        width: 1,
-        height: h,
-    };
-    let lines: Vec<Line> = (0..h).map(|_| Line::from("│")).collect();
-    f.render_widget(
-        Paragraph::new(lines).style(Style::default().fg(color)),
-        rect,
-    );
+    for row in y..y + height.min(area.height - y) {
+        put_glyph(f, area, x, row, '│', color);
+    }
 }
 
 /// Draw a pre-built run of box-drawing glyphs starting at column `x`, clipped to
-/// `area`. The caller composes the glyphs (with junctions) so overlapping cells
-/// don't fight each other.
+/// `area`. The caller composes the glyphs (with junctions) for its own route;
+/// cells another route already drew merge with them ([`put_glyph`]).
 fn draw_hline(f: &mut Frame, area: Rect, x: u16, y: u16, glyphs: &str, color: Color) {
-    let width = glyphs.chars().count() as u16;
-    if width == 0 || x >= area.width || y >= area.height {
+    if x >= area.width || y >= area.height {
         return;
     }
-    let w = width.min(area.width - x);
-    let text: String = glyphs.chars().take(w as usize).collect();
-    let rect = Rect {
-        x: area.x + x,
-        y: area.y + y,
-        width: w,
-        height: 1,
+    for (offset, glyph) in glyphs.chars().enumerate() {
+        let Some(col) = x.checked_add(offset as u16).filter(|&c| c < area.width) else {
+            break;
+        };
+        put_glyph(f, area, col, y, glyph, color);
+    }
+}
+
+/// Draw one connector glyph, merged with a connector already in the cell:
+/// where two routes meet (a source and a manager both feeding the object)
+/// the cell joins both (`┐` + `┌` = `┬`) instead of the last one winning.
+fn put_glyph(f: &mut Frame, area: Rect, x: u16, y: u16, glyph: char, color: Color) {
+    let position = (area.x + x, area.y + y);
+    let Some(cell) = f.buffer_mut().cell_mut(position) else {
+        return;
     };
-    f.render_widget(Paragraph::new(text).style(Style::default().fg(color)), rect);
+    let merged = match (
+        cell.symbol().chars().next().and_then(glyph_sides),
+        glyph_sides(glyph),
+    ) {
+        (Some((u1, d1, l1, r1)), Some((u2, d2, l2, r2))) => {
+            box_glyph(u1 || u2, d1 || d2, l1 || l2, r1 || r2)
+        }
+        _ => glyph,
+    };
+    cell.set_char(merged).set_fg(color);
+}
+
+/// Which sides a connector glyph joins — the inverse of [`box_glyph`];
+/// `None` for anything that isn't one.
+fn glyph_sides(glyph: char) -> Option<(bool, bool, bool, bool)> {
+    Some(match glyph {
+        '┼' => (true, true, true, true),
+        '┬' => (false, true, true, true),
+        '┴' => (true, false, true, true),
+        '┤' => (true, true, true, false),
+        '├' => (true, true, false, true),
+        '┌' => (false, true, false, true),
+        '┐' => (false, true, true, false),
+        '└' => (true, false, false, true),
+        '┘' => (true, false, true, false),
+        '│' => (true, true, false, false),
+        '─' => (false, false, true, true),
+        _ => return None,
+    })
 }
 
 /// Pick the box-drawing glyph for a cell from which sides connect.
@@ -940,6 +966,38 @@ mod tests {
             .collect();
         assert!(out.contains("web") && out.contains("worker"), "{out}");
         assert!(out.contains("Replicas: 1/1"));
+    }
+
+    /// A source and a manager both feeding the object: their connectors meet
+    /// above it in one `┬`, not whichever route drew last (`┌`).
+    #[test]
+    fn connectors_meeting_above_a_node_join_in_one_junction() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut graph = ResourceGraph::new();
+        graph.add_node(node("object", NodeType::Object, None));
+        graph.add_node(node("source", NodeType::Source, None));
+        graph.add_node(node("manager", NodeType::Chain, None));
+        for (from, relationship) in [
+            ("source", RelationshipType::SourcedFrom),
+            ("manager", RelationshipType::ManagedBy),
+        ] {
+            graph.add_edge(crate::trace::GraphEdge {
+                from: from.into(),
+                to: "object".into(),
+                relationship,
+            });
+        }
+        graph.calculate_layout(100, 30);
+        let (ox, oy) = graph.nodes[0].position.unwrap();
+        let junction = (ox + graph.nodes[0].render_width(100) / 2, oy - 1);
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                render_graph_nodes_and_edges(f, f.area(), &graph, 0, None, None, &Theme::default())
+            })
+            .unwrap();
+        assert_eq!(terminal.backend().buffer()[junction].symbol(), "┬");
     }
 
     #[test]

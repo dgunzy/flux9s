@@ -5,12 +5,42 @@
 pub struct TraceResult {
     /// The original object being traced
     pub object: TraceNode,
-    /// The chain of owners leading to Flux source (includes Kustomization, HelmRelease, HelmChart, etc.)
+    /// What is above the object, nearest first: its controller owners, then
+    /// every Flux object managing it, up to the top.
     pub chain: Vec<TraceNode>,
-    /// The Flux source (GitRepository, OCIRepository, HelmRepository, etc.)
-    pub source: Option<TraceNode>,
+    /// The source of the nearest applier — the object itself when it has
+    /// one — as the Flux Operator's trace resolves it.
+    pub source: Option<TraceSource>,
     /// Where the trace ended (#266).
     pub outcome: TraceOutcome,
+}
+
+/// The source a trace resolved, with what it came from (the Flux
+/// Operator's `TraceSource`).
+#[derive(Debug, Clone)]
+pub struct TraceSource {
+    /// The applier the source was resolved for: the traced object, or the
+    /// nearest manager that has a source.
+    pub resolved_for: crate::watcher::ResourceKey,
+    /// The source holding the artifact (intermediates such as a HelmChart
+    /// are resolved through).
+    pub node: TraceNode,
+    /// An ExternalArtifact's producer, e.g. an ArtifactGenerator.
+    pub produced_by: Option<TraceNode>,
+    /// The sources the producer (or the source itself) combines.
+    pub built_from: Vec<TraceNode>,
+}
+
+impl TraceSource {
+    /// `node`, resolved for `resolved_for`, with nothing above it.
+    pub fn of(resolved_for: &TraceNode, node: TraceNode) -> Self {
+        Self {
+            resolved_for: resolved_for.key(),
+            node,
+            produced_by: None,
+            built_from: Vec::new(),
+        }
+    }
 }
 
 /// Where a trace ended: at Flux, at another manager, or nowhere.

@@ -172,7 +172,7 @@ The test tree is flatter than some older internal notes imply. Today, most contr
 - `crd_compatibility.rs` - compatibility checks for watched CRDs and status extraction
 - `resource_registry.rs` - registry completeness checks
 - `field_extraction.rs` - resource field extraction behavior
-- `trace_tests.rs` and `graph_tests.rs` - relationship discovery and graph behavior
+- `graph_tests.rs` - graph layout and graph support rules (trace and graph discovery are unit-tested in `src/trace/` against an in-process fake API server)
 - `reconciliation_history_tests.rs` - history extraction behavior
 - `favorites_tests.rs` - config-backed favorites behavior
 - `navigation_tests.rs` and `snapshot_tests.rs` - TUI behavior and rendering snapshots

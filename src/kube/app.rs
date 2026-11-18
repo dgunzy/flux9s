@@ -211,38 +211,24 @@ pub fn shape_of(obj: &Value) -> String {
     .to_string()
 }
 
-/// A Flux object's sources, as its spec and status name them: a
-/// Kustomization's `sourceRef`; a HelmRelease's generated HelmChart (and the
-/// chart's source) or OCIRepository, else its `chartRef`.
+/// A Flux object's sources, as its spec and status name them
+/// ([`crate::kube::sources::source_ref`]): a Kustomization's `sourceRef`; a
+/// HelmRelease's chart source — and, when that is its generated HelmChart,
+/// the repository the chart template names.
 pub fn source_refs(kind: FluxResourceKind, obj: &Value, namespace: &str) -> Vec<InventoryEntry> {
-    let reference = |pointer: &str| -> Option<InventoryEntry> {
-        let r = obj.pointer(pointer)?;
-        let kind = r.get("kind").and_then(Value::as_str)?;
-        let name = r.get("name").and_then(Value::as_str)?;
-        let namespace = r
-            .get("namespace")
-            .and_then(Value::as_str)
-            .unwrap_or(namespace);
-        flux_entry(kind, namespace, name)
+    use crate::kube::sources;
+    let Some(source) = sources::source_ref(kind, obj, namespace) else {
+        return Vec::new();
     };
-    match kind {
-        FluxResourceKind::Kustomization => reference("/spec/sourceRef").into_iter().collect(),
-        FluxResourceKind::HelmRelease => {
-            if let Some(generated) = obj.pointer("/status/helmChart").and_then(Value::as_str) {
-                let key = crate::kube::standing::generated_chart_source(generated, namespace);
-                let generated = flux_entry(&key.resource_type, &key.namespace, &key.name);
-                let chart_source = (key.resource_type == FluxResourceKind::HelmChart.as_str())
-                    .then(|| reference("/spec/chart/spec/sourceRef"))
-                    .flatten();
-                return generated.into_iter().chain(chart_source).collect();
-            }
-            reference("/spec/chartRef")
-                .or_else(|| reference("/spec/chart/spec/sourceRef"))
-                .into_iter()
-                .collect()
-        }
-        _ => Vec::new(),
-    }
+    let chart_source = (kind == FluxResourceKind::HelmRelease
+        && FluxResourceKind::parse_optional(&source.resource_type)
+            .is_some_and(sources::is_intermediate))
+    .then(|| sources::chart_template_source(obj, namespace))
+    .flatten();
+    std::iter::once(source)
+        .chain(chart_source)
+        .filter_map(|key| flux_entry(&key.resource_type, &key.namespace, &key.name))
+        .collect()
 }
 
 /// An entry for a Flux kind, at the API version flux9s reads it at.

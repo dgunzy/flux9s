@@ -485,28 +485,6 @@ pub fn group_inventory(entries: Vec<InventoryEntry>) -> InventoryGroups {
     groups
 }
 
-/// Extract upstream node information from sourceRef
-///
-/// Returns (name, url) if available
-pub fn extract_upstream(obj: &Value) -> Option<(String, String)> {
-    let source_ref = obj.get("status")?.get("sourceRef")?;
-
-    let origin_url = source_ref
-        .get("originURL")
-        .and_then(|u| u.as_str())?
-        .to_string();
-
-    // Extract name from URL (last path segment)
-    let name = origin_url
-        .rsplit('/')
-        .next()
-        .unwrap_or(&origin_url)
-        .trim_end_matches(".git")
-        .to_string();
-
-    Some((name, origin_url))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -724,21 +702,6 @@ mod tests {
             2,
             "navigable Flux nodes"
         );
-    }
-
-    #[test]
-    fn test_extract_upstream() {
-        let obj = json!({
-            "status": {
-                "sourceRef": {
-                    "originURL": "https://github.com/user/repo.git"
-                }
-            }
-        });
-
-        let (name, url) = extract_upstream(&obj).unwrap();
-        assert_eq!(name, "repo");
-        assert_eq!(url, "https://github.com/user/repo.git");
     }
 
     /// A step-based ResourceSet's inventory (same `status.inventory.entries`
