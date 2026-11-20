@@ -142,7 +142,7 @@ flate2 = "1.1"
 # Utilities
 # Timestamps and durations (chrono is unmaintained, RUSTSEC-2026-0543). Already in
 # the tree through k8s-openapi, so it adds no crates.
-jiff = { version = "0.2", default-features = false, features = ["std"] }
+jiff = { version = "1.0", default-features = false, features = ["std"] }
 url = "2.5"
 tempfile = "3.27"
 directories = "6.0"
