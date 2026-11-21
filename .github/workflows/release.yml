@@ -259,12 +259,20 @@ jobs:
           sha256sum * > SHA256SUMS
           echo "Assets:" && ls -la
 
-      - name: Generate SBOM (CycloneDX)
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          path: .
-          format: cyclonedx-json
-          output-file: dist/flux9s-${{ steps.get_version.outputs.version }}.cdx.json
+      # One CycloneDX SBOM per archive, resolved for that archive's target.
+      - name: Generate SBOMs (CycloneDX)
+        run: |
+          cargo install sbom-attest --version 0.4.1 --locked
+          while read -r asset target; do
+            sbom-attest generate --locked --package flux9s --target "$target" \
+              --cdx "dist/${asset}-${{ steps.get_version.outputs.version }}.cdx.json"
+          done <<'TARGETS'
+          flux9s-linux-x86_64-gnu x86_64-unknown-linux-gnu
+          flux9s-linux-x86_64-musl x86_64-unknown-linux-musl
+          flux9s-macos-aarch64 aarch64-apple-darwin
+          flux9s-macos-x86_64 x86_64-apple-darwin
+          flux9s-windows-x86_64 x86_64-pc-windows-msvc
+          TARGETS
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
